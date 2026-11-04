@@ -1,0 +1,793 @@
+# Silverado EV (GM Ultium, BT1 platform) read-only DID profile.
+#
+# Every entry is a UDS 0x22 ReadDataByIdentifier in the default session.
+# status:
+#   confirmed         - checked on THIS truck (update after the first session)
+#   community-ultium  - published from real Ultium vehicles (sources below)
+#   unverified        - seen or plausible, but its meaning or scaling is not yet established
+#
+# Main sources (all public, read-only work by other owners):
+#   S1 WiCAN #606  2024 Silverado EV Car Scanner log   https://github.com/meatpiHQ/wican-fw/issues/606
+#   S2 WiCAN #587  2025 Sierra EV Car Scanner log      https://github.com/meatpiHQ/wican-fw/issues/587
+#   S3 Hummer EV project (BT1 twin)                    https://github.com/JeremyWhittaker/hummer_obdII
+#   S4 Equinox EV discovery (cell-group array)         https://github.com/Vedat-Ozkan/obd/blob/main/docs/discovery-2026-09.md
+#   S5 OBDb Lyriq signalset / PR #14                   https://github.com/OBDb/Cadillac-LYRIQ/pull/14
+#   S6 hacs_gm_ultium (BrightDrop)                     https://github.com/Coldarn/hacs_gm_ultium
+#   S7 = this truck (2024 Silverado EV, 24 modules), session 1, 2026-11-03
+
+[meta]
+name = "silverado-ev"
+
+# ecu + pri -> request 0x<pri>DA<ecu>F1, response 0x18DAF1<ecu> (pri 0x18) or 0x142AF1<ecu> (pri 0x14)
+[modules.becm]
+ecu = 0xCB
+pri = 0x14
+description = "Battery module, probably the K16 BECM ('BECM-B+EnergyCtrl' in the 09/0A census)"
+
+[modules.dmcm]
+ecu = 0x17
+pri = 0x14
+description = "Drive motor control module 1 (pack voltage and current)"
+
+[modules.dmc2]
+ecu = 0x1D
+pri = 0x14
+description = "Drive motor control module 2"
+
+[modules.bcm]
+ecu = 0x40
+pri = 0x18
+description = "Body control module (battery/coolant temperatures, charge pilot); answers only at priority 0x18"
+
+[modules.gwm]
+ecu = 0x45
+pri = 0x18
+description = "Gateway; answers OBD DTC reads 03/07/0A (used to bracket sessions)"
+
+# ---------------------------------------------------------------- BECM (0xCB)
+
+[[did]]
+module = "becm"
+id = 0x27C6
+name = "soc"
+label = "State of charge"
+unit = "%"
+type = "u16"
+scale = 0.0015259021896696422   # x * 100 / 65535
+period = 2
+status = "confirmed"
+source = "S1 (matched the dash on a 2024 Silverado EV), S2, S3; S7"
+note = "41.88 % read vs 42 % on the dash"
+
+[[did]]
+module = "becm"
+id = 0x27AF
+name = "energy_remaining"
+label = "Energy remaining (BMS)"
+unit = "kWh"
+type = "u16"
+scale = 0.01
+period = 30
+status = "confirmed"
+source = "S1, S2, S3; S7"
+note = "energy_remaining / (soc/100) differs per truck (175-216 kWh seen); label it 'BMS energy at 100%', not usable capacity"
+
+[[did]]
+module = "becm"
+id = 0x27C7
+name = "range_estimate"
+label = "Range estimate"
+unit = "mi"
+type = "u24"
+scale = 0.009708737864077669    # x / 103
+period = 30
+status = "confirmed"
+source = "S2, S3; S7"
+
+[[did]]
+module = "becm"
+id = 0x27C0
+name = "distance_since_full"
+label = "Distance since full charge"
+unit = "mi"
+type = "u24"
+scale = 0.06213711922373339     # x / 16.09344
+period = 60
+status = "confirmed"
+source = "S3; S7"
+
+[[did]]
+module = "becm"
+id = 0x2AF5
+name = "cell_avg_b"
+label = "Cell group average (modules 13-24)"
+unit = "V"
+type = "u16"
+start = 0
+scale = 0.0001
+period = 2
+status = "confirmed"
+source = "S2, S3, S4, S5; S7"
+
+[[did]]
+module = "becm"
+id = 0x2AF5
+name = "cell_min_b"
+label = "Cell group minimum (modules 13-24)"
+unit = "V"
+type = "u16"
+start = 2
+scale = 0.0001
+period = 2
+status = "confirmed"
+source = "S2, S3, S4, S5; S7"
+note = "on this truck the 2AF5 summary covers only groups 97-192 (modules 13-24); take the pack min/max from the 2AE1-2AF0 array"
+
+[[did]]
+module = "becm"
+id = 0x2AF5
+name = "cell_max_b"
+label = "Cell group maximum (modules 13-24)"
+unit = "V"
+type = "u16"
+start = 4
+scale = 0.0001
+period = 2
+status = "confirmed"
+source = "S2, S3, S4, S5; S7"
+note = "covers modules 13-24 only on this truck; use the array for the pack max"
+
+[[did]]
+module = "becm"
+id = 0x2AF5
+name = "cell_min_index_b"
+label = "Lowest cell group # (97-192)"
+type = "u8"
+start = 6
+period = 2
+status = "confirmed"
+source = "S4 (checked against the full array on an Equinox EV); S7"
+note = "group number 97-192 of the second half; matched the array"
+
+[[did]]
+module = "becm"
+id = 0x2AF5
+name = "cell_min_module_b"
+label = "Lowest cell group module # (13-24)"
+type = "u8"
+start = 7
+period = 2
+status = "confirmed"
+source = "S4; S7"
+
+[[did]]
+module = "becm"
+id = 0x2AF5
+name = "cell_max_index_b"
+label = "Highest cell group # (97-192)"
+type = "u8"
+start = 8
+period = 2
+status = "confirmed"
+source = "S4; S7"
+note = "group number within modules 13-24"
+
+[[did]]
+module = "becm"
+id = 0x2AF5
+name = "cell_max_module_b"
+label = "Highest cell group module # (13-24)"
+type = "u8"
+start = 9
+period = 2
+status = "confirmed"
+source = "S4; S7"
+
+[[did]]
+module = "becm"
+id = 0x2AF6
+name = "cell_avg_a"
+label = "Cell group average (modules 1-12)"
+unit = "V"
+type = "u16"
+start = 0
+scale = 0.0001
+period = 2
+status = "confirmed"
+source = "S7 (min at group 41 / module 6 and max at group 81 / module 11 matched the 2AE1-2AF0 array)"
+
+[[did]]
+module = "becm"
+id = 0x2AF6
+name = "cell_min_a"
+label = "Cell group minimum (modules 1-12)"
+unit = "V"
+type = "u16"
+start = 2
+scale = 0.0001
+period = 2
+status = "confirmed"
+source = "S7 (min at group 41 / module 6 and max at group 81 / module 11 matched the 2AE1-2AF0 array)"
+
+[[did]]
+module = "becm"
+id = 0x2AF6
+name = "cell_max_a"
+label = "Cell group maximum (modules 1-12)"
+unit = "V"
+type = "u16"
+start = 4
+scale = 0.0001
+period = 2
+status = "confirmed"
+source = "S7 (min at group 41 / module 6 and max at group 81 / module 11 matched the 2AE1-2AF0 array)"
+
+[[did]]
+module = "becm"
+id = 0x2AF6
+name = "cell_min_index_a"
+label = "Lowest cell group # (1-96)"
+type = "u8"
+start = 6
+period = 2
+status = "confirmed"
+source = "S7 (min at group 41 / module 6 and max at group 81 / module 11 matched the 2AE1-2AF0 array)"
+
+[[did]]
+module = "becm"
+id = 0x2AF6
+name = "cell_min_module_a"
+label = "Lowest cell group module # (1-12)"
+type = "u8"
+start = 7
+period = 2
+status = "confirmed"
+source = "S7 (min at group 41 / module 6 and max at group 81 / module 11 matched the 2AE1-2AF0 array)"
+
+[[did]]
+module = "becm"
+id = 0x2AF6
+name = "cell_max_index_a"
+label = "Highest cell group # (1-96)"
+type = "u8"
+start = 8
+period = 2
+status = "confirmed"
+source = "S7 (min at group 41 / module 6 and max at group 81 / module 11 matched the 2AE1-2AF0 array)"
+
+[[did]]
+module = "becm"
+id = 0x2AF6
+name = "cell_max_module_a"
+label = "Highest cell group module # (1-12)"
+type = "u8"
+start = 9
+period = 2
+status = "confirmed"
+source = "S7 (min at group 41 / module 6 and max at group 81 / module 11 matched the 2AE1-2AF0 array)"
+
+[[did]]
+module = "becm"
+id = 0x2AF7
+name = "pack_voltages_becm"
+label = "Pack voltages (BECM, 4 sensing points)"
+unit = "V"
+type = "u16"
+count = 0
+scale = 0.01
+period = 2
+status = "confirmed"
+source = "S2 (4 values on a Sierra EV; meaning of each not yet known); S7"
+
+[[did]]
+module = "becm"
+id = 0x2AF1
+name = "module_temps"
+label = "Module temperatures"
+unit = "C"
+type = "u8"
+count = 0
+offset = -80
+period = 10
+status = "unverified"
+source = "S2 (24 bytes on a Sierra EV), S6; S7"
+note = "16-17 C on this truck with x-80 while coolant read 19.6-21.6 C; (x-40)/2 would give 28 C. Likely x-80; confirm against outside temp"
+
+[[did]]
+module = "becm"
+id = 0x2AF2
+name = "module_temps_2"
+label = "Module temperatures, second set"
+unit = "C"
+type = "u8"
+count = 0
+offset = -80
+period = 10
+status = "unverified"
+source = "S7 (24 bytes, all 0x61 = 17 C with x-80 while 2AF1 read 16-17 C)"
+
+[[did]]
+module = "becm"
+id = 0x2AF8
+name = "unknown_2af8_raw"
+label = "2AF8 (three ~3.906 V records, meaning unknown)"
+type = "hex"
+period = 30
+status = "unverified"
+source = "S2, S7"
+
+[[did]]
+module = "becm"
+id = 0x2AF9
+name = "unknown_2af9_raw"
+label = "2AF9 (6 x 0x22, 6 x 0x11, meaning unknown)"
+type = "hex"
+period = 30
+status = "unverified"
+source = "S7"
+
+[[did]]
+module = "becm"
+id = 0x2AF3
+name = "temp_stats_a_raw"
+label = "Temperature stats A (raw)"
+type = "hex"
+period = 10
+status = "unverified"
+source = "S2"
+
+[[did]]
+module = "becm"
+id = 0x2AF4
+name = "temp_stats_b_raw"
+label = "Temperature stats B (raw)"
+type = "hex"
+period = 10
+status = "unverified"
+source = "S2"
+
+[[did]]
+module = "becm"
+id = 0x2B43
+name = "bms_soc_layer"
+label = "BMS-internal SoC-like value"
+unit = "%"
+type = "u8"
+start = 0
+scale = 0.39215686274509803     # x * 100 / 255
+period = 10
+status = "confirmed"
+source = "S1, S2 (does NOT equal dash SoC; BMS-internal); S7"
+
+[[did]]
+module = "becm"
+id = 0x2B43
+name = "module_soc_raw"
+label = "Per-module SoC-like values (raw)"
+type = "u8"
+start = 2
+count = 24
+period = 10
+status = "confirmed"
+source = "S1 (20 non-zero on a 2024 truck), S2 (24 on a 2025 Sierra); S7"
+note = "24 non-zero values on this truck = 24 modules"
+
+[[did]]
+module = "becm"
+id = 0x5401
+name = "charge_state_code"
+label = "Charge state code"
+type = "u8"
+period = 5
+status = "confirmed"
+source = "S1, S2, S3 (enum only partly known); S7"
+
+[[did]]
+module = "becm"
+id = 0x0046
+name = "pack_temp_candidate"
+label = "Pack temperature (candidate)"
+unit = "C"
+type = "u8"
+offset = -40
+period = 10
+status = "unverified"
+source = "S3; S7"
+note = "20 C on this truck (plausible)"
+
+[[did]]
+module = "becm"
+id = 0x33E5
+name = "aux_12v"
+label = "12 V system (BECM)"
+unit = "V"
+type = "u8"
+scale = 0.1
+period = 30
+status = "confirmed"
+source = "S3, S6; S7"
+
+# Cell-group voltages: 36-byte replies of 12 records [u16 V*10000][u8 module].
+# 24-module pack: 2AE1-2AF0 (192 groups). 20-module: fewer DIDs answer.
+# Layout confirmed on an Equinox EV (S4); on BT1 it is a strong inference (S3 saw 16 x 36 bytes).
+
+[[did]]
+module = "becm"
+id = 0x2AE1
+name = "cell_group_modules_2ae1"
+label = "Module # of groups 1-12 (layout check)"
+type = "u8"
+start = 2
+stride = 3
+count = 12
+period = 30
+status = "confirmed"
+source = "S4; S7"
+
+[[did]]
+module = "becm"
+id = 0x2AE1
+name = "cells_001_012"
+label = "Cell groups 1-12"
+unit = "V"
+type = "u16"
+stride = 3
+count = 12
+scale = 0.0001
+period = 5
+status = "confirmed"
+source = "S4; S7"
+note = "192 groups; groups 1-96 and 97-192 each sum to the pack voltage"
+
+[[did]]
+module = "becm"
+id = 0x2AE2
+name = "cells_013_024"
+label = "Cell groups 13-24"
+unit = "V"
+type = "u16"
+stride = 3
+count = 12
+scale = 0.0001
+period = 5
+status = "confirmed"
+source = "S4; S7"
+note = "192 groups; groups 1-96 and 97-192 each sum to the pack voltage"
+
+[[did]]
+module = "becm"
+id = 0x2AE3
+name = "cells_025_036"
+label = "Cell groups 25-36"
+unit = "V"
+type = "u16"
+stride = 3
+count = 12
+scale = 0.0001
+period = 5
+status = "confirmed"
+source = "S4; S7"
+note = "192 groups; groups 1-96 and 97-192 each sum to the pack voltage"
+
+[[did]]
+module = "becm"
+id = 0x2AE4
+name = "cells_037_048"
+label = "Cell groups 37-48"
+unit = "V"
+type = "u16"
+stride = 3
+count = 12
+scale = 0.0001
+period = 5
+status = "confirmed"
+source = "S4; S7"
+note = "192 groups; groups 1-96 and 97-192 each sum to the pack voltage"
+
+[[did]]
+module = "becm"
+id = 0x2AE5
+name = "cells_049_060"
+label = "Cell groups 49-60"
+unit = "V"
+type = "u16"
+stride = 3
+count = 12
+scale = 0.0001
+period = 5
+status = "confirmed"
+source = "S4; S7"
+note = "192 groups; groups 1-96 and 97-192 each sum to the pack voltage"
+
+[[did]]
+module = "becm"
+id = 0x2AE6
+name = "cells_061_072"
+label = "Cell groups 61-72"
+unit = "V"
+type = "u16"
+stride = 3
+count = 12
+scale = 0.0001
+period = 5
+status = "confirmed"
+source = "S4; S7"
+note = "192 groups; groups 1-96 and 97-192 each sum to the pack voltage"
+
+[[did]]
+module = "becm"
+id = 0x2AE7
+name = "cells_073_084"
+label = "Cell groups 73-84"
+unit = "V"
+type = "u16"
+stride = 3
+count = 12
+scale = 0.0001
+period = 5
+status = "confirmed"
+source = "S4; S7"
+note = "192 groups; groups 1-96 and 97-192 each sum to the pack voltage"
+
+[[did]]
+module = "becm"
+id = 0x2AE8
+name = "cells_085_096"
+label = "Cell groups 85-96"
+unit = "V"
+type = "u16"
+stride = 3
+count = 12
+scale = 0.0001
+period = 5
+status = "confirmed"
+source = "S3/S4 inference; S7"
+note = "192 groups; groups 1-96 and 97-192 each sum to the pack voltage"
+
+[[did]]
+module = "becm"
+id = 0x2AE9
+name = "cells_097_108"
+label = "Cell groups 97-108"
+unit = "V"
+type = "u16"
+stride = 3
+count = 12
+scale = 0.0001
+period = 5
+status = "confirmed"
+source = "S3/S4 inference; S7"
+note = "192 groups; groups 1-96 and 97-192 each sum to the pack voltage"
+
+[[did]]
+module = "becm"
+id = 0x2AEA
+name = "cells_109_120"
+label = "Cell groups 109-120"
+unit = "V"
+type = "u16"
+stride = 3
+count = 12
+scale = 0.0001
+period = 5
+status = "confirmed"
+source = "S3/S4 inference; S7"
+note = "192 groups; groups 1-96 and 97-192 each sum to the pack voltage"
+
+[[did]]
+module = "becm"
+id = 0x2AEB
+name = "cells_121_132"
+label = "Cell groups 121-132"
+unit = "V"
+type = "u16"
+stride = 3
+count = 12
+scale = 0.0001
+period = 5
+status = "confirmed"
+source = "S3/S4 inference; S7"
+note = "192 groups; groups 1-96 and 97-192 each sum to the pack voltage"
+
+[[did]]
+module = "becm"
+id = 0x2AEC
+name = "cells_133_144"
+label = "Cell groups 133-144"
+unit = "V"
+type = "u16"
+stride = 3
+count = 12
+scale = 0.0001
+period = 5
+status = "confirmed"
+source = "S3/S4 inference; S7"
+note = "192 groups; groups 1-96 and 97-192 each sum to the pack voltage"
+
+[[did]]
+module = "becm"
+id = 0x2AED
+name = "cells_145_156"
+label = "Cell groups 145-156"
+unit = "V"
+type = "u16"
+stride = 3
+count = 12
+scale = 0.0001
+period = 5
+status = "confirmed"
+source = "S3/S4 inference; S7"
+note = "192 groups; groups 1-96 and 97-192 each sum to the pack voltage"
+
+[[did]]
+module = "becm"
+id = 0x2AEE
+name = "cells_157_168"
+label = "Cell groups 157-168"
+unit = "V"
+type = "u16"
+stride = 3
+count = 12
+scale = 0.0001
+period = 5
+status = "confirmed"
+source = "S3/S4 inference; S7"
+note = "192 groups; groups 1-96 and 97-192 each sum to the pack voltage"
+
+[[did]]
+module = "becm"
+id = 0x2AEF
+name = "cells_169_180"
+label = "Cell groups 169-180"
+unit = "V"
+type = "u16"
+stride = 3
+count = 12
+scale = 0.0001
+period = 5
+status = "confirmed"
+source = "S3/S4 inference; S7"
+note = "192 groups; groups 1-96 and 97-192 each sum to the pack voltage"
+
+[[did]]
+module = "becm"
+id = 0x2AF0
+name = "cells_181_192"
+label = "Cell groups 181-192"
+unit = "V"
+type = "u16"
+stride = 3
+count = 12
+scale = 0.0001
+period = 5
+status = "confirmed"
+source = "S3/S4 inference; S7"
+
+# ---------------------------------------------------------------- Drive units
+note = "192 groups; groups 1-96 and 97-192 each sum to the pack voltage"
+
+[[did]]
+module = "dmcm"
+id = 0x2885
+name = "pack_voltage"
+label = "Pack voltage"
+unit = "V"
+type = "u16"
+scale = 0.01
+period = 1
+status = "confirmed"
+source = "S2 (Sierra EV), S3; S7"
+
+[[did]]
+module = "dmcm"
+id = 0x2414
+name = "pack_current"
+label = "Pack current (+ discharge, - charge)"
+unit = "A"
+type = "s16"
+scale = 0.05
+period = 1
+status = "confirmed"
+source = "S3, S4, S5 (not yet seen on a Silverado EV: Car Scanner never asks for it); S7"
+note = "answers on a 2024 Silverado EV (0.0-0.6 A at idle); sign under load still to check"
+
+[[did]]
+module = "dmcm"
+id = 0x33E5
+name = "aux_12v_dmcm"
+label = "12 V system (drive unit)"
+unit = "V"
+type = "u8"
+scale = 0.1
+period = 30
+status = "confirmed"
+source = "S2 (Sierra EV); S7"
+
+[[did]]
+module = "dmc2"
+id = 0x2885
+name = "pack_voltage_du2"
+label = "Pack voltage (drive unit 2)"
+unit = "V"
+type = "u16"
+scale = 0.01
+period = 10
+status = "confirmed"
+source = "S2, S3; S7"
+
+[[did]]
+module = "bcm"
+id = 0x434F
+name = "hv_battery_temp"
+label = "HV battery temperature"
+unit = "C"
+type = "u8"
+offset = -40
+period = 10
+status = "unverified"
+source = "S5 (matched the dash on a 2025 Lyriq; not yet seen on a Silverado EV); S7"
+note = "reads 60 C on this truck with a ~17 C pack: Lyriq decoding does not apply; do not display"
+
+[[did]]
+module = "bcm"
+id = 0x40E5
+name = "coolant_temp_1"
+label = "Battery coolant temperature 1"
+unit = "C"
+type = "u16"
+scale = 0.03125
+period = 10
+status = "confirmed"
+source = "S5, S3; S7"
+note = "21.6 C on this truck (plausible)"
+
+[[did]]
+module = "bcm"
+id = 0x40E6
+name = "coolant_temp_2"
+label = "Battery coolant temperature 2"
+unit = "C"
+type = "u16"
+scale = 0.03125
+period = 10
+status = "confirmed"
+source = "S5, S3; S7"
+note = "19.6 C on this truck (plausible)"
+
+[[did]]
+module = "bcm"
+id = 0x4127
+name = "battery_temp_a"
+label = "Battery temperature sensor A"
+unit = "C"
+type = "u16"
+scale = 0.03125
+period = 10
+status = "unverified"
+source = "S5 (S3 suspects a state value); S7"
+note = "32.75 C on this truck: meaning unclear; do not display"
+
+[[did]]
+module = "bcm"
+id = 0x4124
+name = "battery_temp_b"
+label = "Battery temperature sensor B"
+unit = "C"
+type = "u16"
+scale = 0.03125
+period = 10
+status = "unverified"
+source = "S5; S7"
+note = "13.06 C on this truck: meaning unclear"
+
+[[did]]
+module = "bcm"
+id = 0x4149
+name = "evse_pilot_current"
+label = "Charger pilot current"
+unit = "A"
+type = "u16"
+scale = 0.1
+period = 10
+status = "confirmed"
+source = "S5; S7"

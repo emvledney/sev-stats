@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# Run the read-only Ultium probe from the repo without installing it.
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+exec env PYTHONPATH="$here/tools/probe/src" python3 -m ultium_probe "$@"

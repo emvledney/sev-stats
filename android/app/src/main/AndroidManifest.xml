@@ -1,0 +1,145 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <!--
+      Distributed on the REGULAR Play internal-testing track (the dedicated Android Automotive OS
+      track stayed inactive for this account), so car features are declared but not required.
+      The app checks FEATURE_AUTOMOTIVE / the car service at runtime. GM's Google built-in head
+      units have both the automotive feature and the Templates Host used by the glance screen.
+    -->
+    <uses-feature android:name="android.hardware.type.automotive" android:required="false" />
+    <uses-feature android:name="android.software.car.templates_host" android:required="false" />
+    <uses-feature android:name="android.hardware.wifi" android:required="false" />
+    <uses-feature android:name="android.hardware.usb.host" android:required="false" />
+    <uses-feature android:name="android.hardware.bluetooth_le" android:required="false" />
+    <uses-feature android:name="android.hardware.screen.portrait" android:required="false" />
+    <uses-feature android:name="android.hardware.screen.landscape" android:required="false" />
+
+    <!-- Vehicle data: READ permissions only. No CONTROL_* / write permission is ever declared. -->
+    <uses-permission android:name="android.car.permission.CAR_INFO" />
+    <uses-permission android:name="android.car.permission.CAR_ENERGY" />
+    <uses-permission android:name="android.car.permission.CAR_ENERGY_PORTS" />
+    <uses-permission android:name="android.car.permission.CAR_EXTERIOR_ENVIRONMENT" />
+    <uses-permission android:name="android.car.permission.CAR_POWERTRAIN" />
+    <uses-permission android:name="android.car.permission.CAR_SPEED" />
+    <uses-permission android:name="android.car.permission.READ_CAR_DISPLAY_UNITS" />
+
+    <!-- Adapter link (TCP client), report upload, network diagnostics. -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
+    <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE" />
+
+    <!--
+      Bluetooth: Classic discovery and pairing with the OBDLink MX+, then one RFCOMM serial
+      connection to it (bt/ package only); BLE scan only (never connect).
+    -->
+    <uses-permission
+        android:name="android.permission.BLUETOOTH_SCAN"
+        android:usesPermissionFlags="neverForLocation" />
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+
+    <application
+        android:allowBackup="false"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:networkSecurityConfig="@xml/network_security_config"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.SilveradoStats">
+
+        <uses-library android:name="android.car" android:required="false" />
+
+        <!-- Car App Library: this app is a templated app; lowest Car App API level it needs. -->
+        <meta-data
+            android:name="com.android.automotive"
+            android:resource="@xml/automotive_app_desc" />
+        <meta-data
+            android:name="androidx.car.app.minCarApiLevel"
+            android:value="1" />
+
+        <!--
+          OBD link (MX+ or demo simulator). Bound only by this app's own screens, never started,
+          not exported: no other app can reach it, and it runs only while a screen is bound.
+        -->
+        <service
+            android:name=".link.LinkService"
+            android:exported="false" />
+
+        <!--
+          Battery Glance: the Car App Library's templated service, also usable while driving. The
+          host (the system's Templates Host) binds to it, so it must be exported; which hosts may
+          connect is decided in GlanceCarAppService.createHostValidator (allowlist in release
+          builds), as the library documents.
+        -->
+        <service
+            android:name=".glance.GlanceCarAppService"
+            android:exported="true"
+            android:icon="@mipmap/ic_launcher"
+            android:label="@string/glance_name"
+            tools:ignore="ExportedService">
+            <intent-filter>
+                <action android:name="androidx.car.app.CarAppService" />
+                <category android:name="androidx.car.app.category.IOT" />
+            </intent-filter>
+        </service>
+
+        <!--
+          Simple, Live and Diagnostics. Marked distractionOptimized so that Android Automotive does
+          not cover it when the truck leaves Park, which made the app nearly useless. A deliberate,
+          accepted trade-off for this one owner's truck:
+           - INTERNAL TESTING ONLY. It goes against Google's guidelines for car apps (a Compose screen
+             is not a reviewed template), so this build must never go to a production Play track;
+           - Android honours the flag only for apps installed from an allowed source (Play);
+           - GM could block it in an update: Battery Glance below remains the fallback;
+           - known limit: a system permission dialog opened in Park stays up if the truck then leaves
+             Park. Android gives the app no way to close it, and the emulator's OS did not cover it
+             (the truck's permission controller is untested). The app opens no further dialog.
+          Out of Park the activity locks itself down (vehicle/DrivingState, ui/layout/DashLayout):
+          Simple and Live with larger figures and no explanations, no Diagnostics, pairing, forms,
+          dialogs, toggles or chart details, and values change at most once a second.
+        -->
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:windowSoftInputMode="adjustResize">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+
+            <meta-data
+                android:name="distractionOptimized"
+                android:value="true" />
+        </activity>
+
+        <!--
+          The Car App Library's host activity for Battery Glance, declared as Google's Android
+          Automotive guide says, plus its own task affinity so that each launcher entry opens its
+          own task (otherwise "Silverado Stats" could resume on the glance, and back from the glance
+          would land on the dashboard). It shows only what the Templates Host renders. With
+          MainActivity it is one of exactly two distraction-optimized activities (SourceSafetyTest
+          enforces that list).
+        -->
+        <activity
+            android:name="androidx.car.app.activity.CarAppActivity"
+            android:exported="true"
+            android:label="@string/glance_name"
+            android:launchMode="singleTask"
+            android:taskAffinity="dev.silveradostats.glance"
+            android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+
+            <meta-data
+                android:name="distractionOptimized"
+                android:value="true" />
+        </activity>
+    </application>
+
+</manifest>

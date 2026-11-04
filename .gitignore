@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+*.egg-info/
+# Logs captured from the truck (may contain VIN)
+logs/
+*.jsonl
+*.log
+# Android / Gradle
+.gradle/
+build/
+local.properties
+*.keystore
+*.jks
+.idea/
+*.iml
+.kotlin/
+release/

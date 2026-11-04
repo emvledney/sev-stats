@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">Silverado Stats</string>
+    <!-- Launcher entry and host label of the templated glance screen. -->
+    <string name="glance_name">Battery Glance</string>
+</resources>
