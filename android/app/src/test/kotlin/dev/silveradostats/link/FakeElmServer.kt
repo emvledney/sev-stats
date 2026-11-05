@@ -1,4 +1,4 @@
-package dev.silveradostats.adapter
+package dev.silveradostats.link
 
 import java.io.Closeable
 import java.io.OutputStream
@@ -11,7 +11,7 @@ import java.util.concurrent.TimeUnit
 import kotlin.concurrent.thread
 
 /**
- * In-process fake ELM327 TCP server for one client.
+ * In-process fake ELM327 on a loopback socket, for one client.
  *
  * @param onConnect runs on its own thread right after accept (e.g. to stream "busy" output).
  * @param respond maps a received command (without '\r') to the reply bytes; null = stall forever.

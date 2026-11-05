@@ -1,5 +1,4 @@
-"""Transport factory: ``elm-bt:auto`` / ``elm-bt:MAC[:ch]`` (OBDLink MX+), ``elm:/dev/ttyUSB0``,
-``elm-tcp:HOST[:PORT]``, ``socketcan:can0``, ``sim``."""
+"""Transport factory: ``elm-bt:auto`` / ``elm-bt:MAC[:ch]`` (OBDLink MX+), ``sim``."""
 
 from __future__ import annotations
 
@@ -11,19 +10,6 @@ def open_transport(spec: str, *, min_interval_s: float = 0.075) -> Transport:
     if kind == "sim":
         from .sim import SimTransport
         return SimTransport(min_interval_s=min(min_interval_s, 0.05))
-    if kind == "socketcan":
-        from .socketcan import SocketCanTransport
-        return SocketCanTransport(rest or "can0", min_interval_s=min_interval_s)
-    if kind == "elm":
-        from .elm import ElmLink, ElmTransport
-        path, _, baud = rest.partition("@")
-        return ElmTransport(ElmLink.serial(path or "/dev/ttyUSB0", int(baud or 115200)),
-                            min_interval_s=min_interval_s)
-    if kind == "elm-tcp":
-        from .elm import ElmLink, ElmTransport
-        host, _, port = rest.rpartition(":") if rest.count(":") == 1 else (rest, "", "")
-        return ElmTransport(ElmLink.tcp(host or "192.168.0.10", int(port or 35000)),
-                            min_interval_s=min_interval_s)
     if kind == "elm-bt":
         from .elm import ElmLink, ElmTransport
         parts = rest.split(":") if rest and rest != "auto" else []

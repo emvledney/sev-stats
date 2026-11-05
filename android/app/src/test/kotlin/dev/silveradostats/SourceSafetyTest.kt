@@ -71,8 +71,9 @@ class SourceSafetyTest {
       """[cC]arHardware|[cC]arClimate|\bAutomotiveCar\w+|\bHARDWARE_SERVICE\b|""" +
         """\bandroidx\.car\.app\.hardware\b|\bgetCarService\b|\bstartCarApp\b""",
     ),
-    // BLE: scan only, everywhere.
+    // BLE: no use at all, everywhere (the MX+ is Bluetooth Classic).
     Rule("BLE connect", """\bconnectGatt\b"""),
+    Rule("BLE scan / advertise", """\b[bB]luetoothLeScanner\b|\bstartScan\b|\bstartLeScan\b|\b[bB]luetoothLeAdvertiser\b"""),
     // Bluetooth Classic to the OBDLink MX+: pairing, discovery and the RFCOMM serial socket, only
     // inside the bt/ package (which wraps the socket in the OBD core's stream link).
     Rule(
@@ -103,6 +104,12 @@ class SourceSafetyTest {
       Regex("""override fun onService(Connected|Disconnected)\(name: ComponentName\?"""),
       Regex("""\bapp\.bindService\(Intent\(app, LinkService::class\.java\), connection, Context\.BIND_AUTO_CREATE\)"""),
     ),
+    // The hourly job names its own service for JobScheduler; the CSV export writes only the file the user picked.
+    "log/LogScheduler.kt" to listOf(
+      Regex("""import android\.content\.ComponentName\n"""),
+      Regex("""\bJobInfo\.Builder\(JOB_ID, ComponentName\(app, LogJobService::class\.java\)\)"""),
+      Regex("""\bapp\.contentResolver\.openOutputStream\(uri, "wt"\)"""),
+    ),
   )
 
   /** The only android.car classes the app may name: all read-only in the way the app uses them. */
@@ -128,10 +135,9 @@ class SourceSafetyTest {
     "android.permission.INTERNET",
     "android.permission.ACCESS_NETWORK_STATE",
     "android.permission.ACCESS_WIFI_STATE",
-    "android.permission.CHANGE_WIFI_STATE",
-    "android.permission.CHANGE_NETWORK_STATE",
     "android.permission.BLUETOOTH_SCAN",
     "android.permission.BLUETOOTH_CONNECT",
+    "android.permission.RECEIVE_BOOT_COMPLETED",
   )
 
   private fun srcDir(): File =
@@ -218,6 +224,11 @@ class SourceSafetyTest {
       "car.getCarManager<Any>(CarHvacManager::class.java)",
       "val m = car::getCarManager",
       "device.connectGatt(ctx, false, cb)",
+      "adapter.bluetoothLeScanner.startScan(cb)",
+      "val s: BluetoothLeScanner? = null",
+      "scanner.startScan(null, settings, cb)",
+      "adapter.startLeScan(cb)",
+      "adapter.bluetoothLeAdvertiser.startAdvertising(s, d, cb)",
       // Bluetooth Classic outside bt/:
       "device.createBond()",
       "device.createRfcommSocketToServiceRecord(uuid)",
@@ -240,6 +251,9 @@ class SourceSafetyTest {
     // Forbidden in bt/ too:
     val mustFailInBt = listOf(
       "device.connectGatt(ctx, false, cb)",
+      "adapter.bluetoothLeScanner.startScan(cb)",
+      "adapter.startLeScan(cb)",
+      "adapter.bluetoothLeAdvertiser.startAdvertising(s, d, cb)",
       "device.javaClass.getMethod(\"createRfcommSocket\", Int::class.java)",
       "device.createRfcommSocket(1)",
       "adapter.listenUsingRfcommWithServiceRecord(\"x\", uuid)",
@@ -333,7 +347,7 @@ class SourceSafetyTest {
 
   /**
    * Single write path to the adapter, app-wide: outside the OBD core nothing writes to an adapter
-   * link or stream. Adapter sockets (Bluetooth in bt/, TCP in adapter/) only hand their streams to
+   * link or stream. The adapter socket (Bluetooth, in bt/) only hands its streams to
    * the core's StreamByteLink constructor, so ElmLink.command (reached only through
    * ElmTransport / ElmChannel) stays the one writer. The only other writes in the app are the report
    * upload (an HTTP body to the laptop) and the crash file.
@@ -350,6 +364,8 @@ class SourceSafetyTest {
       "report/ReportSender.kt" to Regex("""\bconn\.outputStream\.use \{ it\.write\(body\) \}"""),
       // filesDir/last_crash.txt.
       "diag/CrashLog.kt" to Regex("""\bfile\.writeText\("""),
+      // The CSV export, to the file the user picked: not an adapter.
+      "log/LogScheduler.kt" to Regex("""\bout\.bufferedWriter\(\)\.use \{ LogCsv\.appendTo\(rows, it\) \}"""),
     )
     val forbidden = listOf(
       "adapter command" to Regex("""\.command\s*\("""),
@@ -365,10 +381,10 @@ class SourceSafetyTest {
       val rel = relPath(f)
       var text = f.readText()
       val handOffs = streamHandOff.findAll(text).count()
-      if (rel.startsWith("bt/") || rel.startsWith("adapter/")) {
+      if (rel.startsWith("bt/")) {
         text = streamHandOff.replace(text, "")
       } else if (handOffs > 0) {
-        problems += "$rel: only bt/ and adapter/ may wrap a socket in StreamByteLink"
+        problems += "$rel: only bt/ may wrap a socket in StreamByteLink"
       }
       otherWrites[rel]?.let { r ->
         val n = r.findAll(text).count()
@@ -515,7 +531,8 @@ class SourceSafetyTest {
     }
 
   /**
-   * Two services: the private LinkService (not exported, no intent filter, bound only) and Battery
+   * Three services: the log's job (run by the system only), the private LinkService (not exported, no
+   * intent filter, bound only) and Battery
    * Glance's CarAppService (exported because the Templates Host binds to it, with exactly the
    * CarAppService action and the IOT category; createHostValidator decides which hosts may connect).
    */
@@ -523,7 +540,12 @@ class SourceSafetyTest {
   fun manifestDeclaresOnlyTheLinkServiceAndTheGlanceService() {
     val doc = parse(File(srcDir(), "main/AndroidManifest.xml"))
     val services = elements(doc, "service").associateBy { it.attr("name") }
-    assertEquals(setOf(".link.LinkService", ".glance.GlanceCarAppService"), services.keys)
+    assertEquals(setOf(".link.LinkService", ".log.LogJobService", ".glance.GlanceCarAppService"), services.keys)
+    // The log's job: only the system may run it, and nothing outside the app can reach it.
+    val job = services.getValue(".log.LogJobService")
+    assertEquals("false", job.attr("exported"))
+    assertEquals("android.permission.BIND_JOB_SERVICE", job.attr("permission"))
+    assertEquals(0, job.getElementsByTagName("intent-filter").length)
     val link = services.getValue(".link.LinkService")
     assertEquals("false", link.attr("exported"))
     assertEquals("no intent filter on LinkService", 0, link.getElementsByTagName("intent-filter").length)

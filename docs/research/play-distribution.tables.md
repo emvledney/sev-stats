@@ -1,3 +1,5 @@
+> **Superseded in part, see [README](README.md):** the app is on the regular internal track, with `android.hardware.type.automotive` and the templates host declared `required=false`, not as listed in T4.
+
 ### T1. Play track type vs car-app form-factor review (source: https://developer.android.com/training/cars/distribute, fetched 2026-11-03)
 | Track type | Form factor review | Notes |
 |---|---|---|

@@ -5,8 +5,7 @@ plugins {
   alias(libs.plugins.compose.compiler)
 }
 
-// Play package name. Set `silverado.applicationId` in gradle.properties to the
-// permanent package name before the first Play Console upload.
+// Play package name, set in gradle.properties. Published on Play, so it can never change.
 val silveradoApplicationId: String =
   providers.gradleProperty("silverado.applicationId").getOrElse("dev.silveradostats.app")
 
@@ -23,13 +22,13 @@ android {
     applicationId = silveradoApplicationId
     minSdk = 32 // Android 12L (GM SQBR builds)
     targetSdk = 35 // Play requirement for Android Automotive OS apps
-    versionCode = 7
-    versionName = "0.4.0"
+    versionCode = 10
+    versionName = "0.7.0"
   }
 
   buildTypes {
     release {
-      // No minification yet; no signing config yet (Play App Signing + upload key later).
+      // No minification. No signing config: android/scripts/release-bundle.sh signs with the upload key.
       isMinifyEnabled = false
     }
   }
@@ -89,7 +88,6 @@ dependencies {
   implementation(libs.androidx.activity.compose)
   implementation(libs.androidx.lifecycle.runtime.ktx)
   implementation(libs.androidx.lifecycle.runtime.compose)
-  implementation(libs.androidx.lifecycle.viewmodel.compose)
   implementation(libs.androidx.compose.ui)
   implementation(libs.androidx.compose.material3)
   // Templated glance screen (Car App Library): CarAppService + CarAppActivity on Android Automotive.

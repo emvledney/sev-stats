@@ -1,3 +1,5 @@
+> **Superseded in part, see [README](README.md):** the dedicated Automotive OS track, `required=true` and a distraction-optimized glance screen only were overtaken: the regular internal track works, and the main screen runs in Drive with a locked-down moving mode.
+
 # gm-platform
 
 ## SUMMARY

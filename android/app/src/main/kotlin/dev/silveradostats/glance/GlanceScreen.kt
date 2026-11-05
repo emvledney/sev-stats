@@ -23,7 +23,7 @@ import kotlinx.coroutines.launch
 
 /**
  * The glance: a PaneTemplate with the title "Battery Glance", the link state as the header action,
- * and 4 rows (Power, Battery, Cells, Temps) whose titles never change, so that every update is a
+ * and 4 rows (Capacity, Battery, Cells, Temps) whose titles never change, so that every update is a
  * free template refresh (see GlanceModel).
  *
  * The OBD link follows this screen's lifecycle: LinkConnection binds this app's LinkService when the

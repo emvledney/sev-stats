@@ -1,3 +1,5 @@
+> **Superseded in part, see [README](README.md):** the CX, USB, Wi-Fi and CAN FD hardware and architecture advice below no longer applies: the MX+ over Bluetooth Classic is the only adapter, and the allowlist refuses `0x19`. The adb findings, gateway isolation and sleep guidance still hold.
+
 # hardware-connectivity
 
 ## SUMMARY

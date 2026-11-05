@@ -15,6 +15,9 @@ enum class LinkStatus {
   /** No adapter chosen yet (and demo mode off). */
   NO_ADAPTER,
 
+  /** The user disconnected the MX+: nothing connects to it until they tap Connect. */
+  DISCONNECTED,
+
   /** Bluetooth discovery or pairing in progress (Diagnostics › Pair new). */
   PAIRING,
 
@@ -55,6 +58,9 @@ data class LiveValue(
 /** One point of the power history: kW, + discharge / - charge or regen. */
 data class PowerPoint(val atMs: Long, val kw: Double)
 
+/** The last capacity the MX+ delivered, kept for when it is not connected. */
+data class SavedCapacity(val kwh: Double?, val ah: Double?, val atWallMs: Long)
+
 /** Everything the LinkService publishes. Times are [MonoClock] milliseconds. */
 data class LiveState(
   val status: LinkStatus = LinkStatus.NO_ADAPTER,
@@ -83,9 +89,6 @@ data class LiveState(
   /** Number of visible UI clients (polling runs only while > 0). */
   val clients: Int = 0,
 ) {
-  /** Age of one value, or null when it was never read. */
-  fun ageMs(name: String, nowMs: Long): Long? = values[name]?.let { nowMs - it.atMs }
-
   /** Age of the newest data, or null before the first sample. */
   fun dataAgeMs(nowMs: Long): Long? = lastDataAtMs?.let { nowMs - it }
 }

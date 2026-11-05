@@ -17,9 +17,6 @@ import dev.silveradostats.vehicle.EffUnits
 import dev.silveradostats.vehicle.Efficiency
 import dev.silveradostats.vehicle.Feed
 import dev.silveradostats.vehicle.FeedKind
-import dev.silveradostats.vehicle.PowerDirection
-import dev.silveradostats.vehicle.PowerNow
-import dev.silveradostats.vehicle.PowerSource
 import dev.silveradostats.vehicle.SessionState
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -57,10 +54,8 @@ class GlanceModelTest {
     assertEquals("Battery Glance", g.title)
     assertEquals("DEMO DATA", g.status)
     assertTrue(g.demo)
-    // Power: signed kW with direction, then V · A (+ = discharge).
-    val power = row(g, "Power")
-    assertTrue(power[0], power[0].matches(Regex("""\+15\.\d kW · Discharging""")))
-    assertTrue(power[1], power[1].matches(Regex("""37\d\.\d V · \+40\.0 A""")))
+    // Capacity: both figures, then where they are from (not yet checked on this truck).
+    assertEquals(listOf("205.20 kWh · 593.4 Ah", "Battery capability, from the BECM · unverified"), row(g, "Capacity"))
     // Battery: SoC % · kWh remaining, then the BMS range.
     assertEquals(listOf("72.0 % · 147.9 kWh remaining", "Range 317 mi"), row(g, "Battery"))
     // Cells: the simulated truck draws 40 A, so the spread is the larger per-half BMS spread (the
@@ -84,8 +79,8 @@ class GlanceModelTest {
     val temps = row(g, "Temps")
     assertTrue(temps[0], temps[0].matches(Regex("""Modules −?\d+\.\d °C avg · unverified""")))
     assertTrue(temps[1], temps[1].matches(Regex("""Coolant −?\d+\.\d / −?\d+\.\d °C""")))
-    // Only module temperatures are unverified in the simulator's profile.
-    assertEquals(1, texts(g).count { it.contains("unverified") })
+    // Unverified in the simulator's profile: module temperatures and the BECM's capacities.
+    assertEquals(2, texts(g).count { it.contains("unverified") })
   }
 
   /** Every state the link can publish gives the same title, the same 4 row titles and 1–2 lines per row. */
@@ -111,7 +106,7 @@ class GlanceModelTest {
         for (t in TempUnit.entries) {
           val g = build(live, t, DistUnit.KM, now)
           assertEquals(GlanceModel.TITLE, g.title)
-          assertEquals(listOf("Power", "Battery", "Cells", "Temps"), g.rows.map { it.title })
+          assertEquals(listOf("Capacity", "Battery", "Cells", "Temps"), g.rows.map { it.title })
           assertEquals(GlanceModel.ROW_TITLES, g.rows.map { it.title })
           for (r in g.rows) {
             assertTrue("${r.title}: ${r.lines}", r.lines.size in 1..GlanceModel.MAX_LINES)
@@ -126,7 +121,7 @@ class GlanceModelTest {
   fun emptyStateShowsDashesAndWhatIsNeeded() {
     val g = build(LiveState(message = "Choose your OBDLink MX+ …"))
     assertEquals("No adapter", g.status)
-    assertEquals(listOf("— kW", "Needs the OBDLink MX+"), row(g, "Power"))
+    assertEquals(listOf("— kWh · — Ah", "Needs the OBDLink MX+"), row(g, "Capacity"))
     assertEquals(listOf("— % · — kWh", "Needs the OBDLink MX+"), row(g, "Battery"))
     assertEquals(listOf("— mV spread", "Needs cell data from the MX+"), row(g, "Cells"))
     assertEquals(listOf("Modules —", "Coolant —"), row(g, "Temps"))
@@ -174,7 +169,6 @@ class GlanceModelTest {
       "module_temps" to value("module_temps", listOf(20.0, 22.0), status = "unverified", period = 10.0),
     )
     val g = build(LiveState(values = v, derived = mapOf("power_kw" to -4.75)))
-    assertEquals(listOf("−4.8 kW · Charging / regen", "380.0 V · −12.5 A · unverified"), row(g, "Power"))
     assertEquals(listOf("50.0 % · — kWh remaining", "unverified"), row(g, "Battery"))
     assertEquals(listOf("Modules 21.0 °C avg · unverified", "Coolant 21.0 / — °C · unverified"), row(g, "Temps"))
     // Confirmed values carry no marker.
@@ -188,9 +182,8 @@ class GlanceModelTest {
     val fresh = simState(atMs = NOW)
     val g = build(fresh, now = NOW + 2_000)
     assertFalse(texts(g).any { it.endsWith(" old") })
-    // 25 s later: power (1 s period), SoC (2 s) and cells (5 s) are stale, the temperatures (10 s) not yet.
+    // 25 s later: SoC (2 s) and cells (5 s) are stale, the temperatures (10 s) not yet.
     val later = build(fresh, now = NOW + 25_000)
-    assertTrue(row(later, "Power")[1], row(later, "Power")[1].endsWith(" A · 25 s old"))
     assertTrue(row(later, "Battery")[1], row(later, "Battery")[1].endsWith("Range 317 mi · 25 s old"))
     assertTrue(row(later, "Cells")[1], row(later, "Cells")[1].endsWith(" V · under load · 25 s old"))
     assertFalse(row(later, "Temps").toString(), row(later, "Temps").any { it.endsWith(" old") })
@@ -218,7 +211,7 @@ class GlanceModelTest {
     val miles = (live.values.getValue("range_estimate").v as Number).toDouble()
     assertEquals("Range ${Units.distText(miles, DistUnit.KM)}", row(f, "Battery")[1])
     assertTrue(row(f, "Battery")[1].endsWith(" km"))
-    assertEquals(row(c, "Power"), row(f, "Power"))
+    assertEquals(row(c, "Capacity"), row(f, "Capacity"))
     val v = mapOf("coolant_temp_1" to value("coolant_temp_1", 20.0, period = 10.0), "coolant_temp_2" to value("coolant_temp_2", 25.0, period = 10.0))
     assertEquals("Coolant 68.0 / 77.0 °F", row(build(LiveState(values = v), TempUnit.F), "Temps")[1])
   }
@@ -255,7 +248,6 @@ class GlanceModelTest {
   /** A session like the truck's photo: 85.25 of 205.08 kWh, 304 km range, 2.32 mi/kWh over 9.8 mi. */
   private fun session(
     eff: Efficiency = Efficiency(EffStatus.OK, EffUnits.fromMiPerKwh(2.32), 1.0, 15_000.0, 4_000.0),
-    power: PowerNow? = PowerNow(23.4, PowerDirection.DISCHARGING, PowerSource.CHARGE_RATE),
     feed: Feed = Feed(FeedKind.VEHICLE, sampling = true),
   ) = SessionState(
     activeMs = 24 * 60_000L,
@@ -263,7 +255,6 @@ class GlanceModelTest {
     distanceM = 9.8 * EffUnits.METERS_PER_MILE,
     usedWh = 4_210.0,
     efficiency = eff,
-    power = power,
     speedMps = 45 / 2.2369362920544,
     levelWh = 85_250.0,
     capacityWh = 205_080.0,
@@ -277,29 +268,22 @@ class GlanceModelTest {
     val g = GlanceModel.build(LiveState(), TempUnit.C, DistUnit.MI, NOW, session())
     assertEquals("Built-in data", g.status)
     assertEquals(GlanceModel.ROW_TITLES, g.rows.map { it.title })
-    assertEquals(listOf("+23.4 kW · Discharging", "45 mph · truck's charge rate"), row(g, "Power"))
-    assertEquals(listOf("41.6 % · 85.3 kWh · 189 mi range", "2.32 mi/kWh since opened · 9.8 mi"), row(g, "Battery"))
+    assertEquals(listOf("205.1 kWh", "Usable now, from the car's API"), row(g, "Capacity"))
+    assertEquals(listOf("41.6 % · 85.3 kWh · 198 mi range · truck 189 mi", "2.32 mi/kWh since opened · 9.8 mi"), row(g, "Battery"))
     assertEquals(listOf("— mV spread", "Needs the OBDLink MX+"), row(g, "Cells"))
     assertEquals(listOf("Outside 12.5 °C", "Battery temps need the OBDLink MX+"), row(g, "Temps"))
     assertFalse(g.demo)
     // Metric and °F.
     val m = GlanceModel.build(LiveState(), TempUnit.F, DistUnit.KM, NOW, session())
-    assertEquals(listOf("41.6 % · 85.3 kWh · 304 km range", "3.73 km/kWh since opened · 15.8 km"), row(m, "Battery"))
-    assertEquals("72 km/h · truck's charge rate", row(m, "Power")[1])
+    assertEquals(listOf("41.6 % · 85.3 kWh · 318 km range · truck 304 km", "3.73 km/kWh since opened · 15.8 km"), row(m, "Battery"))
     assertEquals("Outside 54.5 °F", row(m, "Temps")[0])
-  }
-
-  @Test
-  fun builtInPowerSaysWhenItIsEstimated() {
-    val est = session(power = PowerNow(31.0, PowerDirection.DISCHARGING, PowerSource.ESTIMATED))
-    assertEquals(listOf("+31.0 kW · Discharging · est.", "45 mph · est. from battery level"), row(GlanceModel.build(LiveState(), TempUnit.C, DistUnit.MI, NOW, est), "Power"))
-    val regen = session(power = PowerNow(-18.25, PowerDirection.REGEN, PowerSource.CHARGE_RATE))
-    assertEquals("−18.3 kW · Regen", row(GlanceModel.build(LiveState(), TempUnit.C, DistUnit.MI, NOW, regen), "Power")[0])
   }
 
   @Test
   fun builtInWarmUpAndMissingAccess() {
     val warm = session(eff = Efficiency(EffStatus.WARMING_UP, null, 0.4, 640.0, 120.0)).copy(distanceM = 0.4 * EffUnits.METERS_PER_MILE)
+    // No figure of its own yet: the truck's stands alone.
+    assertEquals("41.6 % · 85.3 kWh · 189 mi range", row(GlanceModel.build(LiveState(), TempUnit.C, DistUnit.MI, NOW, warm), "Battery")[0])
     assertEquals("Efficiency warming up (40 %) · 0.4 mi", row(GlanceModel.build(LiveState(), TempUnit.C, DistUnit.MI, NOW, warm), "Battery")[1])
     val early = session(eff = Efficiency(EffStatus.OK, EffUnits.fromMiPerKwh(1.43), 1.0, 1_640.0, 710.0, early = true))
     assertEquals("1.43 mi/kWh so far (early) · 9.8 mi", row(GlanceModel.build(LiveState(), TempUnit.C, DistUnit.MI, NOW, early), "Battery")[1])
@@ -310,11 +294,11 @@ class GlanceModelTest {
     assertEquals("Measuring stopped", GlanceModel.builtInHint(SessionState(feed = Feed(FeedKind.FAILED))))
     val denied = SessionState(feed = Feed(FeedKind.VEHICLE, missingPermissions = listOf(CarPerm.CAR_ENERGY, CarPerm.CAR_SPEED)))
     val g = GlanceModel.build(LiveState(), TempUnit.C, DistUnit.MI, NOW, denied)
-    assertEquals(listOf("— kW", "Allow car data in Silverado Stats"), row(g, "Power"))
+    assertEquals(listOf("— kWh", "Allow car data in Silverado Stats"), row(g, "Capacity"))
     assertEquals(listOf("— % · — kWh", "Allow car data in Silverado Stats"), row(g, "Battery"))
     assertEquals(listOf("Outside —", "Battery temps need the OBDLink MX+"), row(g, "Temps"))
     val phone = GlanceModel.build(LiveState(), TempUnit.C, DistUnit.MI, NOW, SessionState(feed = Feed(FeedKind.NOT_AUTOMOTIVE)))
-    assertEquals("No car data on this device", row(phone, "Power")[1])
+    assertEquals("No car data on this device", row(phone, "Capacity")[1])
   }
 
   @Test
@@ -322,13 +306,11 @@ class GlanceModelTest {
     val sim = simState()
     // OBD delivering: the OBD rows, with the measured efficiency added to the range line.
     val obd = GlanceModel.build(sim, TempUnit.C, DistUnit.MI, NOW, session())
-    assertEquals(listOf("72.0 % · 147.9 kWh remaining", "Range 317 mi · 2.32 mi/kWh since opened · 9.8 mi"), row(obd, "Battery"))
-    assertTrue(row(obd, "Power")[1], row(obd, "Power")[1].endsWith(" A"))
+    assertEquals(listOf("72.0 % · 147.9 kWh remaining", "Range 198 mi · truck 317 mi · 2.32 mi/kWh since opened · 9.8 mi"), row(obd, "Battery"))
     // The adapter chosen but unreachable / the truck asleep / connecting: built-in rows, link state kept.
     for (st in listOf(LinkStatus.ADAPTER_UNREACHABLE, LinkStatus.TRUCK_ASLEEP, LinkStatus.CONNECTING, LinkStatus.STOPPED_ERROR)) {
       val live = sim.copy(status = st, demo = false, canRetry = st != LinkStatus.CONNECTING)
       val g = GlanceModel.build(live, TempUnit.C, DistUnit.MI, NOW, session())
-      assertEquals(st.toString(), "+23.4 kW · Discharging", row(g, "Power")[0])
       assertEquals(GlanceModel.status(live), g.status)
       assertEquals(live.canRetry, g.canRetry)
     }

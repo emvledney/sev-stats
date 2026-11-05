@@ -49,6 +49,7 @@ import dev.silveradostats.ui.layout.FitText
 import dev.silveradostats.ui.live.LiveScreen
 import dev.silveradostats.ui.live.vhalFigures
 import dev.silveradostats.ui.simple.SimpleScreen
+import dev.silveradostats.ui.trends.TrendsScreen
 import dev.silveradostats.ui.theme.DemoBannerColor
 import dev.silveradostats.ui.theme.TextDim
 import dev.silveradostats.vehicle.DrivingInputs
@@ -62,12 +63,12 @@ import kotlinx.coroutines.flow.StateFlow
 typealias Chrome = @Composable (summary: @Composable RowScope.() -> Unit, controls: @Composable RowScope.() -> Unit) -> Unit
 
 /**
- * Top-level layout: the header row (tabs Simple | Live | Diagnostics, the last one remembered) and
+ * Top-level layout: the header row (tabs Simple | Live | Trends | Diagnostics, the last one remembered) and
  * the selected screen, sized from the window this composition actually got after insets, never
- * from a known panel. Only Live and Diagnostics use the OBD link (LiveViewModel).
+ * from a known panel. Which tabs use the OBD link: UiSettings.wantsObd.
  *
- * While the truck is out of Park (`layout.restricted`) the Diagnostics tab is not offered and shows
- * only [AvailableInParkPanel]; none of its property tables, pairing, text fields or buttons compose.
+ * While the truck is out of Park (`layout.restricted`) the Diagnostics and Trends tabs are not offered
+ * and show only [AvailableInParkPanel]; none of their tables, charts, pairing, fields or buttons compose.
  */
 @Composable
 fun AppShell(
@@ -101,10 +102,10 @@ fun AppShell(
             settings = settings,
             layout = layout,
             chrome = chrome,
-            onLayout = liveVm::setSimpleLayout,
             onTempUnit = liveVm::setTempUnit,
             onDistUnit = liveVm::setDistUnit,
             onReset = liveVm::resetSession,
+            onMxOff = liveVm::setMxOff,
             onRequestPermissions = onRequestCarPermissions,
             onOpenDiagnostics = { liveVm.selectTab(AppTab.DIAGNOSTICS) },
           )
@@ -112,17 +113,29 @@ fun AppShell(
         AppTab.LIVE -> {
           val live by liveVm.shownLive.collectAsStateWithLifecycle()
           val diag by diagVm.state.collectAsStateWithLifecycle()
+          val session by liveVm.shownSession.collectAsStateWithLifecycle()
           LiveScreen(
             live = live,
             vhal = vhalFigures(diag.live),
+            ownRangeM = session.rangeEstimate?.m,
             settings = settings,
             layout = layout,
             chrome = chrome,
             onRetry = liveVm::retry,
+            onMxOff = liveVm::setMxOff,
             onTempUnit = liveVm::setTempUnit,
             onDistUnit = liveVm::setDistUnit,
             onOpenDiagnostics = { liveVm.selectTab(AppTab.DIAGNOSTICS) },
           )
+        }
+        AppTab.TRENDS -> if (layout.restricted) {
+          Column(Modifier.fillMaxSize()) {
+            chrome({}, {})
+            AvailableInParkPanel(layout, stateKnown, liveVm.drivingInputs, "Trends")
+          }
+        } else {
+          val live by liveVm.shownLive.collectAsStateWithLifecycle()
+          TrendsScreen(settings, live.status, layout, chrome)
         }
         AppTab.DIAGNOSTICS -> Column(Modifier.fillMaxSize()) {
           chrome({}, {})
@@ -154,7 +167,7 @@ private fun ShellHeader(
   ) {
     if (layout.appTitle) FitText("Silverado Stats", sp = layout.type.tab, weight = FontWeight.Bold)
     Row(Modifier.fillMaxHeight()) {
-      AppTab.entries.filter { it != AppTab.DIAGNOSTICS || layout.diagnosticsTab }.forEach { t ->
+      AppTab.entries.filter { it != AppTab.DIAGNOSTICS || layout.diagnosticsTab }.filter { it != AppTab.TRENDS || layout.trendsTab }.forEach { t ->
         HeaderTab(t.label, tab == t, layout) { onSelect(t) }
       }
     }
@@ -209,14 +222,14 @@ private fun DemoChip(layout: DashLayout) {
  * in driving mode in Park (and Diagnostics, the usual way to find out, is the part that is locked).
  */
 @Composable
-private fun AvailableInParkPanel(layout: DashLayout, stateKnown: Boolean, inputs: StateFlow<DrivingInputs>) {
+private fun AvailableInParkPanel(layout: DashLayout, stateKnown: Boolean, inputs: StateFlow<DrivingInputs>, what: String = "Diagnostics") {
   val reading by inputs.collectAsStateWithLifecycle()
   Box(Modifier.fillMaxSize().padding(layout.gapDp.dp), contentAlignment = Alignment.Center) {
     Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(20.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
       FitColumn(Modifier.fillMaxWidth().padding(horizontal = layout.cardPadHDp.dp, vertical = layout.cardPadVDp.dp), spacing = layout.gapDp.dp) {
         FitText("Available in Park", Modifier.fit(0).fillMaxWidth(), sp = layout.type.value, weight = FontWeight.Bold, lineFactor = DashLayout.VALUE_LINE_FACTOR, align = TextAlign.Center)
         FitText(
-          if (stateKnown) "Diagnostics returns when the truck is in Park." else "The driving state cannot be read right now, so the app stays in driving mode.",
+          if (stateKnown) "$what returns when the truck is in Park." else "The driving state cannot be read right now, so the app stays in driving mode.",
           Modifier.fit(1).fillMaxWidth(),
           sp = layout.type.title,
           color = TextDim,

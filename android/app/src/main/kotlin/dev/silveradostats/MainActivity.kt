@@ -16,6 +16,7 @@ import androidx.lifecycle.repeatOnLifecycle
 import dev.silveradostats.diag.AppPermissions
 import dev.silveradostats.diag.CrashLog
 import dev.silveradostats.diag.SystemInfo
+import dev.silveradostats.log.LogHub
 import dev.silveradostats.ui.AppShell
 import dev.silveradostats.ui.theme.SilveradoStatsTheme
 import dev.silveradostats.vehicle.CarPerm
@@ -73,11 +74,16 @@ class MainActivity : ComponentActivity() {
         )
       }
     }
-    // Whatever Diagnostics had running ends with the restriction, seen from any tab.
+    val logs = LogHub.get(this)
+    logs.onAppOpened()
+    // Send to laptop refuses under the restriction, seen from any tab.
     vm.followRestriction(liveVm.restricted)
     // Live energy values: 1 s refresh only while the screen is visible.
     lifecycleScope.launch {
       repeatOnLifecycle(Lifecycle.State.STARTED) { vm.liveLoop() }
+    }
+    lifecycleScope.launch {
+      repeatOnLifecycle(Lifecycle.State.STARTED) { logs.whileOnScreen() }
     }
   }
 
@@ -93,7 +99,6 @@ class MainActivity : ComponentActivity() {
     if (!isChangingConfigurations) {
       liveVm.setVisible(false)
       // The driving state is not watched behind another app, and nothing here would show the result.
-      vm.stopRunningWork()
       liveVm.onLeftScreen()
     }
     super.onStop()

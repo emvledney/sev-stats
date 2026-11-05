@@ -9,7 +9,6 @@ import dev.silveradostats.link.AppSettings
 import dev.silveradostats.link.AppTab
 import dev.silveradostats.link.LinkConnection
 import dev.silveradostats.link.LiveState
-import dev.silveradostats.link.SimpleLayout
 import dev.silveradostats.link.UiSettings
 import dev.silveradostats.report.MxReport
 import dev.silveradostats.ui.live.DistUnit
@@ -30,10 +29,10 @@ import kotlinx.coroutines.launch
  * ViewModel's lifetime (the built-in session stays attached with another app in front, for as long
  * as Android does not freeze the process, and stops by itself when nothing is visible and the truck
  * is not moving); OBD polling runs only while [setVisible] is true (MainActivity: onStart … onStop)
- * and the selected tab shows OBD data (not the Simple tab, nor Diagnostics while it is a text panel).
+ * and the selected tab uses OBD data (UiSettings.wantsObd: not Diagnostics while it is a text panel).
  *
  * [restricted] is the one driving state of the main screen. While it is true the screens offer only
- * the Simple / Live tabs and the layout selector, and every other action here is refused as well
+ * the Simple / Live tabs, the layout selector and the MX+ button, and every other action here is refused as well
  * ([parkedOnly]), so a stale tap cannot change anything from behind the driving layout.
  */
 class LiveViewModel(app: Application) : AndroidViewModel(app) {
@@ -42,7 +41,7 @@ class LiveViewModel(app: Application) : AndroidViewModel(app) {
   private val driving = DrivingMonitor(app, viewModelScope)
 
   // The tab the app opens on decides before the first onStart whether the MX+ is wanted at all.
-  private val conn = LinkConnection(app, viewModelScope, obdWanted = store.state.value.tab.wantsObd(driving.restricted.value))
+  private val conn = LinkConnection(app, viewModelScope, obdWanted = store.state.value.wantsObd(driving.restricted.value))
 
   /** True while the truck is out of Park, or that cannot be ruled out (fail safe, DrivingPolicy). */
   val restricted: StateFlow<Boolean> = driving.restricted
@@ -69,9 +68,9 @@ class LiveViewModel(app: Application) : AndroidViewModel(app) {
     viewModelScope.launch {
       combine(conn.service, restricted) { s, r -> s to r }.collect { (s, r) -> s?.bt?.setRestricted(r) }
     }
-    // Only a visible tab that shows OBD data attaches the engine: the tab or the restriction can change it.
+    // Only a visible tab that uses OBD data attaches the engine: the settings or the restriction can change it.
     viewModelScope.launch {
-      combine(store.state, restricted) { s, r -> s.tab.wantsObd(r) }.distinctUntilChanged().collect { conn.setObdWanted(it) }
+      combine(store.state, restricted) { s, r -> s.wantsObd(r) }.distinctUntilChanged().collect { conn.setObdWanted(it) }
     }
   }
 
@@ -84,7 +83,7 @@ class LiveViewModel(app: Application) : AndroidViewModel(app) {
     if (visible) driving.start() else driving.stop()
   }
 
-  /** Selects (and remembers) a tab; the OBD link is wanted only on the tabs that show it. */
+  /** Selects (and remembers) a tab. */
   fun selectTab(t: AppTab) {
     if (t == AppTab.DIAGNOSTICS && restricted.value) return
     store.setTab(t)
@@ -95,8 +94,6 @@ class LiveViewModel(app: Application) : AndroidViewModel(app) {
     conn.service.value?.bt?.onLeftScreen()
   }
 
-  fun setSimpleLayout(l: SimpleLayout) = store.setSimpleLayout(l)
-
   /** "Reset session": distance, energy and charts start again from now. */
   fun resetSession() = parkedOnly {
     conn.service.value?.vehicle?.reset()
@@ -105,6 +102,12 @@ class LiveViewModel(app: Application) : AndroidViewModel(app) {
   fun retry() = parkedOnly {
     conn.service.value?.engine?.retry()
   }
+
+  /**
+   * Disconnect (true) / Connect (false): the MX+ stays free for other devices until Connect, app
+   * restarts included. Allowed while driving: the phone may need Bluetooth back on the road.
+   */
+  fun setMxOff(off: Boolean) = store.setMxOff(off)
 
   fun setTempUnit(u: TempUnit) = parkedOnly { store.setTempUnit(u) }
 

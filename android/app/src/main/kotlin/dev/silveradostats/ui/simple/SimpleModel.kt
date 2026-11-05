@@ -1,16 +1,13 @@
 package dev.silveradostats.ui.simple
 
-import dev.silveradostats.link.PowerPoint
-import dev.silveradostats.ui.live.DashboardModel
 import dev.silveradostats.ui.live.DistUnit
 import dev.silveradostats.ui.live.TempUnit
-import dev.silveradostats.ui.live.Tone
 import dev.silveradostats.ui.live.Units
-import dev.silveradostats.vehicle.EffSegment
 import dev.silveradostats.vehicle.EffStatus
 import dev.silveradostats.vehicle.EffUnits
+import dev.silveradostats.vehicle.EnergySource
 import dev.silveradostats.vehicle.FeedKind
-import dev.silveradostats.vehicle.PowerDirection
+import dev.silveradostats.vehicle.RangeBasis
 import dev.silveradostats.vehicle.SessionState
 import dev.silveradostats.vehicle.SessionTracker
 import dev.silveradostats.vehicle.Signal
@@ -18,24 +15,21 @@ import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.ceil
 import kotlin.math.max
-import kotlin.math.min
 
 /*
- * Pure Kotlin (no android.* imports): SessionState -> exactly what the Simple tab draws (layout A
- * "Efficiency" and layout B "Battery"). Unit tested; the Compose code only lays it out.
+ * Pure Kotlin (no android.* imports): SessionState -> exactly what the Simple tab draws. Unit tested;
+ * the Compose code only lays it out.
  *
  * Units: mi/kWh first and Wh/mi second (km/kWh and Wh/km in metric), °C / °F as chosen.
  */
 
-/** A KPI tile. [marker]: "est." etc. beside the title; [pill]: direction label with [pillTone]. */
+/** A KPI tile, or one of the two figures of a tile that holds two. [marker]: "early" etc. beside the title. */
 data class Stat(
   val title: String,
   val value: String,
   val unit: String,
   val lines: List<String>,
   val hasValue: Boolean = true,
-  val pill: String? = null,
-  val pillTone: Tone = Tone.NORMAL,
   val marker: String? = null,
   /** The title on a narrow tile and while driving. */
   val shortTitle: String = title,
@@ -45,74 +39,7 @@ data class Stat(
   val linesWhileDriving: Boolean = true,
 )
 
-enum class HeroKind {
-  /** A measured figure. */
-  VALUE,
-  WARMING,
-
-  /** Measured before, but net energy is about zero or negative now (a long descent). */
-  NET_REGEN,
-
-  /** Cannot measure: no access to the data, or the car does not offer it. */
-  BLOCKED,
-}
-
-data class HeroView(
-  /** "2.32", "Warming up", "Net regen", "No access", "No data". */
-  val value: String,
-  val unit: String,
-  val kind: HeroKind,
-  /** 0..1 warm-up progress. */
-  val progress: Double,
-  /** "431 Wh/mi · 4.21 kWh used over 9.8 mi" (what the figure is measured over), or why there is none. */
-  val secondary: String,
-  /** "Truck's range implies 2.05 mi/kWh", or null when the truck gives nothing to compare. */
-  val truck: String?,
-  /** A figure over too little to say much yet. */
-  val early: Boolean = false,
-  /** "431 Wh/mi": the same figure the other way round, all of [secondary] that stays while driving. */
-  val consumption: String? = null,
-) {
-  val warming: Boolean get() = kind == HeroKind.WARMING
-}
-
 data class ChartPoint(val x: Double, val y: Double)
-
-/** One per-mile (per-km) bar; [y] null = no figure ([regen] = net regen over it). */
-data class EffBar(val index: Int, val x0: Double, val x1: Double, val y: Double?, val regen: Boolean)
-
-/** Cumulative efficiency vs distance over per-mile bars, in the user's units. */
-data class EffChart(
-  val xMax: Double,
-  val xStep: Double,
-  val yMax: Double,
-  val yStep: Double,
-  val line: List<ChartPoint>,
-  val bars: List<EffBar>,
-  val distUnit: String,
-  val effUnit: String,
-  /** Nothing to draw yet (the line starts after the warm-up). */
-  val warming: Boolean,
-  /** What the empty chart says: "The line starts after the warm-up (1 mi and 0.3 kWh)". */
-  val warmupText: String = "",
-)
-
-/** Power, last 10 minutes: + discharge up (orange), − regen / charge down (green). */
-data class PowerChartView(
-  val points: List<PowerPoint>,
-  val nowMs: Long,
-  val windowMs: Long,
-  val scaleKw: Double,
-  val now: String,
-  val nowLabel: String,
-  val nowTone: Tone,
-  val peak: String,
-  val regen: String,
-  val estimated: Boolean,
-  /** "Peak drive", with "(est.)" when the last 10 minutes include estimated power. */
-  val peakTitle: String = "Peak drive",
-  val regenTitle: String = "Peak regen / charge",
-)
 
 data class RingView(
   /** 0..1 state of charge, null if unknown. */
@@ -142,49 +69,40 @@ data class SimpleView(
   /** Something was already left out, so [hint] is a warning, not just advice. */
   val hintWarn: Boolean,
   val notice: Notice?,
-  val hero: HeroView,
-  val chart: EffChart,
-  val battery: Stat,
-  val batteryFraction: Double?,
-  val power: Stat,
+  /** The car API's capacity, always. */
+  val capacity: Stat,
   val range: Stat,
-  val session: Stat,
   val ring: RingView,
-  val powerChart: PowerChartView,
-  val efficiencyMini: Stat,
+  /** The whole session's figure, or why there is none yet. */
+  val efficiency: Stat,
+  /** The figure over only the last 15 minutes, beside [efficiency]; null while that has no figure to stand beside. */
+  val recentEfficiency: Stat?,
   val spark: List<ChartPoint>,
-  val sessionMini: Stat,
+  val trip: Stat,
+  val energyUsed: Stat,
 )
 
 object SimpleModel {
   private val DASH = Units.DASH
-  const val WINDOW_MS = SessionTracker.HISTORY_MS
   private const val MPH_PER_MPS = 2.2369362920544
 
-  fun build(s: SessionState, temp: TempUnit, dist: DistUnit, nowMs: Long): SimpleView {
-    val chart = chart(s, dist)
-    return SimpleView(
-      header = header(s, dist),
-      summary = summary(s, dist),
-      pauses = pauses(s),
-      note = note(s, dist),
-      hint = hint(s),
-      hintWarn = s.gaps > 0,
-      notice = notice(s),
-      hero = hero(s, dist),
-      chart = chart,
-      battery = battery(s),
-      batteryFraction = s.socPct?.let { (it / 100.0).coerceIn(0.0, 1.0) },
-      power = power(s, dist),
-      range = range(s, dist),
-      session = session(s, temp, dist),
-      ring = ring(s, dist),
-      powerChart = powerChart(s, nowMs),
-      efficiencyMini = efficiencyMini(s, dist),
-      spark = chart.line,
-      sessionMini = sessionMini(s, dist),
-    )
-  }
+  fun build(s: SessionState, temp: TempUnit, dist: DistUnit): SimpleView = SimpleView(
+    header = header(s, dist),
+    summary = summary(s, dist),
+    pauses = pauses(s),
+    note = note(s, dist),
+    hint = hint(s),
+    hintWarn = s.gaps > 0,
+    notice = notice(s),
+    capacity = capacity(s),
+    range = range(s, dist),
+    ring = ring(s, dist),
+    efficiency = efficiency(s, dist),
+    recentEfficiency = recentEfficiency(s, dist),
+    spark = spark(s, dist),
+    trip = trip(s, temp, dist),
+    energyUsed = energyUsed(s),
+  )
 
   // --- Units ------------------------------------------------------------------------------------
 
@@ -212,8 +130,11 @@ object SimpleModel {
   fun speedText(mps: Double, d: DistUnit): String =
     if (d == DistUnit.MI) "${Units.num(mps * MPH_PER_MPS, 0)} mph" else "${Units.num(mps * 3.6, 0)} km/h"
 
-  /** "4.21 kWh" (two decimals below 100 kWh, one above). */
-  fun kwhText(wh: Double): String = "${Units.num(wh / 1000.0, if (abs(wh) < 100_000) 2 else 1)} kWh"
+  /** "4.21" (two decimals below 100 kWh, one above). */
+  fun kwhValue(wh: Double): String = Units.num(wh / 1000.0, if (abs(wh) < 100_000) 2 else 1)
+
+  /** "4.21 kWh". */
+  fun kwhText(wh: Double): String = "${kwhValue(wh)} kWh"
 
   /** h:mm, e.g. "0:24", "1:05". */
   fun duration(ms: Long): String {
@@ -245,7 +166,30 @@ object SimpleModel {
     if (s.efficiency.status != EffStatus.WARMING_UP && levelStuck(s)) {
       parts += "Battery level unchanged for ${distText(s.levelUnchangedM, d)}"
     }
+    // A later drive of the session: the figure stands still meanwhile, and this says why.
+    if (s.efficiency.status != EffStatus.WARMING_UP && s.efficiency.warmupLeftMs > 0) parts += warmupText(s.efficiency.warmupLeftMs)
+    energyNote(s)?.let { parts += it }
     return parts.takeIf { it.isNotEmpty() }?.joinToString(" · ")
+  }
+
+  /** With a power signal in use: what it says went out and came back, against the battery level's figure. */
+  private fun energyNote(s: SessionState): String? {
+    if (s.energySource == EnergySource.BATTERY_LEVEL) return null
+    return "Energy from ${sourceName(s.energySource)}: ${kwhText(s.energyOutWh)} out, ${kwhText(s.energyInWh)} back " +
+      "(battery level says ${kwhText(s.levelUsedWh)} used)"
+  }
+
+  private fun sourceName(e: EnergySource) = when (e) {
+    EnergySource.MX_PACK -> "the MX+"
+    EnergySource.CHARGE_RATE -> "the truck's charge rate"
+    EnergySource.BATTERY_LEVEL -> "the battery level"
+  }
+
+  /** The badge on the session's energy: what it is measured from. */
+  fun sourceMarker(e: EnergySource): String = when (e) {
+    EnergySource.MX_PACK -> "MX+"
+    EnergySource.CHARGE_RATE -> "charge rate"
+    EnergySource.BATTERY_LEVEL -> "battery level"
   }
 
   /**
@@ -265,6 +209,9 @@ object SimpleModel {
 
   /** Marks an efficiency over the first few miles. */
   const val EARLY = "early"
+
+  /** Marks a range worked out from an earlier drive's efficiency. */
+  const val LAST_DRIVE = "last drive"
 
   /** A runtime permission is missing: the tiles say so, not "not offered" (the notice has the button). */
   private fun noAccess(s: SessionState): Boolean = s.feed.missingPermissions.isNotEmpty()
@@ -292,163 +239,96 @@ object SimpleModel {
     }
   }
 
-  // --- Layout A ---------------------------------------------------------------------------------
+  // --- Efficiency -------------------------------------------------------------------------------
 
-  fun hero(s: SessionState, d: DistUnit): HeroView {
+  private const val EFFICIENCY_TITLE = "Efficiency since opened"
+  private const val EFFICIENCY_SHORT = "Efficiency"
+  private const val OVERALL = "Overall"
+  private const val RECENT = "Last ${SessionTracker.RECENT_MS / 60_000} min"
+  private const val NET_REGEN = "Net regen"
+
+  fun efficiency(s: SessionState, d: DistUnit): Stat {
     val e = s.efficiency
-    val truck = s.truckImpliedMPerWh?.let { "Truck's range implies ${effText(it, d)} ${effUnit(d)}" }
     val m = e.mPerWh
     if (e.status == EffStatus.OK && m != null) {
-      return HeroView(
-        value = effText(m, d),
-        unit = effUnit(d),
-        kind = HeroKind.VALUE,
-        progress = 1.0,
-        // The figure's own energy and distance: session totals are in the "This session" tile.
-        secondary = "${consumptionText(m, d)} · ${kwhText(e.basisWh)} used over ${distText(e.basisM, d)}",
-        truck = truck,
-        early = e.early,
-        consumption = consumptionText(m, d),
-      )
+      return Stat(OVERALL, effText(m, d), effUnit(d), listOf(consumptionText(m, d)), marker = if (e.early) EARLY else null)
     }
-    if (e.status == EffStatus.NET_REGEN) {
-      val text = if (e.basisWh <= 0) "More energy back than used" else "Almost no net energy used"
-      return HeroView("Net regen", "", HeroKind.NET_REGEN, 1.0, "$text over ${distText(e.basisM, d)}", truck)
-    }
-    if (noAccess(s)) return HeroView("No access", "", HeroKind.BLOCKED, 0.0, NEEDS_ACCESS, truck)
-    if (Signal.SPEED in s.feed.missing) return HeroView("No data", "", HeroKind.BLOCKED, 0.0, "Needs vehicle speed: not offered by this car", truck)
-    if (Signal.LEVEL in s.feed.missing) return HeroView("No data", "", HeroKind.BLOCKED, 0.0, "Needs the battery level: not offered by this car", truck)
+    if (e.status == EffStatus.NET_REGEN) return Stat(OVERALL, NET_REGEN, "", listOf(netRegenText(e.basisM, e.basisWh, d)), hasValue = false, linesWhileDriving = false)
+    fun none(value: String, why: String) = Stat(EFFICIENCY_TITLE, value, "", listOf(why), hasValue = false, shortTitle = EFFICIENCY_SHORT, linesWhileDriving = false)
+    if (noAccess(s)) return none("No access", NEEDS_ACCESS)
+    if (Signal.SPEED in s.feed.missing) return none("No data", "Needs vehicle speed: not offered by this car")
+    if (Signal.LEVEL in s.feed.missing) return none("No data", "Needs the battery level: not offered by this car")
     val needs = if (levelStuck(s)) {
-      "The truck's battery level has not changed for ${distText(s.levelUnchangedM, d)}: nothing to measure yet"
+      "Battery level unchanged for ${distText(s.levelUnchangedM, d)}: nothing to measure yet"
+    } else if (e.warmupLeftMs > 0) {
+      warmupText(e.warmupLeftMs)
     } else {
       "Needs ${if (d == DistUnit.MI) "1.0 mi" else "1.6 km"} and ${kwhNeed(e.needWh)} kWh measured · so far ${distText(e.basisM, d)} · ${kwhText(max(0.0, e.basisWh))}"
     }
-    return HeroView("Warming up", effUnit(d), HeroKind.WARMING, e.progress, needs, truck)
+    return Stat(EFFICIENCY_TITLE, "Warming up", "", listOf("${Units.num(e.progress * 100, 0)} % of the warm-up", needs), hasValue = false, shortTitle = EFFICIENCY_SHORT)
   }
+
+  /** The figure over only the last 15 minutes. Until there are 15 minutes it is the whole of the overall figure. */
+  fun recentEfficiency(s: SessionState, d: DistUnit): Stat? {
+    if (s.efficiency.status == EffStatus.WARMING_UP) return null
+    val r = s.recentEfficiency
+    val m = r.mPerWh
+    return when {
+      m != null -> Stat(RECENT, effText(m, d), effUnit(d), listOf(consumptionText(m, d)))
+      r.basisM >= SessionTracker.WARMUP_M -> Stat(RECENT, NET_REGEN, "", listOf(netRegenText(r.basisM, r.basisWh, d)), hasValue = false, linesWhileDriving = false)
+      else -> Stat(RECENT, DASH, effUnit(d), listOf("Under ${if (d == DistUnit.MI) "1 mi" else "1.6 km"} measured"), hasValue = false, linesWhileDriving = false)
+    }
+  }
+
+  private fun netRegenText(basisM: Double, basisWh: Double, d: DistUnit): String =
+    "${if (basisWh <= 0) "More energy back than used" else "Almost no net energy used"} over ${distText(basisM, d)}"
 
   /** The warm-up's energy, "0.3" (more when the battery level moves in coarse steps). */
   private fun kwhNeed(wh: Double): String = Units.num(wh / 1000.0, 1)
 
-  fun chart(s: SessionState, d: DistUnit): EffChart {
-    val unitM = if (d == DistUnit.MI) EffUnits.METERS_PER_MILE else 1000.0
-    // Series points fall on every 0.1 mi; the line ends where the hero figure was measured, at that figure.
-    val series = s.series.map { ChartPoint(it.distM / unitM, effValue(it.mPerWh, d)) }
-    val hero = s.efficiency.mPerWh?.takeIf { s.efficiency.status == EffStatus.OK }?.let { ChartPoint(s.efficiency.atM / unitM, effValue(it, d)) }
-    val line = if (hero != null && (series.isEmpty() || hero.x >= series.last().x)) {
-      if (series.isNotEmpty() && hero.x == series.last().x) series.dropLast(1) + hero else series + hero
-    } else {
-      series
-    }
-    val segments: List<EffSegment> = if (d == DistUnit.MI) s.miSegments else s.kmSegments
-    val bars = segments.map { seg ->
-      EffBar(seg.index, (seg.index - 1).toDouble(), seg.index.toDouble(), seg.mPerWh?.let { effValue(it, d) }, seg.netRegen)
-    }
-    val xMax = niceCeil(max(distValue(s.distanceM, d), 1.0))
-    val xStep = step(xMax, 8, listOf(0.5, 1.0, 2.0, 5.0, 10.0, 20.0, 25.0, 50.0, 100.0, 200.0, 500.0))
-    // y: most bars (an outlier mile, e.g. downhill, is drawn capped), and the line while it stays near
-    // them: the start of a long descent must not flatten everything else.
-    val barYs = bars.mapNotNull { it.y }.sorted()
-    val barRef = if (barYs.isEmpty()) 0.0 else barYs[((barYs.size - 1) * 0.8).toInt()]
-    val lineMax = line.maxOfOrNull { it.y } ?: 0.0
-    val lineRef = if (barRef > 0) min(lineMax, barRef * LINE_OVER_BARS) else lineMax
-    val floorY = if (d == DistUnit.MI) 3.0 else 5.0
-    val capY = if (d == DistUnit.MI) 8.0 else 13.0
-    val top = (max(lineRef, barRef) * 1.12).coerceIn(floorY, capY)
-    val yStep = step(top, 6, listOf(0.25, 0.5, 1.0, 2.0, 5.0, 10.0))
-    val yMax = ceil(top / yStep) * yStep
-    val warmup = if (noAccess(s)) NEEDS_ACCESS else "The line starts after the warm-up (${if (d == DistUnit.MI) "1 mi" else "1.6 km"} and ${kwhNeed(s.efficiency.needWh)} kWh)"
-    return EffChart(xMax, xStep, yMax, yStep, line, bars, d.symbol, effUnit(d), warming = line.isEmpty(), warmupText = warmup)
+  /** Why the start of a drive is not in the figure, and how much of it is left. */
+  private fun warmupText(leftMs: Long): String {
+    val left = if (leftMs >= SessionTracker.WARMUP_MS) "starts when moving" else "${ceil(leftMs / 60_000.0).toInt()} min left"
+    return "First $WARMUP_MIN min of a drive not counted · $left"
   }
 
-  /** Bar number at chart distance [x] (user units), or null outside the bars. */
-  fun barAt(c: EffChart, x: Double): EffBar? = c.bars.firstOrNull { x >= it.x0 && x < it.x1 }
+  private const val WARMUP_MIN = SessionTracker.WARMUP_MS / 60_000
 
   /**
-   * The tapped bar: "Mile 7: 2.31 mi/kWh · cumulative 2.25 at 7.0 mi" (net regen and missing data
-   * said in words; the cumulative figure is the line's point closest to the bar's end).
+   * Cumulative efficiency vs distance, in the user's units. Series points fall on every 0.1 mi; the line
+   * ends where the figure was measured, at that figure.
    */
-  fun barDetail(c: EffChart, b: EffBar): String {
-    val name = if (c.distUnit == "mi") "Mile" else "Km"
-    val value = when {
-      b.y != null -> "${Units.num(b.y, 2)} ${c.effUnit}"
-      b.regen -> "net regen (more energy back than used)"
-      else -> "too little energy to measure"
+  fun spark(s: SessionState, d: DistUnit): List<ChartPoint> {
+    val unitM = if (d == DistUnit.MI) EffUnits.METERS_PER_MILE else 1000.0
+    val series = s.series.map { ChartPoint(it.distM / unitM, effValue(it.mPerWh, d)) }
+    val now = s.efficiency.mPerWh?.takeIf { s.efficiency.status == EffStatus.OK }?.let { ChartPoint(s.efficiency.atM / unitM, effValue(it, d)) } ?: return series
+    return when {
+      series.isEmpty() || now.x > series.last().x -> series + now
+      now.x == series.last().x -> series.dropLast(1) + now
+      else -> series
     }
-    val cum = c.line.minByOrNull { abs(it.x - b.x1) }?.takeIf { abs(it.x - b.x1) <= 0.5 }
-      ?.let { " · cumulative ${Units.num(it.y, 2)} at ${Units.num(it.x, 1)} ${c.distUnit}" } ?: ""
-    return "$name ${b.index}: $value$cum"
   }
 
-  /** The smallest step from [steps] that divides [span] into at most [maxTicks] intervals. */
-  fun step(span: Double, maxTicks: Int, steps: List<Double>): Double = steps.firstOrNull { span / it <= maxTicks } ?: steps.last()
+  // --- Capacity and range -----------------------------------------------------------------------
 
-  /** 1, 1.5, 2, 2.5, 3, 4, 5, 6, 8 × 10^n at or above [x] (x > 0): never much empty axis. */
-  fun niceCeil(x: Double): Double {
-    if (x <= 0) return 1.0
-    var mag = 1.0
-    while (mag * 10 <= x) mag *= 10
-    while (mag > x) mag /= 10
-    return NICE_STEPS.map { it * mag }.first { it >= x - 1e-9 }
-  }
-
-  private val NICE_STEPS = listOf(1.0, 1.5, 2.0, 2.5, 3.0, 4.0, 5.0, 6.0, 8.0, 10.0)
-
-  /** The line may rise this far above most of the bars before it is drawn capped. */
-  private const val LINE_OVER_BARS = 1.5
-
-  fun battery(s: SessionState): Stat {
-    val level = s.levelWh
-    if (level == null) {
+  /** The car API's capacity. Usable now when the truck offers it; else what the pack was rated at. */
+  fun capacity(s: SessionState): Stat {
+    val cap = s.capacityWh
+    if (cap == null) {
       val why = when {
         noAccess(s) -> NEEDS_ACCESS
-        Signal.LEVEL in s.feed.missing -> "Battery level not offered by this car"
-        else -> "Waiting for the battery level"
+        Signal.CAPACITY in s.feed.missing -> "Capacity not offered by this car"
+        else -> "Waiting for the capacity"
       }
-      return Stat("Battery", DASH, "kWh", listOf(why), hasValue = false, linesWhileDriving = false)
+      return Stat("Battery capacity", DASH, "kWh", listOf(why), hasValue = false, shortTitle = CAPACITY_SHORT, linesWhileDriving = false)
     }
-    val cap = s.capacityWh
-    val unit = if (cap != null) "/ ${Units.num(cap / 1000.0, 1)} kWh" else "kWh"
-    val lines = mutableListOf<String>()
-    lines += s.socPct?.let { "${Units.num(it, 1)} % remaining" } ?: "Capacity not offered"
-    if (cap != null) lines += if (s.feed.capacityNominal) "Remaining / nominal capacity" else "Remaining / usable capacity"
-    return Stat("Battery", Units.num(level / 1000.0, 1), unit, lines, shortUnit = "kWh")
-  }
-
-  fun direction(p: PowerDirection): Pair<String, Tone> = when (p) {
-    PowerDirection.DISCHARGING -> "Discharging" to Tone.DISCHARGE
-    PowerDirection.REGEN -> "Regen" to Tone.CHARGE
-    PowerDirection.CHARGING -> "Charging" to Tone.CHARGE
-    PowerDirection.IDLE -> "Idle" to Tone.DIM
-  }
-
-  fun power(s: SessionState, d: DistUnit): Stat {
-    val speed = when {
-      s.speedMps != null -> "Speed ${speedText(s.speedMps, d)}"
-      noAccess(s) -> "Speed $DASH"
-      Signal.SPEED in s.feed.missing -> "Speed not offered"
-      else -> "Speed $DASH"
-    }
-    val p = s.power ?: return Stat(
-      "Power now", DASH, "kW",
-      listOf(
-        speed,
-        when {
-          noAccess(s) -> NEEDS_ACCESS
-          Signal.LEVEL in s.feed.missing -> "Needs the charge rate or the battery level"
-          else -> "Waiting for battery data"
-        },
-      ),
-      hasValue = false,
-      shortTitle = POWER_SHORT,
-    )
-    val (label, tone) = direction(p.direction)
-    val source = if (p.estimated) "Estimated from the battery level (30 s)" else "From the truck's charge rate"
-    return Stat("Power now", Units.signed(p.kw, 1), "kW", listOf(speed, source), pill = label, pillTone = tone, marker = if (p.estimated) "est." else null, shortTitle = POWER_SHORT)
+    val lines = mutableListOf(if (s.feed.capacityNominal) "Nominal, from the car's API" else "Usable now, from the car's API")
+    s.feed.ratedWh?.takeIf { !s.feed.capacityNominal }?.let { lines += "Rated ${Units.num(it / 1000.0, 1)} kWh when new" }
+    return Stat("Battery capacity", Units.num(cap / 1000.0, 1), "kWh", lines, marker = "API", shortTitle = CAPACITY_SHORT)
   }
 
   private const val RANGE_SHORT = "Range"
-  private const val POWER_SHORT = "Power"
-  private const val EFFICIENCY_SHORT = "Efficiency"
+  private const val CAPACITY_SHORT = "Capacity"
 
   fun range(s: SessionState, d: DistUnit): Stat {
     val truck = when {
@@ -457,10 +337,9 @@ object SimpleModel {
       Signal.RANGE in s.feed.missing -> "Truck range not offered"
       else -> "Truck range $DASH"
     }
-    val r = s.rangeAtMeasuredM
-    val m = s.efficiency.mPerWh
+    val r = s.rangeEstimate
     val level = s.levelWh
-    if (r == null || m == null || level == null) {
+    if (r == null || level == null) {
       val why = when {
         noAccess(s) -> NEEDS_ACCESS
         s.efficiency.status == EffStatus.WARMING_UP -> "After the warm-up"
@@ -471,27 +350,19 @@ object SimpleModel {
     }
     return Stat(
       "Range at your efficiency",
-      Units.num(distValue(r, d), 0),
+      Units.num(distValue(r.m, d), 0),
       d.symbol,
-      listOf(truck, "${Units.num(level / 1000.0, 1)} kWh × ${effText(m, d)} ${effUnit(d)}"),
+      listOf(truck, "${Units.num(level / 1000.0, 1)} kWh × ${effText(r.mPerWh, d)} ${effUnit(d)}"),
+      marker = when (r.basis) {
+        RangeBasis.THIS_DRIVE -> null
+        RangeBasis.LAST_DRIVE -> LAST_DRIVE
+        RangeBasis.EARLY -> EARLY
+      },
       shortTitle = RANGE_SHORT,
     )
   }
 
-  fun session(s: SessionState, temp: TempUnit, d: DistUnit): Stat {
-    val noSpeed = Signal.SPEED in s.feed.missing
-    val avg = s.avgSpeedMps?.takeIf { !noSpeed }?.let { "avg ${speedText(it, d)}" } ?: "avg $DASH"
-    val outside = "outside ${Units.tempText(s.outsideC, temp)}"
-    return Stat(
-      "This session",
-      if (noSpeed) DASH else Units.num(distValue(s.distanceM, d), 1),
-      d.symbol,
-      listOf("${kwhText(s.usedWh)} used · ${duration(s.activeMs)}", "$avg · $outside"),
-      hasValue = !noSpeed && s.hasData,
-    )
-  }
-
-  // --- Layout B ---------------------------------------------------------------------------------
+  // --- Ring -------------------------------------------------------------------------------------
 
   fun ring(s: SessionState, d: DistUnit): RingView {
     val cap = s.capacityWh
@@ -504,55 +375,28 @@ object SimpleModel {
     )
   }
 
-  fun powerChart(s: SessionState, nowMs: Long): PowerChartView {
-    val pts = s.powerHistory
-    val ref = s.lastSampleAtMs ?: nowMs
-    val peakAbs = pts.maxOfOrNull { abs(it.kw) } ?: 0.0
-    val p = s.power
-    val (label, tone) = p?.let { direction(it.direction) } ?: ("No data" to Tone.DIM)
-    val est = if (s.powerHistoryEstimated) " (est.)" else ""
-    return PowerChartView(
-      points = pts,
-      nowMs = ref,
-      windowMs = WINDOW_MS,
-      scaleKw = DashboardModel.powerScale(peakAbs),
-      now = p?.let { "${Units.signed(it.kw, 1)} kW" } ?: "$DASH kW",
-      nowLabel = label,
-      nowTone = tone,
-      peak = s.peakDischargeKw?.let { "${Units.signed(it, 0)} kW" } ?: DASH,
-      regen = s.peakRegenKw?.let { "${Units.signed(it, 0)} kW" } ?: DASH,
-      estimated = p?.estimated == true,
-      peakTitle = "Peak drive$est",
-      regenTitle = "Peak regen / charge$est",
-    )
-  }
+  // --- Trip -------------------------------------------------------------------------------------
 
-  /** The power point nearest to [atMs] (within 5 s), for a tap on the chart. */
-  fun powerAt(v: PowerChartView, atMs: Long): PowerPoint? =
-    v.points.minByOrNull { abs(it.atMs - atMs) }?.takeIf { abs(it.atMs - atMs) <= 5_000 }
-
-  /** "2 min ago: +45.2 kW" for a tapped power point. */
-  fun powerDetail(v: PowerChartView, p: PowerPoint): String = "${Units.age(max(0L, v.nowMs - p.atMs))} ago: ${Units.signed(p.kw, 1)} kW"
-
-  fun efficiencyMini(s: SessionState, d: DistUnit): Stat {
-    val h = hero(s, d)
-    val title = "Efficiency since opened"
-    return when (h.kind) {
-      HeroKind.VALUE -> Stat(title, h.value, h.unit, listOf(consumptionText(s.efficiency.mPerWh!!, d)), marker = if (h.early) EARLY else null, shortTitle = EFFICIENCY_SHORT)
-      HeroKind.WARMING -> Stat(title, h.value, "", listOf("${Units.num(h.progress * 100, 0)} % of the warm-up"), hasValue = false, shortTitle = EFFICIENCY_SHORT)
-      HeroKind.NET_REGEN, HeroKind.BLOCKED -> Stat(title, h.value, "", listOf(h.secondary), hasValue = false, shortTitle = EFFICIENCY_SHORT, linesWhileDriving = false)
-    }
-  }
-
-  fun sessionMini(s: SessionState, d: DistUnit): Stat {
+  /** The session's distance, with how long it took and the outside temperature under it. */
+  fun trip(s: SessionState, temp: TempUnit, d: DistUnit): Stat {
     val noSpeed = Signal.SPEED in s.feed.missing
     val avg = s.avgSpeedMps?.takeIf { !noSpeed }?.let { " · avg ${speedText(it, d)}" } ?: ""
     return Stat(
-      "This session",
+      "Trip",
       if (noSpeed) DASH else Units.num(distValue(s.distanceM, d), 1),
       d.symbol,
-      listOf("${kwhText(s.usedWh)} used", "${duration(s.activeMs)}$avg"),
+      listOf("${duration(s.activeMs)}$avg", "outside ${Units.tempText(s.outsideC, temp)}"),
       hasValue = !noSpeed && s.hasData,
     )
   }
+
+  /** The session's net energy, regen included: the whole of it, the warm-up too, unlike the efficiency figures. */
+  fun energyUsed(s: SessionState): Stat = Stat(
+    "Used",
+    kwhValue(s.usedWh),
+    "kWh",
+    emptyList(),
+    hasValue = s.hasData,
+    marker = sourceMarker(s.energySource).takeIf { s.usedWh != 0.0 },
+  )
 }

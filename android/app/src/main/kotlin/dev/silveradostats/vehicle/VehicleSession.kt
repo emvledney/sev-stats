@@ -25,8 +25,10 @@ import kotlin.math.max
  *  - the session survives a short pause (with a recorded gap). A reset, a data-source switch, the
  *    end of the process, or no sample for over [restartAfterMs] ("the next time the truck is used",
  *    even if the process was only frozen or asleep) starts a new one: "since the app was opened";
- *  - it never touches the OBD link (LinkEngine): opening only the Simple tab samples the truck's
- *    built-in data and nothing else;
+ *  - it never touches the OBD link (LinkEngine): it only takes the pack power LinkService passes on
+ *    while the MX+ is connected ([addPackPower]);
+ *  - the last settled efficiency outlives the session and the process ([savedEfficiency], [onEfficiency]):
+ *    the next drive's range goes by it until that drive has settled. Demo figures stay out of it;
  *  - one coroutine samples: speed every [tickMs] (2 Hz), the rest every other tick (1 Hz).
  *
  * [scope] must be confined to one thread (Dispatchers.IO.limitedParallelism(1) in the app): every
@@ -94,6 +96,10 @@ class VehicleSession(
   private val restartAfterMs: Long = RESTART_AFTER_MS,
   /** An internal error stopped the sampling (the app keeps it in its crash log). */
   private val onFailure: (Throwable) -> Unit = {},
+  /** The last settled efficiency kept from an earlier run, m/Wh. */
+  savedEfficiency: Double? = null,
+  /** A newer one to keep, at most once per [SAVE_EFFICIENCY_MS]. */
+  private val onEfficiency: (Double) -> Unit = {},
 ) {
   private val _state = MutableStateFlow(SessionState(startedAtMs = clock()))
   val state: StateFlow<SessionState> = _state.asStateFlow()
@@ -104,10 +110,12 @@ class VehicleSession(
   private var idleSinceMs = 0L
   private var demo: Boolean? = null
   private var source: VehicleSource? = null
-  private var tracker = SessionTracker(clock)
+  private var tracker = SessionTracker(clock = clock)
   private var feed = Feed()
   private var loop: Job? = null
   private var stopTimer: Job? = null
+  private var lastSettled = savedEfficiency?.takeIf { it > 0 && it <= SessionTracker.MAX_RANGE_M_PER_WH }
+  private var efficiencySavedAtMs: Long? = null
 
   /** A UI that shows the session (bound for its lifetime): sampling runs while any is attached. */
   fun attach(token: Any) {
@@ -167,6 +175,11 @@ class VehicleSession(
     scope.launch { source?.onPermissionsChanged() }
   }
 
+  /** A new pack power reading from the MX+, kW (+ discharge): the session's best energy signal. */
+  fun addPackPower(kw: Double) {
+    scope.launch { tracker.addPack(clock(), kw) }
+  }
+
   private val wanted: Boolean get() = clients.isNotEmpty() || stopTimer != null
 
   private fun replaceSource(next: VehicleSource, newSession: Boolean) {
@@ -175,7 +188,7 @@ class VehicleSession(
     loop = null
     if (source !== next) source?.release()
     source = next
-    if (newSession) tracker = SessionTracker(clock) else tracker.reset()
+    if (newSession) tracker = SessionTracker(clock = clock) else tracker.reset()
     feed = Feed()
     publish(sampling = false)
     if (running || wanted) startIfWanted()
@@ -192,7 +205,7 @@ class VehicleSession(
         var next = clock()
         while (isActive) {
           val last = _state.value.lastSampleAtMs
-          if (demo == false && last != null && clock() - last > restartAfterMs) tracker = SessionTracker(clock)
+          if (demo == false && last != null && clock() - last > restartAfterMs) tracker = SessionTracker(clock = clock)
           val r = try {
             src.read(clock(), full = n % FULL_EVERY == 0L)
           } catch (e: CancellationException) {
@@ -239,7 +252,20 @@ class VehicleSession(
   }
 
   private fun publish(sampling: Boolean) {
-    _state.value = tracker.snapshot().copy(feed = feed.copy(sampling = sampling))
+    val s = tracker.snapshot()
+    keepEfficiency(s)
+    _state.value = s.copy(feed = feed.copy(sampling = sampling), lastSettledMPerWh = lastSettled.takeIf { demo == false })
+  }
+
+  /** A simulated drive says nothing about the truck: only real figures are kept. */
+  private fun keepEfficiency(s: SessionState) {
+    if (demo != false) return
+    val e = s.settledMPerWh ?: return
+    lastSettled = e
+    val now = clock()
+    if (efficiencySavedAtMs?.let { now - it < SAVE_EFFICIENCY_MS } == true) return
+    efficiencySavedAtMs = now
+    onEfficiency(e)
   }
 
   companion object {
@@ -262,5 +288,8 @@ class VehicleSession(
 
     /** Demo mode starts this far into the simulated drive. */
     const val DEMO_HEAD_START_MS = 22 * 60_000L
+
+    /** The kept efficiency is written at most this often; Android may freeze the process at any time. */
+    const val SAVE_EFFICIENCY_MS = 60_000L
   }
 }

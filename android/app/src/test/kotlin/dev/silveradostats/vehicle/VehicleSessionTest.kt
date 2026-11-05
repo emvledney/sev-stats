@@ -135,7 +135,7 @@ class VehicleSessionTest {
     assertTrue("head start ${st.activeMs}", st.activeMs >= VehicleSession.DEMO_HEAD_START_MS)
     assertEquals(EffStatus.OK, st.efficiency.status)
     assertTrue(st.distanceM > 10_000)
-    assertTrue(st.series.isNotEmpty() && st.miSegments.isNotEmpty() && st.powerHistory.size > 500)
+    assertTrue(st.series.isNotEmpty())
 
     // Reset: a demo starts from the beginning of its drive (warming up again).
     s.reset()
@@ -420,8 +420,7 @@ class VehicleSessionTest {
     assertTrue("regen samples $regen", regen > 100)
     assertTrue(maxSpeed in 25.0..31.0)
     assertTrue("distance ${st.distanceM}", st.distanceM / EffUnits.METERS_PER_MILE in 12.0..22.0)
-    assertEquals(PowerSource.CHARGE_RATE, st.power!!.source)
-    assertTrue(st.miSegments.any { it.mPerWh != null })
+    assertEquals(EnergySource.CHARGE_RATE, st.energySource)
     assertEquals(0.0, DemoDrive().targetAt(1_000), 0.0) // parked first
   }
 }

@@ -12,7 +12,6 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -96,20 +95,6 @@ def _meta(t, extra: dict | None = None) -> dict:
                      "started": round(time.time(), 3), **(extra or {})}}
 
 
-def cmd_iface(a) -> int:
-    from .transports.socketcan import iface_info
-    print(json.dumps(iface_info(a.name), indent=2))
-    return 0
-
-
-def cmd_sniff(a) -> int:
-    from .transports.socketcan import sniff
-    out = open(a.out, "a", buffering=1) if a.out else sys.stdout
-    n = sniff(a.iface, a.seconds, out, require_listen_only=not a.allow_active_iface)
-    print(f"captured {n} frames", file=sys.stderr)
-    return 0
-
-
 def cmd_obd(a) -> int:
     t = open_transport(a.transport, min_interval_s=a.min_interval)
     _banner(t)
@@ -143,7 +128,7 @@ def cmd_read(a) -> int:
     rc = 0
     try:
         for label, tx, rx in _targets(a, prof):
-            client = UdsClient(t.open(tx, rx), timeout=a.timeout)
+            client = UdsClient(t.open(tx, rx))
             ecu = (tx >> 8) & 0xFF
             for did in a.did:
                 rec = {"module": label, "tx": f"{tx:X}", "did": f"0x{did:04X}"}
@@ -486,7 +471,7 @@ def cmd_scan(a) -> int:
 def _scan_range(a, t) -> int:
     (label, tx, rx), = _targets(a)[:1]
     ch = t.open(tx, rx)
-    client = UdsClient(ch, timeout=a.timeout)
+    client = UdsClient(ch)
     log = _log(a.out)
     found = misses = busy = 0
     try:
@@ -545,96 +530,6 @@ def cmd_export(a) -> int:
     return 0
 
 
-def cmd_serve(a) -> int:
-    """Poll a profile and publish the latest sample as JSON / server-sent events."""
-    prof = profile_mod.load(a.profile)
-    t = open_transport(a.transport, min_interval_s=a.min_interval)
-    poller = Poller(prof, t, stop_when_asleep=False)
-    latest: dict = {}
-    cond = threading.Condition()
-    log = _log(a.out)
-    started = time.monotonic()
-
-    def publish(snapshot: dict) -> None:
-        nonlocal latest
-        with cond:
-            latest = snapshot
-            cond.notify_all()
-
-    def loop():
-        last_good = None
-        try:
-            while True:
-                if a.max_runtime and time.monotonic() - started > a.max_runtime:
-                    publish({**latest, "stale": True, "stopped": True, "error": "max runtime reached"})
-                    print("serve: max runtime reached; polling stopped", file=sys.stderr)
-                    return
-                sample = poller.cycle()
-                if sample["values"]:
-                    last_good = sample["t"]
-                if log and (sample["values"] or sample["errors"] or sample["state"] != "awake"):
-                    log.write(json.dumps(sample) + "\n")
-                publish({"t": sample["t"], "last_good": last_good, "values": dict(poller.latest),
-                         "derived": sample["derived"], "state": sample["state"],
-                         "asleep": sample["asleep"], "stale": sample["state"] != "awake",
-                         "stopped": False})
-                wait = poller.next_wait()
-                if wait is None:
-                    publish({**latest, "stale": True, "stopped": True})
-                    print("serve: truck asleep and polling stopped", file=sys.stderr)
-                    return
-                time.sleep(wait)
-        except Exception as e:  # noqa: BLE001 - publish any failure, stop polling
-            publish({**latest, "stale": True, "stopped": True, "error": str(e)})
-            print(f"stopped: {e}", file=sys.stderr)
-        finally:
-            t.close()
-
-    class Handler(BaseHTTPRequestHandler):
-        def log_message(self, *args):
-            pass
-
-        def _headers(self, ctype: str) -> None:
-            self.send_response(200)
-            self.send_header("Content-Type", ctype)
-            self.send_header("Cache-Control", "no-cache")
-            self.send_header("Access-Control-Allow-Origin", "*")
-            self.end_headers()
-
-        def do_GET(self):
-            if self.path == "/latest.json":
-                self._headers("application/json")
-                with cond:
-                    self.wfile.write(json.dumps(latest).encode())
-            elif self.path == "/events":
-                self._headers("text/event-stream")
-                try:
-                    while True:
-                        with cond:
-                            cond.wait(timeout=5)
-                            body = json.dumps(latest)
-                        self.wfile.write(f"data: {body}\n\n".encode())
-                        self.wfile.flush()
-                except (BrokenPipeError, ConnectionResetError):
-                    return
-            else:
-                self.send_response(404)
-                self.end_headers()
-
-    try:
-        server = ThreadingHTTPServer((a.host, a.port), Handler)   # bind before touching the bus
-    except OSError:
-        t.close()
-        raise
-    _banner(t)
-    if log:
-        log.write(json.dumps(_meta(t, {"profile": prof.name})) + "\n")
-    threading.Thread(target=loop, daemon=True).start()
-    print(f"serving http://{a.host}:{a.port}/latest.json and /events", file=sys.stderr)
-    server.serve_forever()
-    return 0
-
-
 def cmd_receive(a) -> int:
     """Accept diagnostics reports POSTed by the head-unit app (no truck traffic)."""
     import os
@@ -681,9 +576,7 @@ def main(argv: list[str] | None = None) -> int:
 
     def transport_args(sp):
         sp.add_argument("-t", "--transport", default="sim",
-                        help="elm-bt:auto (the paired OBDLink MX+) | elm-bt:MAC[:channel] | "
-                             "elm:/dev/ttyUSB0[@baud] | elm-tcp:HOST[:PORT] | socketcan:can0 | "
-                             "sim (default)")
+                        help="elm-bt:auto (the paired OBDLink MX+) | elm-bt:MAC[:channel] | sim (default)")
         sp.add_argument("--min-interval", type=_interval, default=0.075,
                         help="minimum seconds between bus requests (default 0.075, floor 0.05)")
 
@@ -692,18 +585,6 @@ def main(argv: list[str] | None = None) -> int:
                         help="module address in hex: CB (battery), 17/1D (drive units), 40 (body), 45 (gateway)")
         sp.add_argument("--pri", default=default_pri, choices=["14", "18", "both"],
                         help="CAN priority (CB/17/1D answer at 14; 40/45 only at 18)")
-
-    sp = sub.add_parser("iface", help="show a SocketCAN interface's configuration")
-    sp.add_argument("name")
-    sp.set_defaults(fn=cmd_iface)
-
-    sp = sub.add_parser("sniff", help="passively log all frames (never transmits)")
-    sp.add_argument("--iface", default="can0")
-    sp.add_argument("--seconds", type=float)
-    sp.add_argument("--out")
-    sp.add_argument("--allow-active-iface", action="store_true",
-                    help="allow sniffing on an interface that is not in listen-only mode (500k only)")
-    sp.set_defaults(fn=cmd_sniff)
 
     sp = sub.add_parser("obd", help="standard OBD-II census: supported PIDs, speed, module names, VIN")
     transport_args(sp)
@@ -716,8 +597,6 @@ def main(argv: list[str] | None = None) -> int:
     sp.add_argument("--profile", help="decode with this profile")
     sp.add_argument("--module", help="module key from the profile (e.g. becm); needs --profile")
     sp.add_argument("--did", type=_did, nargs="+", required=True, help="DIDs in hex, e.g. 27C6 or 0x27C6")
-    sp.add_argument("--timeout", type=float, default=1.0,
-                    help="seconds to wait for an answer (socketcan; ELM adapters use their own timing)")
     sp.add_argument("--show-vin", action="store_true", help="don't mask VIN-bearing replies")
     sp.set_defaults(fn=cmd_read)
 
@@ -742,7 +621,6 @@ def main(argv: list[str] | None = None) -> int:
     target_args(sp, default_ecu=0xCB)
     sp.add_argument("--start", type=_did, required=True, help="first DID (hex)")
     sp.add_argument("--end", type=_did, required=True, help="last DID (hex)")
-    sp.add_argument("--timeout", type=float, default=0.5)
     sp.add_argument("--delay", type=float, default=0.075, help="extra pause between DIDs")
     sp.add_argument("--max-silent", type=int, default=20,
                     help="stop after this many DIDs in a row with no answer at all")
@@ -756,15 +634,6 @@ def main(argv: list[str] | None = None) -> int:
     sp.add_argument("--profile", required=True)
     sp.add_argument("--out")
     sp.set_defaults(fn=cmd_export)
-
-    sp = sub.add_parser("serve", help="poll a profile and serve JSON/SSE for dashboards")
-    transport_args(sp)
-    sp.add_argument("--profile", required=True)
-    sp.add_argument("--host", default="127.0.0.1")
-    sp.add_argument("--port", type=int, default=8765)
-    sp.add_argument("--max-runtime", type=float, help="stop polling after this many seconds")
-    sp.add_argument("--out")
-    sp.set_defaults(fn=cmd_serve)
 
     sp = sub.add_parser("receive", help="save diagnostics reports sent by the head-unit app (no truck traffic)")
     sp.add_argument("--host", default="0.0.0.0")

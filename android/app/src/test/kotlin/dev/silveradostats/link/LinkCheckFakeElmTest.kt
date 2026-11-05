@@ -1,8 +1,10 @@
-package dev.silveradostats.adapter
+package dev.silveradostats.link
 
+import dev.silveradostats.obd.ByteLink
 import dev.silveradostats.obd.Elm
 import dev.silveradostats.obd.ElmLink
 import dev.silveradostats.obd.ElmTransport
+import dev.silveradostats.obd.StreamByteLink
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -11,16 +13,26 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.net.InetAddress
 import java.net.ServerSocket
+import java.net.Socket
 
 /**
- * The TCP adapter link test now runs through the OBD core (StreamByteLink + ElmLink + ElmTransport
- * setup only). Same properties as before: adapter-local commands only, nothing written to a busy
- * adapter, nothing written after a stall, a missing banner or a rejected setting stops it.
+ * The init-only adapter check behind the MX+ Test link ([LinkCheck]: StreamByteLink + ElmLink +
+ * ElmTransport setup only), on a loopback socket where the app has the Bluetooth one. Adapter-local
+ * commands only, nothing written to a busy adapter, nothing written after a stall, a missing banner
+ * or a rejected setting stops it, and the result says how far it got and what was sent.
  */
-class AdapterLinkFakeElmTest {
+class LinkCheckFakeElmTest {
 
-  private fun test(port: Int, elm: (dev.silveradostats.obd.ByteLink) -> ElmLink = { ElmLink(it) }) =
-    AdapterLinkTest("127.0.0.1", port, elm = elm)
+  private fun check(port: Int, elm: (ByteLink) -> ElmLink = { ElmLink(it) }) =
+    LinkCheck.run(
+      "fake 127.0.0.1:$port",
+      {
+        val s = Socket(InetAddress.getLoopbackAddress(), port)
+        s.tcpNoDelay = true
+        StreamByteLink(s.getInputStream(), s.getOutputStream(), s, "fake-elm-reader")
+      },
+      elm,
+    )
 
   /** What ElmTransport's setup sends, in order. */
   private val setup = listOf("ATZ", "ATE0", "ATH1", "ATSP7", "ATL0", "ATS0", "ATCAF1", "ATAT1", "ATST64", "ATI", "STI", "ATRV")
@@ -35,7 +47,7 @@ class AdapterLinkFakeElmTest {
   @Test
   fun happyPath_bannerInfoAndVoltage() {
     FakeElmServer(respond = FakeElmServer::standardReplies).use { srv ->
-      val r = test(srv.port).run()
+      val r = check(srv.port)
       assertTrue("result should be ok: ${r.error}", r.ok)
       assertNull(r.error)
       assertEquals("done", r.stage)
@@ -47,7 +59,7 @@ class AdapterLinkFakeElmTest {
       assertFalse("echo is not part of the banner", r.banner!!.contains("ATZ"))
       assertTrue(r.ident!!.startsWith("ELM327 v1.5"))
       assertEquals(12.6, r.volts!!, 1e-9)
-      assertEquals("tcp 127.0.0.1:${srv.port}", r.target)
+      assertEquals("fake 127.0.0.1:${srv.port}", r.target)
       assertNotNull(r.connectMs)
       assertTrue("link closed after the check", srv.awaitClientClosed())
     }
@@ -57,7 +69,7 @@ class AdapterLinkFakeElmTest {
   fun happyPath_otherBannersAccepted() {
     for (banner in listOf("OBDLink MX+ r5.6.19", "STN1155 v4.2.0", "WiCAN Pro")) {
       FakeElmServer(respond = { c -> if (c == "ATZ") "\r$banner\r\r>" else FakeElmServer.standardReplies(c) }).use { srv ->
-        val r = test(srv.port).run()
+        val r = check(srv.port)
         assertTrue("banner $banner should be accepted: ${r.error}", r.ok)
         assertEquals(banner, r.banner)
       }
@@ -67,7 +79,7 @@ class AdapterLinkFakeElmTest {
   @Test
   fun bannerMissing_failsAndStopsAfterAtz() {
     FakeElmServer(respond = { c -> if (c == "ATZ") "ATZ\r\rHELLO WORLD 1.0\r\r>" else FakeElmServer.standardReplies(c) }).use { srv ->
-      val r = test(srv.port).run()
+      val r = check(srv.port)
       assertFalse(r.ok)
       assertEquals("setup", r.stage)
       assertTrue(r.error!!.contains("banner"))
@@ -80,7 +92,7 @@ class AdapterLinkFakeElmTest {
   @Test
   fun rejectedRequiredSetting_stopsBeforeAnythingElse() {
     FakeElmServer(respond = { c -> if (c == "ATSP7") "?\r\r>" else FakeElmServer.standardReplies(c) }).use { srv ->
-      val r = test(srv.port).run()
+      val r = check(srv.port)
       assertFalse(r.ok)
       assertTrue(r.error!!.contains("rejected"))
       assertTrue(srv.awaitClientClosed())
@@ -93,7 +105,7 @@ class AdapterLinkFakeElmTest {
     // ATI never gets a prompt. The adapter may still be busy: nothing else may be written, and
     // the bounded resync (waiting for '>' then silence, without writing) gives up and closes.
     FakeElmServer(respond = { c -> if (c == "ATI") null else FakeElmServer.standardReplies(c) }).use { srv ->
-      val r = test(srv.port) { ElmLink(it, resyncBudgetS = 1.0) }.run()
+      val r = check(srv.port) { ElmLink(it, resyncBudgetS = 1.0) }
       assertFalse(r.ok)
       assertTrue(r.error!!, r.error!!.contains("prompt"))
       assertTrue("client must close after a timeout", srv.awaitClientClosed())
@@ -120,7 +132,7 @@ class AdapterLinkFakeElmTest {
       respond = FakeElmServer::standardReplies,
     )
     srv.use {
-      val r = test(srv.port).run()
+      val r = check(srv.port)
       assertTrue("should succeed after settling: ${r.error}", r.ok)
       assertTrue(srv.promptSentAtNanos > 0)
       val quietMs = (srv.firstByteAtNanos - srv.promptSentAtNanos) / 1_000_000
@@ -143,7 +155,7 @@ class AdapterLinkFakeElmTest {
       respond = FakeElmServer::standardReplies,
     )
     srv.use {
-      val r = test(srv.port) { ElmLink(it, settleBudgetS = 1.5) }.run()
+      val r = check(srv.port) { ElmLink(it, settleBudgetS = 1.5) }
       assertFalse(r.ok)
       assertTrue(r.error!!, r.error!!.contains("kept talking"))
       assertTrue(r.sent.isEmpty())
@@ -156,18 +168,11 @@ class AdapterLinkFakeElmTest {
   @Test
   fun connectRefused_reportsError() {
     val port = ServerSocket(0, 1, InetAddress.getLoopbackAddress()).use { it.localPort } // closed again: nothing listens
-    val r = test(port).run()
+    val r = check(port)
     assertFalse(r.ok)
     assertEquals("connect", r.stage)
     assertTrue(r.error!!.startsWith("connect"))
     assertTrue(r.sent.isEmpty())
-  }
-
-  @Test
-  fun badPort_reportsErrorWithoutConnecting() {
-    val r = AdapterLinkTest("127.0.0.1", 70_000).run()
-    assertFalse(r.ok)
-    assertEquals("connect", r.stage)
   }
 
   @Test

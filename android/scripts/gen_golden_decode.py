@@ -178,6 +178,23 @@ def with_ah(d: dict) -> dict:
     return d
 
 
+def with_capacity(d: dict, v: dict) -> dict:
+    """The Kotlin port adds capacity_kwh and capacity_ah: the BECM's own figures, where they fit the pack."""
+    d = with_ah(d)
+    implied = d.get("bms_energy_at_100_kwh") or None
+    capability = v.get("battery_capability")
+    if capability and (implied is None or abs(capability / implied - 1) <= 0.15):
+        d["capacity_kwh"] = capability
+    ah = v.get("pack_capacity_ah")
+    kwh = d.get("capacity_kwh", implied)
+    groups = d.get("series_groups")
+    if ah and kwh is not None and groups:
+        per_group = kwh * 1000 / ah / groups
+        if 3.4 <= per_group <= 3.9 or 3.4 <= per_group * 2 <= 3.9:
+            d["capacity_ah"] = ah
+    return d
+
+
 def snapshot(source) -> dict:
     vals = {}
     for (mod, did), fs in prof.reads().items():
@@ -215,7 +232,7 @@ derive_inputs += [
     ("only one half", {"cell_min_b": 3.6709, "cell_max_b": 3.6769, "cell_avg_b": 3.6732, "pack_voltage": 352.62,
                        "energy_remaining": 85.3, "soc": 41.88}),
 ]
-derive_vectors = [{"case": name, "values": vals, "derived": with_ah(cli.derive({k: {"v": v} for k, v in vals.items()}))}
+derive_vectors = [{"case": name, "values": vals, "derived": with_capacity(cli.derive({k: {"v": v} for k, v in vals.items()}), vals)}
                   for name, vals in derive_inputs]
 
 # ---------------------------------------------------------------- simulator answers

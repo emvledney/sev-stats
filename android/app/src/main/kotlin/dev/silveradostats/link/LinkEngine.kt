@@ -67,6 +67,7 @@ class RetryPolicy(val minMs: Long = MIN_AUTO_RETRY_MS, val maxMs: Long = 60_000)
 
 /** User-facing texts for link problems (pure, unit tested). */
 object LinkMessages {
+  const val DISCONNECTED = "The MX+ is disconnected and free for your phone or laptop. Tap Connect to read it again."
   const val NO_ADAPTER = "Choose your OBDLink MX+ under Diagnostics › OBDLink MX+ link, or turn on demo data there."
   const val IDLE = "Connects while the app is on screen."
   const val ASLEEP_SILENT = "Truck asleep: nothing is sent on the bus. The adapter's own voltage is checked once a minute; " +
@@ -126,8 +127,11 @@ object LinkMessages {
  *    row, spaced by [RetryPolicy]. Anything else (adapter reset, bus error, rejected setting,
  *    refused request) waits for Retry. An unreachable adapter is retried automatically too. No
  *    automatic attempt comes sooner than [RetryPolicy.MIN_AUTO_RETRY_MS] after the previous one;
- *  - the poller runs in watch mode (stopWhenAsleep = false), exactly as the probe's `serve`: it goes
- *    bus-silent while the truck sleeps.
+ *  - while disconnected ([setDisconnected]) nothing connects to an adapter, automatically or by Retry:
+ *    the Bluetooth socket is closed at once, whatever screen is attached, until Connect. Only an
+ *    explicit link test still opens it, and closes it again;
+ *  - the poller runs in watch mode (stopWhenAsleep = false), exactly as the probe's
+ *    `poll --keep-watching`: it goes bus-silent while the truck sleeps.
  */
 class LinkEngine(
   private val profile: Profile,
@@ -148,6 +152,12 @@ class LinkEngine(
   private var blocked = false
   private var blockedAtMs = 0L
   private var retryRequested = false
+
+  /** The user disconnected the adapter. */
+  private var disconnected = false
+
+  /** The worker has published [LinkStatus.DISCONNECTED] since the last connect attempt. */
+  private var disconnectShown = false
   private var autoRetryAtMs: Long? = null
   private var failures = 0
   private val checks = ArrayDeque<CheckRequest>()
@@ -197,6 +207,7 @@ class LinkEngine(
 
   private sealed class Action {
     object Exit : Action()
+    object ShowDisconnected : Action()
     object Close : Action()
     object ResetData : Action()
     object Park : Action()
@@ -277,6 +288,27 @@ class LinkEngine(
       recoveries = 0
       wake.signalAll()
     }
+  }
+
+  /**
+   * The Disconnect / Connect button. True closes the link now and keeps it closed; false connects
+   * again as soon as a screen wants it. The simulator has nothing to disconnect.
+   */
+  fun setDisconnected(off: Boolean) {
+    lock.withLock {
+      if (disconnected == off) return
+      disconnected = off
+      disconnectShown = false
+      abort = true
+      abortSetup()
+      blocked = false
+      retryRequested = false
+      autoRetryAtMs = null
+      failures = 0
+      recoveries = 0
+      wake.signalAll()
+    }
+    if (!off) publish { it.copy(status = LinkStatus.CONNECTING, message = LinkMessages.IDLE, canRetry = false, nextAutoRetryAtMs = null) }
   }
 
   /** Re-runs the full connect and adapter setup (after an error, an unreachable adapter or a stop). */
@@ -368,6 +400,9 @@ class LinkEngine(
       while (true) {
         when (val a = nextAction()) {
           Action.Exit -> return
+          Action.ShowDisconnected -> publish {
+            it.copy(status = LinkStatus.DISCONNECTED, message = LinkMessages.DISCONNECTED, canRetry = false, nextAutoRetryAtMs = null, polling = false)
+          }
           Action.Close -> closeSession()
           Action.ResetData -> resetData()
           Action.Park -> publish { it.copy(polling = false) }
@@ -394,7 +429,8 @@ class LinkEngine(
       }
       val src = source
       val s = session
-      if (s != null && (src == null || s.source.key != src.key)) return Action.Close
+      val off = disconnected && src is LinkSource.Adapter
+      if (s != null && (src == null || s.source.key != src.key || off)) return Action.Close
       if (s != null && clients.isEmpty()) {
         // Parked: nothing is sent; the link stays open for the grace period, then closes.
         if (!parkShown) {
@@ -409,6 +445,15 @@ class LinkEngine(
         return Action.Close
       }
       if (s == null && dataKey != src?.key) return Action.ResetData
+      if (off) {
+        if (!disconnectShown) {
+          disconnectShown = true
+          return Action.ShowDisconnected
+        }
+        retryRequested = false
+        wake.await()
+        continue
+      }
       if (src == null || clients.isEmpty()) {
         wake.await()
         continue
@@ -510,7 +555,7 @@ class LinkEngine(
 
   /** Lock held. connect() should go on with [src]: a client still wants it and nothing else is pending. */
   private fun stillWanted(src: LinkSource): Boolean =
-    !shutdown && !abort && clients.isNotEmpty() && source?.key == src.key && checks.isEmpty()
+    !shutdown && !abort && clients.isNotEmpty() && source?.key == src.key && checks.isEmpty() && !(disconnected && src is LinkSource.Adapter)
 
   /** Opens the adapter and runs the setup; null when the connect was called off meanwhile. */
   private fun openAdapter(src: LinkSource.Adapter): Transport? {
@@ -541,6 +586,7 @@ class LinkEngine(
 
   private fun connect(src: LinkSource) {
     abort = false
+    lock.withLock { disconnectShown = false }
     val demo = src is LinkSource.Demo
     publish {
       it.copy(

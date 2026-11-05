@@ -24,10 +24,8 @@ class DashLayoutTest {
   @Test
   fun everyPageFitsTheWindowHeight() {
     forEachWindow { l ->
-      assertTrue("Simple A: ${l.requiredSimpleA(false)} > ${l.name()}", l.requiredSimpleA(false) <= l.heightDp)
-      assertTrue("Simple A + notice: ${l.requiredSimpleA(true)} > ${l.name()}", l.requiredSimpleA(true) <= l.heightDp)
-      assertTrue("Simple B: ${l.requiredSimpleB(false)} > ${l.name()}", l.requiredSimpleB(false) <= l.heightDp)
-      assertTrue("Simple B + notice: ${l.requiredSimpleB(true)} > ${l.name()}", l.requiredSimpleB(true) <= l.heightDp)
+      assertTrue("Simple: ${l.requiredSimple(false)} > ${l.name()}", l.requiredSimple(false) <= l.heightDp)
+      assertTrue("Simple + notice: ${l.requiredSimple(true)} > ${l.name()}", l.requiredSimple(true) <= l.heightDp)
       assertTrue("Live: ${l.requiredLive()} > ${l.name()}", l.requiredLive() <= l.heightDp)
     }
   }
@@ -57,9 +55,11 @@ class DashLayoutTest {
   fun drivingTargetsAreLargeEnough() {
     forEachWindow { l ->
       if (l.restricted) {
-        assertTrue(l.name(), l.selectorDp >= 76)
+        assertTrue(l.name(), l.mxButtonDp >= 76)
         assertTrue("tabs fill the header: ${l.name()}", l.headerDp >= 76)
-        assertTrue(l.name(), l.selectorDp <= l.headerDp)
+        assertTrue(l.name(), l.mxButtonDp <= l.headerDp)
+      } else {
+        assertEquals(l.name(), l.controlDp, l.mxButtonDp)
       }
       assertTrue(l.name(), l.controlDp <= l.headerDp)
     }
@@ -69,12 +69,9 @@ class DashLayoutTest {
   fun drivingLocksEverythingElseAway() {
     forEachWindow { l ->
       assertEquals(l.name(), !l.restricted, l.controls)
-      assertEquals(l.name(), !l.restricted, l.tapToInspect)
       assertEquals(l.name(), !l.restricted, l.diagnosticsTab)
       assertEquals(l.name(), !l.restricted, l.heatmap)
-      assertEquals(l.name(), !l.restricted, l.legends)
-      assertEquals(l.name(), !l.restricted, l.heroDetail)
-      assertEquals(l.name(), !l.restricted, l.peakStats)
+      assertEquals(l.name(), !l.restricted, l.ringDetail)
       if (l.restricted) {
         assertFalse(l.name(), l.strip)
         assertFalse(l.name(), l.readOnlyNote)
@@ -149,6 +146,31 @@ class DashLayoutTest {
     }
   }
 
+  /** Half a Simple tile holds a figure and its unit: full size on the truck, smaller only where it must be. */
+  @Test
+  fun twoFiguresFitTheirTile() {
+    for (r in listOf(false, true)) {
+      for (h in heights) {
+        var last = 0
+        var tier: SizeTier? = null
+        for (w in widths) {
+          val l = DashLayout.of(w.toFloat(), h.toFloat(), r)
+          // A tier up brings a larger unit and more padding: only within one does more width mean more room.
+          if (l.tier != tier) last = 0
+          assertTrue("${l.name()}: ${l.twinValueSp} after $last", l.twinValueSp >= last)
+          assertTrue(l.name(), l.twinValueSp in DashLayout.LIVE_VALUE_MIN_SP..l.type.value)
+          last = l.twinValueSp
+          tier = l.tier
+        }
+      }
+    }
+    val truck = DashLayout.of(2103f, 602f, false)
+    assertEquals(truck.type.value, truck.twinValueSp)
+    val driving = DashLayout.of(2103f, 602f, true)
+    assertEquals(driving.type.value, driving.twinValueSp)
+    assertTrue("a narrow window gives way", DashLayout.of(1000f, 420f, false).twinValueSp < DashLayout.of(1000f, 420f, false).type.value)
+  }
+
   @Test
   fun chartsAlwaysKeepTheirMinimumAndTheRestIsTheirs() {
     forEachWindow { l ->
@@ -167,10 +189,8 @@ class DashLayoutTest {
       for (w in 1000..2800 step 50) for (h in 420..1300 step 10) for (r in listOf(false, true)) {
         val l = DashLayout.of(w.toFloat(), h.toFloat(), r, scale)
         val name = "${l.name()} scale=$scale"
-        assertTrue("A ${l.requiredSimpleA(false)} $name", l.requiredSimpleA(false) <= h)
-        assertTrue("A + notice ${l.requiredSimpleA(true)} $name", l.requiredSimpleA(true) <= h)
-        assertTrue("B ${l.requiredSimpleB(false)} $name", l.requiredSimpleB(false) <= h)
-        assertTrue("B + notice ${l.requiredSimpleB(true)} $name", l.requiredSimpleB(true) <= h)
+        assertTrue("Simple ${l.requiredSimple(false)} $name", l.requiredSimple(false) <= h)
+        assertTrue("Simple + notice ${l.requiredSimple(true)} $name", l.requiredSimple(true) <= h)
         assertTrue("Live ${l.requiredLive()} $name", l.requiredLive() <= h)
         assertTrue("the cards stay: $name", l.liveCards)
         assertEquals("four across: $name", DashLayout.LIVE_TILES, l.liveTileCols)
@@ -206,6 +226,21 @@ class DashLayoutTest {
     }
     val tight = DashLayout.of(1000f, 420f, true, 1.3f)
     assertTrue("too wide across as it was", tight.liveValueSp < tight.type.value)
+  }
+
+  @Test
+  fun trendsFitsEveryWindowItIsOfferedIn() {
+    forEachWindow { l ->
+      if (!l.trendsTab) return@forEachWindow
+      val leftCol = l.widthDp - 2 * l.pagePadHDp - l.gapDp - l.trendPidsDp
+      assertTrue("${l.name()}: tiles leave no chart", l.trendBodyDp - l.trendTileDp - l.gapDp >= l.chartMinDp)
+      val tileLines = 2 * l.cardPadVDp + maxOf(l.lineDp(l.type.body), l.badgeDp) + l.lineDp(l.trendValueSp, DashLayout.VALUE_LINE_FACTOR) + 2 * l.lineDp(l.type.label) + 3 * l.cardGapDp
+      assertTrue("${l.name()}: a tile's change line must fit: $tileLines > ${l.trendTileDp}", tileLines <= l.trendTileDp)
+      assertTrue("${l.name()}: left column $leftCol", leftCol >= DashLayout.TRENDS_MIN_WIDTH_DP / 2)
+      assertTrue("${l.name()}: a PID row of ${l.trendRowDp} must keep both its lines", l.trendRowDp >= l.trendRowLinesDp)
+      assertTrue("${l.name()}: seven rows", l.cardPadVDp * 2 + l.lineDp(l.type.title) + l.trendChipDp + 2 * l.cardGapDp + DashLayout.TREND_MAX_ROWS * l.trendRowDp <= l.trendBodyDp)
+      assertTrue("${l.name()}: L and R stay in their row", l.trendAxisButtonDp < l.trendRowDp)
+    }
   }
 
   @Test

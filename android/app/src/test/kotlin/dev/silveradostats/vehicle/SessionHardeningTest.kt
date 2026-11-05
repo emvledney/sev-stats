@@ -16,7 +16,7 @@ class SessionHardeningTest {
 
   private class Truck(var t: Long = 1_000_000L, var level: Double = 150_000.0) {
     var now = t
-    val tracker = SessionTracker { now }
+    val tracker = SessionTracker(warmupMs = 0) { now }
     var quantWh = 10.0
     var holdMs = 0L
     private var held: Double? = null
@@ -139,7 +139,8 @@ class SessionHardeningTest {
     d.run(1800.0, 0.0, -11.0) // Level 2, no plug data: 5.5 kWh
     val s = d.s()
     assertTrue(s.charging)
-    assertEquals(used, s.usedWh, 10.0)
+    // Measured by the rate while the rise is still being recognised: the level's 10 Wh steps either way.
+    assertEquals(used, s.usedWh, 20.0)
     assertEquals(5_500.0, s.chargedWh, 30.0)
   }
 
@@ -173,7 +174,6 @@ class SessionHardeningTest {
       val s = d.s()
       assertFalse(s.charging)
       assertEquals(2.3, eff(s), 0.03)
-      assertEquals(PowerDirection.DISCHARGING, s.power!!.direction)
       assertEquals(kw * 1000 * 1200 / 3600, s.usedWh, 30.0)
       // Stale at the next stop too: a held value is not a charger.
       d.run(60.0, 0.0, 0.5)
@@ -205,7 +205,6 @@ class SessionHardeningTest {
     d.state = ChargeState.CHARGING
     d.run(60.0, 0.0, -60.0)
     assertTrue(d.s().charging)
-    assertEquals(PowerDirection.CHARGING, d.s().power!!.direction)
     assertEquals(1_000.0, d.s().chargedWh, 30.0)
   }
 
@@ -269,12 +268,16 @@ class SessionHardeningTest {
   fun coarseAndHeldLevelsAreNotJumps() {
     // 1 % steps of a 205 kWh pack (2.05 kWh at once) at a modest power, and a level held for 90 s.
     for ((quant, hold) in listOf(2_050.8 to 0L, 1.0 to 90_000L)) {
-      val d = Truck()
-      d.quantWh = quant
-      d.holdMs = hold
-      d.run(3600.0, 27.0, kwFor(27.0, 2.3))
-      assertEquals("step $quant hold $hold", 2.3, eff(d.s()), 0.1)
-      assertEquals("step $quant hold $hold", kwFor(27.0, 2.3) * 1000, d.s().usedWh, 2_200.0)
+      // On the level alone, and with a rate that takes over once the level has moved far enough.
+      for (rate in listOf<(Double) -> Double?>({ null }, { kw -> -kw * 1_000_000.0 })) {
+        val d = Truck()
+        d.rate = rate
+        d.quantWh = quant
+        d.holdMs = hold
+        d.run(3600.0, 27.0, kwFor(27.0, 2.3))
+        assertEquals("step $quant hold $hold", 2.3, eff(d.s()), 0.1)
+        assertEquals("step $quant hold $hold", kwFor(27.0, 2.3) * 1000, d.s().usedWh, 2_200.0)
+      }
     }
     // A fast charge with the level held for 60 s: the rises are real.
     val c = Truck()
@@ -302,18 +305,6 @@ class SessionHardeningTest {
   }
 
   @Test
-  fun aBadChargeRateReadingIsIgnored() {
-    val d = Truck()
-    d.run(60.0, 25.0, 30.0)
-    d.rate = { 1e15 }
-    d.run(2.0, 25.0, 30.0)
-    d.rate = { kw -> -kw * 1_000_000.0 }
-    d.run(2.0, 25.0, 30.0)
-    assertEquals(30.0, d.s().peakDischargeKw!!, 1e-6)
-    assertNull(d.s().peakRegenKw)
-  }
-
-  @Test
   fun aSpeedOutageIsLeftOutLikeAGap() {
     val d = Truck()
     val kw = kwFor(25.0, 2.3)
@@ -333,7 +324,8 @@ class SessionHardeningTest {
     var s = d.s()
     assertNull("no stale speed on the tiles", s.speedMps)
     assertEquals(1, s.gaps)
-    assertEquals(2.3, eff(s), 0.03)
+    // The 5 s before an outage is declared have energy and no distance: under 2 % of a 4-mile figure, once.
+    assertEquals(2.3, eff(s), 0.05)
     assertTrue(s.usedWh < used + kw * 1000 * 6 / 3600)
     assertEquals(dist, s.distanceM, 0.0)
     assertTrue(s.activeMs < active + 10_000)
@@ -349,157 +341,6 @@ class SessionHardeningTest {
     for (i in 1..30) none.add(VehicleSample(i * 1000L, levelWh = 100_000.0 - i * 100))
     assertEquals(0, none.snapshot().gaps)
     assertEquals(2_900.0, none.snapshot().usedWh, 1e-6)
-  }
-
-  // --- The charge rate --------------------------------------------------------------------------
-
-  @Test
-  fun aZeroRateIsDroppedAfterThirtySecondsOfDriving() {
-    val d = Truck()
-    d.rate = { 0.0 }
-    var sec = 0.0
-    var flip: Double? = null
-    d.run(60.0, 25.0, 40.0) {
-      sec += 0.5
-      if (flip == null && d.tracker.usingEstimate) flip = sec
-    }
-    assertNotNull(flip)
-    assertTrue("flipped at $flip s", flip!! in 30.0..34.0)
-  }
-
-  @Test
-  fun anInvertedRateIsDroppedForTheEstimateAndReported() {
-    val d = Truck()
-    d.rate = { kw -> kw * 1_000_000.0 } // not the AOSP sign
-    val kw = kwFor(25.0, 2.3)
-    d.run(30.0, 25.0, kw)
-    assertEquals(PowerSource.CHARGE_RATE, d.s().power!!.source)
-    d.run(60.0, 25.0, kw)
-    val s = d.s()
-    assertEquals(PowerSource.ESTIMATED, s.power!!.source)
-    assertTrue(s.power!!.estimated)
-    assertEquals(PowerDirection.DISCHARGING, s.power!!.direction)
-    assertEquals(kw, s.power!!.kw, kw * 0.1)
-    assertTrue(s.rateCheck.disagreed >= 1)
-    assertEquals(0, s.rateCheck.agreed)
-    assertEquals(-kw, s.rateCheck.lastRateKw!!, kw * 0.1)
-    assertEquals(kw, s.rateCheck.lastLevelKw!!, kw * 0.1)
-    assertTrue(s.powerHistoryEstimated)
-    // The rate turns out right after all: it gets its place back.
-    d.rate = { k -> -k * 1_000_000.0 }
-    d.run(140.0, 25.0, kw)
-    assertEquals(PowerSource.CHARGE_RATE, d.s().power!!.source)
-    assertTrue(d.s().rateCheck.agreed >= 1)
-  }
-
-  @Test
-  fun aRateStuckOnACharge() {
-    val d = Truck()
-    d.rate = { 11_000_000.0 } // the last charge's value, held: says -11 kW while using 40
-    d.run(90.0, 25.0, 40.0)
-    val p = d.s().power!!
-    assertEquals(PowerSource.ESTIMATED, p.source)
-    assertEquals(40.0, p.kw, 4.0)
-  }
-
-  @Test
-  fun aLiveRateIsNeverDroppedInStopAndGo() {
-    // Traffic with the level held for 17 s (it lags the rate): drive, regen, wait, again.
-    val d = Truck()
-    d.holdMs = 17_000
-    d.quantWh = 1.0
-    repeat(12) {
-      d.run(60.0, 20.0, 35.0) { s -> assertEquals(PowerSource.CHARGE_RATE, s.power!!.source) }
-      d.run(12.0, 8.0, -40.0) { s -> assertEquals(PowerSource.CHARGE_RATE, s.power!!.source) }
-      d.run(30.0, 0.0, 0.6) { s -> assertEquals(PowerSource.CHARGE_RATE, s.power!!.source) }
-    }
-    // And a long descent, and a charge.
-    d.run(300.0, 25.0, -25.0)
-    d.state = ChargeState.CHARGING
-    d.run(300.0, 0.0, -100.0)
-    val s = d.s()
-    assertEquals(PowerSource.CHARGE_RATE, s.power!!.source)
-    assertEquals(0, s.rateCheck.disagreed)
-    assertTrue(s.rateCheck.agreed >= 10)
-    assertFalse(s.powerHistoryEstimated)
-  }
-
-  @Test
-  fun aHeldRateWithAnOldTimestampIsStale() {
-    val d = Truck()
-    d.run(30.0, 25.0, 30.0)
-    // The value stops changing and its timestamp stops moving; the level says the power changed.
-    var age = 0L
-    d.rate = { -30_000_000.0 }
-    d.rateAge = {
-      age += 1000
-      age
-    }
-    d.run(70.0, 25.0, 45.0)
-    assertEquals(PowerSource.ESTIMATED, d.s().power!!.source)
-    assertEquals(45.0, d.s().power!!.kw, 5.0)
-    // A new value: live again.
-    d.rate = { kw -> -kw * 1_000_000.0 }
-    d.rateAge = { 500L }
-    d.run(2.0, 25.0, 45.0)
-    assertEquals(PowerSource.CHARGE_RATE, d.s().power!!.source)
-  }
-
-  @Test
-  fun aTimestampAloneDoesNotRetireTheRate() {
-    // A value that keeps changing is live, whatever clock its timestamp is on.
-    val d = Truck()
-    var x = 30.0
-    d.rate = {
-      x += 0.01
-      -x * 1_000_000.0
-    }
-    d.rateAge = { 100_000_000L }
-    d.run(120.0, 25.0, 30.0)
-    assertEquals(PowerSource.CHARGE_RATE, d.s().power!!.source)
-    // Unchanged but with a fresh timestamp: a truly steady value.
-    val e = Truck()
-    e.rateAge = { 500L }
-    e.run(120.0, 25.0, 30.0)
-    assertEquals(PowerSource.CHARGE_RATE, e.s().power!!.source)
-    // 0 in Park with an old timestamp is simply idle.
-    val p = Truck()
-    p.rate = { 0.0 }
-    p.rateAge = { 9_000_000L }
-    p.run(120.0, 0.0, 0.0)
-    assertEquals(PowerSource.CHARGE_RATE, p.s().power!!.source)
-    assertEquals(PowerDirection.IDLE, p.s().power!!.direction)
-  }
-
-  @Test
-  fun noChargingLabelWithoutACharger() {
-    val d = Truck()
-    d.run(30.0, 20.0, 30.0)
-    // Stopped, the regen figure still held for a moment, nothing plugged in.
-    d.rate = { 40_000_000.0 }
-    d.run(5.0, 0.0, 0.0)
-    assertEquals(PowerDirection.REGEN, d.s().power!!.direction)
-    assertFalse(d.s().charging)
-  }
-
-  @Test
-  fun theEstimateSettlesAtZeroWhenParked() {
-    val d = Truck()
-    d.rate = { null }
-    d.run(300.0, 25.0, 30.0)
-    assertEquals(30.0, d.s().power!!.kw, 3.0)
-    d.run(120.0, 0.0, 0.0)
-    val p = d.s().power!!
-    assertEquals(0.0, p.kw, 0.0)
-    assertEquals(PowerDirection.IDLE, p.direction)
-    assertEquals(PowerSource.ESTIMATED, p.source)
-    // Still moving, a long wait between steps only decays it.
-    val m = Truck()
-    m.rate = { null }
-    m.run(300.0, 25.0, 30.0)
-    m.levelOverride = m.level
-    m.run(120.0, 25.0, 30.0)
-    assertTrue(m.s().power!!.kw > 0)
   }
 
   // --- Early figures ----------------------------------------------------------------------------
@@ -564,6 +405,7 @@ class SessionHardeningTest {
   @Test
   fun theWarmUpReportsWhatItReallyNeeds() {
     val d = Truck()
+    d.rate = { null } // on the level alone
     d.quantWh = 1_000.0
     d.run(300.0, 25.0, kwFor(25.0, 2.3))
     val s = d.s()
@@ -606,7 +448,5 @@ class SessionHardeningTest {
     d.level = 60_000.0
     d.run(1.0, 25.0, 30.0)
     assertTrue(d.s().levelWh!! < 61_000)
-    assertFalse(d.s().powerHistoryEstimated)
-    assertEquals(RateCheck(), d.s().rateCheck)
   }
 }

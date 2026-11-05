@@ -10,7 +10,7 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
- * Raw byte connection to an adapter (Bluetooth RFCOMM socket, TCP socket, test fake).
+ * Raw byte connection to an adapter (Bluetooth RFCOMM socket, test fake).
  *
  * Only [ElmLink] writes to it, and only through ElmLink.command, which applies the link
  * discipline and the line allowlist. Both methods throw [FatalTransportError] once the connection
@@ -30,7 +30,8 @@ interface ByteLink : Closeable {
 }
 
 /**
- * [ByteLink] over a blocking [InputStream] / [OutputStream] pair (Bluetooth RFCOMM socket, java.net.Socket).
+ * [ByteLink] over a blocking [InputStream] / [OutputStream] pair (a Bluetooth RFCOMM socket; a
+ * loopback socket in the tests).
  *
  * A dedicated daemon reader thread blocks in InputStream.read and feeds a [LinkedBlockingQueue],
  * so [readAvailable] can wait with a timeout even though the stream itself has none. End of

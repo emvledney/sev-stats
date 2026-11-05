@@ -2,13 +2,15 @@ import io
 import json
 import os
 import re
+import select
 import socket
 import threading
+import time
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 
 from ultium_probe import addressing, cli, profile, safety
-from ultium_probe.transports.base import Channel
+from ultium_probe.transports.base import Channel, FatalTransportError, TransportError
 from ultium_probe.transports.elm import ALLOWED_AT, ElmLink, ElmTransport, reassemble
 from ultium_probe.transports.sim import SimTransport
 from ultium_probe.uds import NegativeResponse, NoResponse, UdsClient, mask_vin
@@ -69,6 +71,14 @@ class SafetyTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 safety.RateLimiter(bad)
 
+    def test_requests_are_paced(self):
+        self.assertEqual(safety.RateLimiter().min_interval_s, 0.075)
+        ch = RecordingChannel()               # 50 ms apart
+        start = time.monotonic()
+        for _ in range(3):
+            ch.request(bytes([0x22, 0x27, 0xC6]), 0.01)
+        self.assertGreaterEqual(time.monotonic() - start, 0.1)
+
     def test_only_diagnostic_addresses(self):
         safety.check_address(0x14DACBF1, 0x142AF1CB, False)
         safety.check_address(0x18DA40F1, 0x18DAF140, False)
@@ -99,7 +109,7 @@ class SafetyTests(unittest.TestCase):
 
     def test_elm_refuses_bare_cr(self):
         link = ElmLink(sock=None)
-        with self.assertRaises(Exception):
+        with self.assertRaisesRegex(TransportError, "empty line"):
             link.command("", 0.1)
 
 
@@ -107,9 +117,6 @@ class AddressingTests(unittest.TestCase):
     def test_ultium_ids(self):
         self.assertEqual(addressing.ids(0xCB, 0x14), (0x14DACBF1, 0x142AF1CB))
         self.assertEqual(addressing.ids(0x40, 0x18), (0x18DA40F1, 0x18DAF140))
-        self.assertEqual(addressing.flow_control_target(0x142AF1CB), 0x14DACBF1)
-        self.assertEqual(addressing.flow_control_target(0x18DAF117), 0x18DA17F1)
-        self.assertEqual(addressing.flow_control_target(0x7EC), 0x7E4)
         with self.assertRaises(ValueError):
             addressing.ids(0xCB, 0x10)
 
@@ -386,9 +393,10 @@ class PollerSleepTests(unittest.TestCase):
 
 
 class FakeElm(threading.Thread):
-    """Minimal ELM327-over-TCP stand-in (like a WiCAN) answering one Ultium DID."""
+    """Minimal ELM327 stand-in on a local socket, answering one Ultium DID."""
 
-    def __init__(self, stall_first=None, reject=None, reset_on=None):
+    def __init__(self, stall_first=None, reject=None, reset_on=None, reset_reply=b"LV RESET\r\r>",
+                 late_reply=b"142AF1CB056227C67123\r\r>", close_on=None, mute_on=None, chatter=None):
         super().__init__(daemon=True)
         self.srv = socket.socket()
         self.srv.bind(("127.0.0.1", 0))
@@ -397,14 +405,29 @@ class FakeElm(threading.Thread):
         self.received = []
         self.interrupted = []
         self.stall_first = stall_first   # (command, seconds): answer late once
+        self.late_reply = late_reply     # what the stalled command finally answers
         self.reject = reject             # command answered with '?'
-        self.reset_on = reset_on         # command answered with 'LV RESET'
+        self.reset_on = reset_on         # command answered with reset_reply
+        self.reset_reply = reset_reply
+        self.close_on = close_on        # command that makes the adapter drop the connection
+        self.mute_on = mute_on           # command never answered: no reply and no prompt
+        self.chatter = chatter           # (first output, busy seconds, last output) at connect
+        self.echo = False                # answer with an echo, as after a reset
+        self.conn = None
         self.busy_until = 0.0
 
     def run(self):
-        conn, _ = self.srv.accept()
-        with conn, self.srv:
-            self._serve(conn)
+        self.conn, _ = self.srv.accept()
+        with self.conn, self.srv:
+            if self.chatter:
+                self._chatter(self.conn, *self.chatter)
+            self._serve(self.conn)
+
+    def _chatter(self, conn, first, busy, last):
+        self.busy_until = time.monotonic() + busy
+        conn.sendall(first)
+        if last:
+            threading.Timer(busy, conn.sendall, [last]).start()
 
     def _serve(self, conn):
         hdr, cp = "", ""
@@ -417,20 +440,23 @@ class FakeElm(threading.Thread):
             while b"\r" in buf:
                 line, buf = buf.split(b"\r", 1)
                 cmd = line.decode().strip().upper()
-                import time as _t
-                if _t.monotonic() < self.busy_until:
+                if time.monotonic() < self.busy_until:
                     self.interrupted.append(cmd)  # a real ELM would drop a character here
                 self.received.append(cmd)
+                if cmd == self.close_on:
+                    return
+                if cmd == self.mute_on:
+                    continue
                 if self.stall_first and cmd == self.stall_first[0]:
                     delay, self.stall_first = self.stall_first[1], None
-                    self.busy_until = _t.monotonic() + delay
-                    threading.Timer(delay, lambda c=conn: c.sendall(b"142AF1CB056227C67123\r\r>")).start()
+                    self.busy_until = time.monotonic() + delay
+                    threading.Timer(delay, lambda c=conn: c.sendall(self.late_reply)).start()
                     continue
                 if cmd == self.reject:
                     conn.sendall(b"?\r\r>")
                     continue
                 if cmd == self.reset_on:
-                    conn.sendall(b"LV RESET\r\r>")
+                    conn.sendall(self.reset_reply)
                     continue
                 if cmd.startswith("ATSH"):
                     hdr = cmd[4:]
@@ -450,14 +476,21 @@ class FakeElm(threading.Thread):
                     reply = "142AF1CB100D622AF59D759D62\r142AF1CB219D91B5179113AAAA"
                 else:
                     reply = "NO DATA"
-                conn.sendall(reply.encode() + b"\r\r>")
+                echo = cmd + "\r" if self.echo else ""
+                conn.sendall((echo + reply).encode() + b"\r\r>")
 
 
-class ElmTcpEndToEnd(unittest.TestCase):
-    def test_read_over_tcp(self):
+def _elm(fake, **kw):
+    """ElmTransport on a local socket: the same ElmLink(sock=...) path ElmLink.rfcomm returns."""
+    kw.setdefault("min_interval_s", 0.05)
+    return ElmTransport(ElmLink(sock=socket.create_connection(("127.0.0.1", fake.port), timeout=10)), **kw)
+
+
+class ElmSocketEndToEnd(unittest.TestCase):
+    def test_read_over_socket(self):
         fake = FakeElm()
         fake.start()
-        t = ElmTransport(ElmLink.tcp("127.0.0.1", fake.port), min_interval_s=0.05)
+        t = _elm(fake)
         client = UdsClient(t.open(*addressing.ids(0xCB, 0x14)), timeout=0.5)
         self.assertEqual(client.read_did(0x27C6).data, bytes.fromhex("7123"))
         self.assertEqual(client.read_did(0x2AF5).data, bytes.fromhex("9D759D629D91B5179113"))
@@ -474,11 +507,9 @@ class ElmTcpEndToEnd(unittest.TestCase):
         self.assertIn("ATFCSH14DACBF1", fake.received)
 
     def test_never_writes_to_busy_adapter(self):
-        from ultium_probe.transports.base import FatalTransportError
         fake = FakeElm(stall_first=("2227C6", 0.8))
         fake.start()
-        t = ElmTransport(ElmLink.tcp("127.0.0.1", fake.port), response_timeout=0.3,
-                         min_interval_s=0.05)
+        t = _elm(fake, response_timeout=0.3)
         client = UdsClient(t.open(*addressing.ids(0xCB, 0x14)))
         with self.assertRaises(Exception):
             client.read_did(0x27C6)       # times out; link marked dirty
@@ -489,25 +520,156 @@ class ElmTcpEndToEnd(unittest.TestCase):
         t.close()
         self.assertEqual(fake.interrupted, [], "wrote to the adapter while it was busy")
 
-    def test_rejected_setting_is_fatal(self):
-        from ultium_probe.transports.base import FatalTransportError
-        fake = FakeElm(reject="ATCRA142AF1CB")
+    def test_ctrl_c_waits_for_the_prompt_before_the_next_write(self):
+        fake = FakeElm(stall_first=("2227C6", 0.4))
         fake.start()
-        t = ElmTransport(ElmLink.tcp("127.0.0.1", fake.port), min_interval_s=0.05)
-        with self.assertRaises(FatalTransportError):
+        t = _elm(fake)
+        client = UdsClient(t.open(*addressing.ids(0xCB, 0x14)), timeout=0.5)
+        write, read = t.link._write, t.link._read_available
+
+        def ctrl_c(timeout):
+            raise KeyboardInterrupt
+
+        def write_then_interrupt(data):
+            write(data)
+            if data.startswith(b"2227C6"):
+                t.link._read_available = ctrl_c
+        t.link._write = write_then_interrupt
+        with self.assertRaises(KeyboardInterrupt):
+            client.read_did(0x27C6)
+        t.link._write, t.link._read_available = write, read
+        self.assertEqual(client.read_did(0x27C6).data, bytes.fromhex("7123"))
+        t.close()
+        self.assertEqual(fake.interrupted, [], "wrote to the adapter while it was busy")
+
+    def test_waits_out_chatter_at_connect(self):
+        fake = FakeElm(chatter=(b"SEARCHING...\r", 0.5, b"\r>"))
+        fake.start()
+        t = _elm(fake)
+        t.close()
+        self.assertEqual(fake.interrupted, [], "wrote to the adapter while it was busy at connect")
+        self.assertEqual(fake.received[0], "ATZ")
+
+    def test_no_prompt_at_connect_is_fatal(self):
+        fake = FakeElm(chatter=(b"SEARCHING...\r", 5.0, None))
+        fake.start()
+        link = ElmLink(sock=socket.create_connection(("127.0.0.1", fake.port), timeout=10))
+        with self.assertRaisesRegex(FatalTransportError, "kept talking at connect"):
+            link.settle(quiet=0.05, budget=0.3)
+        self.assertEqual(fake.received, [])
+
+    def test_unexpected_output_before_a_write_is_fatal(self):
+        fake = FakeElm()
+        fake.start()
+        t = _elm(fake)
+        sent = len(fake.received)
+        fake.conn.sendall(b"ELM327 v1.5\r\r>")         # the adapter reset by itself between commands
+        self.assertTrue(select.select([t.link.sock], [], [], 5)[0])
+        with self.assertRaisesRegex(FatalTransportError, "unexpected adapter output"):
+            t.adapter_voltage()
+        t.close()
+        self.assertEqual(len(fake.received), sent, "wrote to the adapter after unexpected output")
+
+    def test_echo_coming_back_is_fatal(self):
+        fake = FakeElm()
+        fake.start()
+        t = _elm(fake)
+        fake.echo = True                               # ATE0 was confirmed: an echo means a reset
+        with self.assertRaisesRegex(FatalTransportError, "echo came back"):
+            t.adapter_voltage()
+        t.close()
+
+    def test_closed_connection_is_fatal(self):
+        fake = FakeElm(close_on="2227C6")
+        fake.start()
+        t = _elm(fake)
+        with self.assertRaisesRegex(FatalTransportError, "closed the connection"):
             UdsClient(t.open(*addressing.ids(0xCB, 0x14))).read_did(0x27C6)
         t.close()
-        self.assertNotIn("2227C6", fake.received, "request sent with unconfirmed addressing")
+
+    def test_late_error_while_recovering_is_fatal(self):
+        fake = FakeElm(stall_first=("2227C6", 0.4), late_reply=b"CAN ERROR\r\r>")
+        fake.start()
+        t = _elm(fake, response_timeout=0.1)
+        client = UdsClient(t.open(*addressing.ids(0xCB, 0x14)))
+        with self.assertRaisesRegex(TransportError, "timed out"):
+            client.read_did(0x27C6)
+        with self.assertRaisesRegex(FatalTransportError, "while recovering"):
+            client.read_did(0x27C6)
+        self.assertEqual(fake.received.count("2227C6"), 1, "wrote again after the late error")
+        t.close()
+
+    def test_no_prompt_after_a_timeout_is_fatal(self):
+        fake = FakeElm(mute_on="2227C6")
+        fake.start()
+        t = _elm(fake, response_timeout=0.1)
+        with self.assertRaisesRegex(TransportError, "timed out"):
+            UdsClient(t.open(*addressing.ids(0xCB, 0x14))).read_did(0x27C6)
+        sent = len(fake.received)
+        with self.assertRaisesRegex(FatalTransportError, "did not return to its prompt"):
+            t.link._resync(budget=0.3, quiet=0.05)
+        self.assertEqual(len(fake.received), sent)
+        t.close()
+
+    def test_at_refuses_commands_off_the_allowlist(self):
+        fake = FakeElm()
+        fake.start()
+        t = _elm(fake)
+        sent = len(fake.received)
+        for cmd in ("ATMA", "ATSP0", "ATWS", "STM", "3E00"):
+            with self.assertRaises(safety.UnsafeRequestError, msg=cmd):
+                t.at(cmd)
+        t.close()
+        self.assertEqual(len(fake.received), sent, "an off-list command reached the adapter")
+
+    def test_no_banner_after_atz_is_fatal(self):
+        fake = FakeElm(reset_on="ATZ", reset_reply=b"OK\r\r>")
+        fake.start()
+        link = ElmLink(sock=socket.create_connection(("127.0.0.1", fake.port), timeout=10))
+        with self.assertRaisesRegex(FatalTransportError, "no adapter banner"):
+            ElmTransport(link, min_interval_s=0.05)
+        link.close()
+        self.assertEqual(fake.received, ["ATZ"])
+
+    def test_reset_reply_to_an_adapter_command_is_fatal(self):
+        fake = FakeElm()
+        fake.start()
+        t = _elm(fake)
+        fake.reset_on = "ATRV"
+        with self.assertRaisesRegex(FatalTransportError, "LV RESET"):
+            t.adapter_voltage()
+        t.close()
+
+    def test_stopped_reply_is_fatal(self):
+        fake = FakeElm()
+        fake.start()
+        t = _elm(fake)
+        fake.reset_on, fake.reset_reply = "ATRV", b"STOPPED\r\r>"
+        with self.assertRaisesRegex(FatalTransportError, "interrupted"):
+            t.link.command("ATRV", 1.0)
+        t.close()
+
+    def test_rejected_setting_is_fatal(self):
+        for setting in ("ATE0", "ATH1", "ATSP7", "ATCP14", "ATSHDACBF1", "ATCRA142AF1CB",
+                        "ATFCSH14DACBF1", "ATFCSD300000", "ATFCSM1"):
+            with self.subTest(setting):
+                fake = FakeElm(reject=setting)
+                fake.start()
+                link = ElmLink(sock=socket.create_connection(("127.0.0.1", fake.port), timeout=10))
+                with self.assertRaises(FatalTransportError):
+                    t = ElmTransport(link, min_interval_s=0.05)
+                    UdsClient(t.open(*addressing.ids(0xCB, 0x14))).read_did(0x27C6)
+                link.close()
+                self.assertIn(setting, fake.received)
+                self.assertNotIn("2227C6", fake.received, "request sent with unconfirmed settings")
 
     def test_output_after_prompt_is_fatal(self):
-        from ultium_probe.transports.base import FatalTransportError
         fake = FakeElm(reset_on="2227C6")
         fake.start()
-        t = ElmTransport(ElmLink.tcp("127.0.0.1", fake.port), min_interval_s=0.05)
+        t = _elm(fake)
         ch = t.open(*addressing.ids(0xCB, 0x14))
         # Simulate a reply with a banner glued after its prompt.
         orig = t.link._read_available
-        state = {"n": 0}
 
         def glued(timeout):
             data = orig(timeout)
@@ -521,61 +683,12 @@ class ElmTcpEndToEnd(unittest.TestCase):
         t.close()
 
     def test_adapter_reset_is_fatal(self):
-        from ultium_probe.transports.base import FatalTransportError
         fake = FakeElm(reset_on="2227C6")
         fake.start()
-        t = ElmTransport(ElmLink.tcp("127.0.0.1", fake.port), min_interval_s=0.05)
+        t = _elm(fake)
         with self.assertRaises(FatalTransportError):
             UdsClient(t.open(*addressing.ids(0xCB, 0x14))).read_did(0x27C6)
         t.close()
-
-
-class SocketCanGuardTests(unittest.TestCase):
-    def check(self, **over):
-        from unittest import mock
-        from ultium_probe.transports import socketcan
-        info = {"name": "can0", "up": True, "kind": "gs_usb", "state": "ERROR-ACTIVE",
-                "ctrlmode": ["ONE-SHOT"], "listen_only": False, "fd": False, "bitrate": 500000,
-                "dbitrate": None, "restart_ms": 0, "one_shot": True}
-        info.update(over)
-        with mock.patch.object(socketcan, "iface_info", return_value=info):
-            return socketcan.SocketCanTransport("can0")
-
-    def test_good_interface_accepted(self):
-        self.check()
-
-    def test_bad_interfaces_refused(self):
-        from ultium_probe.transports.base import TransportError
-        for over in ({"bitrate": 250000}, {"fd": True}, {"state": "ERROR-PASSIVE"},
-                     {"restart_ms": 100}, {"one_shot": False}, {"up": False},
-                     {"listen_only": True}):
-            with self.assertRaises(TransportError, msg=str(over)):
-                self.check(**over)
-
-
-@unittest.skipUnless(os.path.exists("/sys/class/net/vcan0"), "needs vcan0 (see docs)")
-class KernelIsoTpTests(unittest.TestCase):
-    """End-to-end over the kernel ISO-TP stack on a virtual CAN bus, 29-bit IDs."""
-
-    def test_multi_frame_over_vcan(self):
-        from ultium_probe.transports.socketcan import SocketCanTransport
-
-        tx, rx = addressing.ids(0xCB, 0x14)
-        ecu = socket.socket(socket.AF_CAN, socket.SOCK_DGRAM, socket.CAN_ISOTP)
-        ecu.bind(("vcan0", tx | socket.CAN_EFF_FLAG, rx | socket.CAN_EFF_FLAG))
-        ecu.settimeout(2)
-
-        def serve():
-            req = ecu.recv(4095)
-            ecu.send(bytes([0x62]) + req[1:3] + bytes(range(36)))
-
-        th = threading.Thread(target=serve)
-        th.start()
-        t = SocketCanTransport("vcan0")
-        r = UdsClient(t.open(tx, rx)).read_did(0x2AE1)
-        th.join()
-        ecu.close()
-        self.assertEqual(r.data, bytes(range(36)))
 
 
 if __name__ == "__main__":

@@ -16,10 +16,6 @@ package dev.silveradostats.obd
 object Addressing {
   const val FUNCTIONAL_29: Long = 0x18DB33F1
   const val FUNCTIONAL_RESP_29: Long = 0x18DAF100
-  const val FUNCTIONAL_RESP_29_MASK: Long = 0x1FFFFF00
-  const val FUNCTIONAL_11: Long = 0x7DF
-  const val FUNCTIONAL_RESP_11: Long = 0x7E8
-  const val FUNCTIONAL_RESP_11_MASK: Long = 0x7F8
   const val TESTER: Int = 0xF1
 
   /** (request id, response id) for module [ecu] at priority 0x14 or 0x18. */

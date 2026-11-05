@@ -56,7 +56,7 @@ internal fun MxLinkSection(vm: LiveViewModel, onRequestPermissions: () -> Unit) 
   Section(
     "OBDLink MX+ link",
     "Bluetooth Classic serial link to the adapter. Test link connects and runs the adapter's own setup only " +
-      "(ATZ banner, settings, ATI, STI, ATRV): no vehicle requests. Keep your phone's Bluetooth off so it doesn't hold the MX+.",
+      "(ATZ banner, settings, ATI, STI, ATRV): no vehicle requests. Disconnect frees the MX+ for your phone and stays that way until you tap Connect. Keep your phone's own link to the MX+ off so it doesn't hold it.",
     action = "Refresh" to vm::refreshBluetooth,
   ) {
     // Live link status.
@@ -65,6 +65,9 @@ internal fun MxLinkSection(vm: LiveViewModel, onRequestPermissions: () -> Unit) 
       Badge(chip, toneColor(tone))
       Text(live.message, Modifier.weight(1f), style = MaterialTheme.typography.bodyLarge)
       if (live.canRetry) BigButton("Retry", onClick = vm::retry)
+      if (!settings.demo && settings.mxAddress != null) {
+        BigButton(if (settings.mxOff) "Connect" else "Disconnect", onClick = { vm.setMxOff(!settings.mxOff) })
+      }
     }
     live.adapter?.let { Text("Link: $it", style = MaterialTheme.typography.bodyMedium, color = TextDim) }
 
@@ -190,7 +193,7 @@ private fun DeviceRow(d: BtDevice, chosen: Boolean, actions: List<Pair<String, (
   }
 }
 
-/** Result of an init-only adapter check (MX+ or TCP). */
+/** Result of an init-only adapter check (Test link). */
 @Composable
 internal fun LinkCheckView(r: LinkCheckResult) {
   Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {

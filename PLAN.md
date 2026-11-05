@@ -1,42 +1,267 @@
-# Silverado EV battery dashboard: implementation plan
+# Silverado EV battery dashboard: plan and status
 
 Goal: a live dashboard on the Silverado EV's 17.7" center screen showing pack
 voltage and current, power in and out, temperatures, per-cell-group voltages,
 SoC and estimated capacity in kWh and Ah. Absolute constraint: nothing may
 change or impair any truck function.
 
-Status (2026-11-04, 07:01): **version 0.4.0 (code 7) published to your internal track**: the main app now runs while driving, with a locked-down moving mode (Simple and Live only), and Simple and Live fit one page without scrolling. Simple tab (built-in data, measured mi/kWh, Efficiency and Battery layouts), live OBD dashboard via the MX+ over Bluetooth Classic, cell-group heatmap, Battery Glance as the fallback. 334 app tests pass. **MX+ pairing from the head unit works** (owner report, 2026-11-04). Next: on-truck test of 0.4.0 out of Park, and live MX+ data on the Live tab. A drive is only measured while the app is on screen. Before that, **the diagnostics app was installed and running on your truck** (Play internal testing, `com.vincel.silveradoev`; permissions and live vehicle data work). **Session 1 done on your truck. 192 cell groups, pack V/A and SoC confirmed, no trouble codes** (`docs/session1-results.md`). Research complete (10 agents, adversarially verified,
-sources in `docs/research/`). The read-only laptop probe (`tools/probe`) is
-built and tested against a simulator. Nothing has touched the truck yet.
+How to build, test and run everything, and the map of the repo: [`README.md`](README.md).
 
 ---
 
-## 1. Verdict: what is and isn't possible
+## 1. Status (2026-11-04)
 
-| Want | Possible? | How |
-|---|---|---|
-| App on the infotainment screen | **Yes** | Your own Play Console app on the **Android Automotive OS internal testing track**, installed from the Play website onto the truck. Owners do this today on 2024–2025 Silverado EV, Sierra EV, Blazer EV and Equinox EV, including Android 14. |
-| `adb install` from the laptop | **No** | GM production head units gate ADB behind GM certificates. The in-cab USB ports are host-only, and wireless debugging is unreachable. Every workaround needs radio hardware or EEPROM mods, which are ruled out. |
-| SoC, kWh remaining, nominal capacity, range, charge-port state, outside temp | **Yes, no extra hardware** | Standard Android vehicle properties (VHAL) via `CarPropertyManager`. Read live by another owner's app on a 2024 Blazer EV (same head-unit family); confirmed on your truck in Phase 3. |
-| HV pack power in/out from VHAL | **Maybe** | `EV_BATTERY_INSTANTANEOUS_CHARGE_RATE` (mW, + charging / − discharging) exists, but GM has only been seen reporting 0 W in Park. Test on the truck. |
-| Pack V and A, cell-group voltages, module temps, coolant temps | **Very likely, with your OBDLink MX+** | Read-only UDS `0x22` requests through the OBD-II port. Other owners' logs from a 2024 Silverado EV and a 2025 Sierra EV (same platform) show SoC, energy, cell min/max/avg, pack voltage and the raw module-temperature bytes. Pack current (`2414`), the cell-group array (`2AE1…`) and coolant temps (BCM `0x40`) were seen only on other Ultium vehicles (Hummer EV, Lyriq, Equinox EV). Session 1 confirms them on your truck. |
-| Per-cell voltages | **Per cell group, very likely** | Ultium cells are wired 3 in parallel per group, so the BMS reports groups: 192 on a 24-module pack (96 in series per 400 V half), 160 on 20 modules, 112 on 14. The array (DIDs `2AE1…2AF0`) is decoded on an Equinox EV and strongly inferred for the Silverado. **Session 1 confirms it.** Individual parallel cells are never visible. |
-| Capacity in kWh and Ah, SoH | **Estimated, not read** | No public DID gives SoH or Ah. We derive: BMS energy ÷ SoC, and Ah by coulomb counting pack current over any stretch where the app is running and SoC moves at least ~10 % (a drive, or an attended DC fast charge). Both are labelled as estimates. |
-| Cabin / HVAC temperature | **No** | `HVAC_TEMPERATURE_CURRENT` needs a privileged permission. |
-| Driver cluster or HUD widget | **No** | Rendered by the QNX host, and GM kills third-party cluster services. |
-| Display while driving | **Yes, limited** | Only Play-installed apps may show distraction-optimized screens. Plan: a glanceable screen while driving, the full dashboard in Park. See §6. |
+**0.5.0 (version code 8) is the MVP**, on the internal track since 2026-11-04; `release/silverado-ev-v8-source.tgz` (git-ignored) holds its exact source. It is 0.4.0 with dead code removed, plus the owner's changes after the first drive: kW readouts removed, capacity on Simple and Live, session energy measured from power in and out, and a Connect/Disconnect MX+ button that also works while driving. None of those changes is confirmed on the truck yet. Tag `v0.4.0` holds the exact source of the last build tested on the truck. 0.6.0 (code 9) added the battery log and Trends tab, and 0.7.0 (code 10, the newest on the internal track; `release/silverado-ev-v10-source.tgz`) the Truck API / MX+ views of Trends; neither has run on the truck.
 
-Uncertain, to be decided by on-truck tests (Phases 1 and 3):
-1. **Whether GM's head unit lets our app pair with your OBDLink MX+ and connect to it over Bluetooth Classic (RFCOMM).**
-   - Evidence: a third-party app already runs Bluetooth Classic connections on GM EV head units, but there the phone connects in to the car. An app on the car connecting out to a non-phone device is untested.
-   - Wi-Fi adapters are ruled out by your choice.
-   - Fallbacks: an OBDLink CX (Bluetooth LE) if LE works where Classic doesn't, or your phone app on CarPlay as today.
-2. Which priority each module answers at on *your* truck and build.
-3. The cell-group array layout and module count: 14, 20 or 24 modules depending on the pack.
+Confirmed by the owner on the truck on 2026-11-04, on 0.4.0:
+- The app stays up in Drive.
+- Live shows real data from the MX+.
+
+Also on the truck:
+- MX+ pairing from the head unit: owner report 2026-11-04, on the build before 0.4.0; the working Live link on 0.4.0 shows the connection holds.
+- The owner's photo of Diagnostics in Park, Permissions section: every row in frame reads GRANTED, including the runtime CAR_ENERGY, CAR_SPEED, BLUETOOTH_SCAN and BLUETOOTH_CONNECT; the section runs off the bottom of the photo.
+
+Session 1 (2026-11-03, laptop and MX+, parked) confirmed 192 cell groups, pack V/A and SoC, with no trouble codes (§5). The tests (363 app, 50 probe) run on the JVM and the simulator, so they say nothing about how the truck behaves. A drive is only measured while the app or Battery Glance is on screen.
+
+Everything else about the truck is unconfirmed, and listed next.
 
 ---
 
-## 2. Architecture
+## 2. Open work
+
+Commands run from the repo root. Before any `-t elm-bt:auto` command, do the setup in `docs/truck-connection.md` §0–2. New runs write to `logs/session2/`, never to `logs/` itself: session 1's raw logs are git-ignored and can't be restored.
+
+### With the laptop and the MX+
+
+1. **Truck-off sleep timing** (session 1 skipped it). With the truck on, take the trouble-code baseline that §3.8's diff needs, then start the poll. Turn the truck off and follow `docs/truck-connection.md` §3.7–3.8. **Pass:** the poller exits by itself within 10 minutes, the time is noted, and there are no new DTCs or messages. Otherwise press Ctrl-C and note it: polling keeps the truck awake.
+   ```bash
+   ./probe dtc -t elm-bt:auto | tee logs/session2/02-dtc-before.json
+   ./probe poll -t elm-bt:auto --profile tools/probe/dids/silverado_ev.toml --out logs/session2/08-poll.jsonl
+   ```
+
+2. **12 V drain test (never run).** Measure with an independent instrument: a logging multimeter or a clip-on 12 V battery monitor on the 12 V battery.
+   1. Baseline: adapter unplugged, truck off, 2–3 hours.
+   2. MX+ plugged in, laptop awake and within Bluetooth range:
+      ```bash
+      ./probe poll -t elm-bt:auto --profile tools/probe/dids/silverado_ev.toml --keep-watching --out logs/session2/drain.jsonl
+      ```
+      Turn the truck off. The probe goes bus-silent once modules stop answering. When the MX+ itself sleeps, the run ends with `stopped: adapter link failed`. That's expected; note the time. Then leave it for the rest of the 2–3 hours, measured by the meter only.
+   3. The everyday case: MX+ left plugged in, no laptop, the app closed, truck off, 2–3 hours, measured by the meter only.
+   4. **Pass** if there's no extra 12 V drop or wake-up compared with the baseline, in steps 2 and 3.
+   5. If there's extra drain, adjust the MX+ sleep settings in the OBDLink phone app, or unplug for long parking. `poll` logs the adapter's voltage every 30 s, so a drive log also shows whether the MX+ ever drops out on the road. Some Ultium trucks hold 11.7–12.2 V in Ready.
+
+3. **Temperature scaling (`2AF1`, `2AF2`).** After the truck has sat for several hours, compare with the outside temperature and coolant (`40E5`/`40E6`), never with `40:434F`, which reads 60 °C with a 17 °C pack. **Pass:** with u8 − 80, the module temperatures sit within a few °C of both. Then set `status = "confirmed"` in the profile and re-export it (README).
+   ```bash
+   ./probe read -t elm-bt:auto --profile tools/probe/dids/silverado_ev.toml --module becm --did 2AF1 2AF2 0046 | tee logs/session2/temps-becm.jsonl
+   ./probe read -t elm-bt:auto --profile tools/probe/dids/silverado_ev.toml --module bcm --did 40E5 40E6 | tee logs/session2/temps-bcm.jsonl
+   ```
+
+### With the app on the truck
+
+4. **Pack current under load (`17:2414`), sign and scale.** On Live while driving, or from the passenger seat with `./probe poll -t elm-bt:auto --profile tools/probe/dids/silverado_ev.toml --out logs/session2/drive.jsonl`. **Pass:** positive pulling away, negative in regen, and a size that is believable against the truck's own power display.
+
+5. **VHAL charge rate, sign and liveness while driving.** The owner's first drive showed kW with swapped signs and a long delay, which an inverted rate and the old 30 s level-based estimate would both explain. After a drive, in Park: Diagnostics › Report › **Send to laptop**, with `./probe receive` running. Read `chargeRateCheck` in the report under `logs/reports/`: `sign` 1 is the AOSP sign, -1 the opposite, 0 not trusted, with `signalWh` and `levelWh` behind it. **Pass:** `sign` isn't 0 and `energySource` is `CHARGE_RATE` without the MX+. If it stays 0, the rate isn't usable and the Simple tab's energy needs the MX+; record that.
+
+6. **Measured mi/kWh accuracy.** Simple › Overall, past the "early" mark (5 mi and 2 kWh). **Pass:** within about 10 % of the truck's own trip figure.
+   - **Range tile.** Once any drive has passed the "early" mark, the next drive's tile shows a figure from its first reading, marked "last drive", falling with the battery, and it loses the mark once that drive passes "early" too. On the very first drive it stays "—" until the efficiency appears, then reads "early". **Pass:** no longer "—" with only "Truck says" on a drive after the first. If it fails, read `rangeEstimateM` and `rangeBasis` in the report.
+
+7. **A 30-minute drive** on Live. Read the codes before and after, with the truck on and **Disconnect MX+** tapped, because the MX+ serves one host. **Pass:** stable data, no app crashes or truck warnings, and no new codes between the two reads.
+   ```bash
+   ./probe dtc -t elm-bt:auto | tee logs/session2/dtc-before-drive.json
+   ./probe dtc -t elm-bt:auto | tee logs/session2/dtc-after-drive.json
+   ```
+
+8. **Battery Glance on the truck.** It is the named fallback, yet no record shows it was ever opened there. Open it from the launcher in Park, then in Drive. **Pass:** all four rows fill and keep updating. Note the refresh interval.
+
+9. **Permission dialog after leaving Park.** At a standstill, foot on the brake, one permission revoked: tap **Request runtime permissions**, then shift out of Park. **Pass:** note whether the OS covers the dialog; the app opens no further one.
+
+10. **The 0.5 m/s parked-speed allowance on real sensors** (`DrivingPolicy.PARK_SPEED_NOISE_MPS`). **Pass:** Diagnostics stays offered over several parked sessions with the truck on. If it locks in Park, photograph the "Available in Park" panel's last line (`Gear … · speed … · restrictions …`).
+
+11. **Charging sessions**, attended, with `./probe dtc -t elm-bt:auto` before and after, and `poll` with `--out logs/session2/charge-ac.jsonl` or `charge-dc.jsonl`. **Pass:** `pack_current` is negative while charging, `4149` matches the charger's amps, the `5401` codes are written down, and there are no new DTCs or warnings.
+    - AC: pilot current (`40 4149`), `2414` sign, `5401` codes.
+    - DC on an 800 V charger: how `2885` and `2AF5` behave when the pack halves switch to series.
+    - Whether the head unit and the app keep running while charging with the truck off. Cold-weather behavior, when the season allows.
+
+### Facts to record
+
+12. **Infotainment build, window size, font scale.** The owner's photo shows only the Permissions section, so these are unknown. In Park, photograph Diagnostics › System & display, or use Send to laptop: `Android`, `Build.DISPLAY`, `Window size (dp)`, `Density`, `Font scale`, the insets. Or Settings → System → About, a string containing `SQBR…` (Android 12L) or `UQBM` (Android 14). Note whether the Android update is installed: GM Update 662.30 on MY2024, possibly a different 66x number on later years, all field action N25-253201. Don't toggle Developer Options. **Read the window figures before any layout tweak** (§5).
+
+13. **Is a pin-limited extension fitted?** The repo doesn't record it; a question for the owner (§3, item 5).
+
+### Battery log and Trends (0.6.0 and 0.7.0, never run on the truck)
+
+Tests and the emulator cover the rows, charts, job and file picker. What only the truck can answer:
+
+14. **Real logging cadence.** After a week of normal use, export the CSV and read the `trigger` column. **Pass:** `job` rows about hourly while the truck is on, `car_screen` rows every 5 min while the app is on screen, and at least one row every day it was used. If Android runs the job far less often (app standby, or the head unit's power states), the fix to weigh is a foreground service, which raises the risk in R11.
+15. **The hourly MX+ visit.** With the MX+ chosen, stay on another app for over an hour with the truck on. **Pass:** an `mx_visit` row, the MX+ free afterwards, and no new codes with `./probe dtc -t elm-bt:auto` before and after. Also confirm `IGNITION_STATE` reads 4 with the truck on: if the truck doesn't offer it, no visit ever happens (fail safe), and this needs another "truck is on" signal. Note whether the job and the MX+ still run with the truck off and charging (with item 11).
+16. **USB export.** In Park, plug a FAT32 stick into the head unit, Trends › Export CSV, pick the stick. **Pass:** the file opens on the laptop. Unverified on Android 14 (`docs/research/gm-platform.verify.md`). If there's no picker or no stick in it, the app says so; fall back to extending Send to laptop.
+17. **Find the Ah deviation DID.** Car Scanner's "battery total energy storage capacity deviation" (22 Ah on this truck, 0–50, usually 10–30) has no known DID. It needs an attended read-only scan of more BECM ranges (§3), or Car Scanner's own log. Then add it to the profile as `capacity_deviation`: the Live tile and the log's `ah_deviation` column pick it up with no code change, from that day on.
+
+### Known defects in 0.5.0
+
+From an independent review of the published source against 0.4.0 (2026-11-04), run on fake adapters and simulated readings, never on the truck. It found nothing that changes what goes on the bus beyond the seven added `0x22` reads. The first four were each confirmed by a second reviewer who tried to refute them.
+
+- **Major: saved capacity forgets where it came from.** `LinkService.passOn` falls back to `bms_energy_at_100_kwh` and `ah_nominal_est`, and `SavedCapacity` stores no origin. After an app restart an estimate shows as "last read" with no est. marker, a real read loses its unverified marker, and an estimate can overwrite a real read. Fix: save only `capacity_kwh` and `capacity_ah`, or store the origin and status with each value.
+- **Major: the energy sign can settle wrong.** `SignalCheck` can reach sign -1 after a battery-level rise of about 0.8 kWh, and the error stays in `usedWh` for the session: 1.68 mi/kWh against a true 1.40 after 30 min at 40 kW. That rise has not been seen on the truck. `EnergyMeasureTest.aWobblingLevelDoesNotMoveTheFigure` passes only because of its start phase: 23 of 40 phases fail. Fix: judge only when signal and level both pass the minimum in the same direction, and don't flip an established sign. Until then, a negative or implausibly low kWh used means Reset session, in Park.
+- **Minor: Simple hides link stops.** It opens the MX+ link but gets no `LiveState`, so a bus error shows nothing and offers no Retry, and `LinkEngine.attach` clears the stop on the next visit more than 15 s later.
+- **Minor: Disconnect isn't always immediate.** A Bluetooth connect already running finishes first, up to 10 s (`CONNECT_TIMEOUT_MS`, the same in 0.4.0), and a running Test link finishes first too. Nothing is written after the tap, except the rest of that Test link's adapter setup.
+- **Minor, from one reviewer, not independently verified:** "Read X ago" counts from the last change of value, not the last read (`LinkService.kt:92`). When pack readings stop, 10 s of distance counts with no energy (`SessionTracker.kt:750`). The nominal capacity reads "Usable now" while the car service is down (`SimpleModel.kt:424`). The 27AE fit check is skipped when energy or SoC is missing (`Derive.kt:75`). The session note compares different time spans (`SimpleModel.kt:230`). The rate step has no time limit after a battery-level outage (`SessionTracker.kt:775`).
+- **Stale comments:** `AndroidWiringTest.theObdEngineAttachesOnlyWhenWanted`, `AppTabTest` and `SimpleScreen.kt:92` still say Simple doesn't use the MX+.
+- **Risks only the truck can answer:** the poller has no ignition check and goes quiet only once modules stop answering. Simple is the default tab and now polls, so items 1 and 11 and the 12 V drain test matter more. Android may freeze the process before the 15 s grace ends, which could hold the MX+ socket. Paging an absent MX+ from Simple, up to once a minute, might disturb phone audio.
+
+### Low-priority unknowns
+
+What each of the four `2AF7` values means; what the `2B43` per-module values mean (only the module count is established); the rest of the `5401` enum; the layouts of `2AF3`, `2AF4`, `2AF8` and `2AF9`.
+
+### Not built, only if asked
+
+- Ah by coulomb counting, with persistence across sessions, and capacity-estimate quality over several charges.
+- A poll-tier setting in the app.
+- BLE as a second transport.
+- Discovery `scan` of more BECM ranges for isolation resistance and similar (GM's tool shows these): parked, attended, rate-limited, with DTC bracketing.
+- Contributing the confirmed Silverado EV DIDs back to OBDb (its Silverado EV signal set is currently empty).
+
+---
+
+## 3. Safety model: how "no truck impact" is enforced
+
+Tests that enforce this: `tools/probe/tests/test_probe.py`, and in the app `SafetyTest`, `ElmLinkHardeningTest`, `SourceSafetyTest`, `AndroidWiringTest`, `DrivingStateTest`, `DashLayoutTest` and `PollerSleepTest`.
+
+1. **Read-only protocol allowlist** (`tools/probe/src/ultium_probe/safety.py`, mirrored in the app in `obd/Safety.kt` and `obd/ElmTransport.kt`). Only these may be sent:
+   - `22 <DID>` with one DID, to a physical diagnostic address (`0x14DA<ecu>F1` / `0x18DA<ecu>F1` only)
+   - OBD `01`/`09` broadcasts, on `0x18DB33F1` only
+   - OBD `03`/`07`/`0A` DTC reads
+
+   Everything else is refused before transmission and unit-tested. That includes:
+   - services `10`/`11`/`14`/`27`/`28`/`2E`/`2F`/`31`/`34–38`/`3D`/`3E`/`85`
+   - OBD `04`/`08`
+   - multi-DID reads
+   - any other CAN ID, including 11-bit
+
+   The adapter link has its own guards:
+   - Its command set is allowlisted. Every protocol and addressing setting (`ATE0`, `ATH1`, `ATSP7`, `ATCP`, `ATSH`, `ATCRA`, `ATFCS*`) must be acknowledged with `OK`. Cosmetic ones (`ATL0`, `ATS0`, `ATCAF1`, `ATAT1`, `ATST`) are best-effort.
+   - Protocol auto-search is never run.
+   - A bare CR is refused; it makes an ELM repeat its last bus message.
+   - At connect, and after a timeout or Ctrl-C, the probe never writes to the adapter until it has shown its prompt and gone quiet. A busy ELM drops a character and can turn a read into another service. The app's `ElmLink.settle` applies the same rule.
+   - Anything else stops the run: an adapter reset (banner, `LV RESET`, echo coming back), a late error, unexpected output between commands, or a rejected setting.
+
+   The MX+ has no autonomous polling. Its phone app's write and clear-codes features are never used on this truck, because the probe's allowlist can't cover another app.
+2. **Gentle bus use.**
+   - One outstanding request at a time, at least 75 ms apart.
+   - Tiered polling: current and voltage about 1 s, SoC and cell stats 2 s, cell array 5 s, temperatures 10 s, energy and range 30 s.
+   - A busy reply (`7F 22 21`) gets one retry, then that DID is skipped. Repeated busy replies stop a scan.
+   - Bus or adapter errors are never treated as silence. They stop the run.
+3. **Let the truck sleep.** The OBD port is always powered.
+   - When modules stop answering for 3 polling cycles, `poll` exits.
+   - While the truck dozes off, only a single known-good read is retried, every 2 s, so at most about 4–5 requests go unanswered. Tested.
+   - In watch mode (`--keep-watching`, and the app: `link/LinkEngine.kt`), **nothing is sent on the bus**. Once a minute it reads only the adapter's own voltage, which is adapter-local. It sends a single read only when that voltage rises 0.5 V above its lowest value since sleep, meaning the truck's DC-DC came on. A failed voltage reading never triggers a read. Unit tests check zero requests while asleep, and exactly one per rise (`PollerSleepTest`, `test_probe.py`).
+   - The app polls while Live, Diagnostics in Park or Battery Glance is visible, and on Simple with a chosen MX+ that isn't disconnected (`UiSettings.wantsObd`). With none of them visible nothing is sent; the socket stays open, silent, for at most 15 s in case a screen comes back, then closes and releases the MX+ (`link/LinkService.kt` header, `LinkEngine.GRACE_MS`). Disconnect closes it at once and nothing reopens it until Connect, app restarts included (`LinkEngine.setDisconnected`).
+   - The battery log (`log/LogHub.kt`) adds one thing: once an hour, from a job, a **visit** connects to the MX+ for one poll cycle, keeps one row and lets go, through the same `LinkEngine`, guards and read-only allowlist. Only when the truck positively reports ignition ON or START, an MX+ is chosen and not disconnected, and demo data is off; unknown ignition means no visit (`LogPolicy.visitAllowed`, `LogModelTest`, `LogWiringTest`). So a visit can't wake a sleeping truck or keep it awake. Otherwise MX+ rows only listen to what a screen is already reading, one row a minute.
+   - Limits:
+     - A wake can be missed if the 12 V doesn't rise at least 0.5 V. Then restart `poll` by hand.
+     - An adapter that can't report voltage gets a single read at 1, 5 and 30 minutes, then polling stops.
+   - The MX+ has its own low-power sleep, about 2 mA asleep (research table). The 12 V drain test in §2 checks the whole setup; it has not been run.
+4. **DTC bracketing.** Scans read the gateway's OBD-mode trouble codes (03/07/0A) before and after.
+   - A scan refuses to start if the baseline read fails.
+   - It reads the codes again after Ctrl-C, a busy storm or a silence stop. After an adapter or bus error it stops writing and tells you to run `dtc` yourself.
+   - It reports any new code.
+   - It can't see UDS-only codes inside individual modules, so also watch the cluster and center screen for messages.
+5. **Physical:**
+   - Connect the adapter through a **pin-limited extension or breakout box that passes only pins 4, 5, 6, 14 and 16**. Check it with a meter before first use. The hardware list calls it optional, and the repo doesn't record whether one is fitted (§2).
+   - The MX+, like most multi-protocol adapters, has contacts on other pins for GM's older single-wire (pin 1) and medium-speed CAN. On Global B, pin 1 reportedly carries a secondary CAN-FD network (secondary source) and four pins may carry Ethernet. The probe never selects those protocols. A pin-limited extension keeps them physically disconnected; the Hummer EV project ran without one, but it's cheap insurance.
+   - The adapter's protocol is pinned to 29-bit CAN at 500 kbit/s, so it never runs a protocol search.
+   - No splicing, taps or splitters with electronics.
+   - The extension also keeps the adapter away from the driver's knee and pedals.
+6. **Head unit:**
+   - No exploits, sideloading, developer options, firmware or calibration changes.
+   - The app never calls `CarPropertyManager.setProperty` or any write API.
+   - It never calls `insert`, `update`, `delete` or `call` on any GM content provider (e.g. `com.gm.vehicleinfo.*`), some of which accept writes from any app, and it never binds GM private services. `SourceSafetyTest`, a unit test, enforces this.
+   - A Play internal-test install is an ordinary app install and is removable at any time.
+7. **Driver distraction:** the main screen is marked distraction-optimized (decision in §7), so the app locks itself down out of Park.
+   - `DrivingPolicy.restricted` (`vehicle/DrivingState.kt`) is fail-safe: on a car device the app is restricted unless the UX restrictions service positively says otherwise, and a gear out of Park or a speed also restricts (in Park, up to 0.5 m/s counts as sensor noise).
+   - Diagnostics shows only "Available in Park" (`ui/AppShell.kt`). No pairing, resets, toggles, dialogs or tap details.
+   - Live has no cell heatmap (`ui/live/LiveScreen.kt`), and values change at most once a second.
+   - Tests: `DrivingStateTest`, `DashLayoutTest.drivingLocksEverythingElseAway`, `AndroidWiringTest.diagnosticsAndPairingAreReachableOnlyInPark`, `AndroidWiringTest.diagnosticsStartersRefuseWhileRestricted`, `SourceSafetyTest.distractionOptimizedActivitiesAreExactlyTheAllowlist`.
+8. **Privacy:** the VIN appears in several DIDs (`F190`, `4193`). `obd` and `read` mask VIN-shaped replies unless you pass `--show-vin`, and `scan` and `poll` always mask them. The app masks them too (`obd/Vin.kt`, `report/Report.kt`). `logs/` is git-ignored.
+
+Residual risks, stated plainly:
+- Any OBD device on an always-powered port can drain 12 V if misconfigured. The sleep logic mitigates it, but the drain test has not been run, so this is still untested.
+- GM OTA updates can change module behavior. The app detects silent modules and falls back.
+- Unplug the adapter before service visits.
+
+---
+
+## 4. Data map: dashboard field → source
+
+`tools/probe/dids/silverado_ev.toml` is the source of truth: 47 entries `confirmed`, 10 `unverified` (`2AF1`, `2AF2`, `2AF3`, `2AF4`, `2AF8`, `2AF9`, `0046`, `434F`, `4127`, `4124`). `confirmed` means the read works on this truck and the value is plausible; the table says where a meaning is still open. Figures are from session 1 (truck idle, in Park).
+
+Addressing: module `ecu` at priority 0x14 sends `0x14DA<ecu>F1` and gets the answer on `0x142AF1<ecu>`. At priority 0x18 it sends `0x18DA<ecu>F1` and gets `0x18DAF1<ecu>`.
+
+| Dashboard field | Source | Decode | This truck |
+|---|---|---|---|
+| SoC (matches dash) | BECM `CB` @0x14, DID `27C6` | u16 × 100/65535 % | confirmed: 41.88 % (dash 42 %) |
+| Energy remaining | `CB 27AF` | u16 / 100 kWh | confirmed: 85.3 kWh |
+| BMS energy at 100 % | derived `27AF ÷ (27C6/100)` | — | about 203.5 kWh (175–216 kWh seen across other trucks, by pack) |
+| Range (BMS) | `CB 27C7` | u24 / 103 mi | confirmed: 187.6 mi; compare with the dash |
+| Distance since full | `CB 27C0` | u24 × 0.0621371 mi | confirmed |
+| Cell group avg / min / max | `CB 2AF6` (modules 1–12) and `CB 2AF5` (modules 13–24), bytes 0–5 | u16 / 10000 V each | confirmed: avg 3.6729 / 3.6732 V |
+| Location of min / max group | `CB 2AF6`, `CB 2AF5` bytes 6–9 | (group #, module #) × 2 | confirmed: `2AF6` matched the array |
+| **All cell-group voltages** | `CB 2AE1…2AF0`, 12 records of 3 bytes each | u16 / 10000 V + module # | confirmed: 192 groups, 3.6694–3.6771 V; each half sums to the pack voltage |
+| Pack voltage | Drive unit `17 2885` (and `1D 2885`) | u16 / 100 V | confirmed: 352.7 / 353.6 V |
+| Pack voltage (BECM, 4 points) | `CB 2AF7` | u16 / 100 V each | read works, 352.5–352.7 V; meaning per point TBD |
+| **Pack current** | `17 2414` | s16 / 20 A, + = discharge | answers: 0.0 to +0.6 A idle; sign under load open. `1D 2414` is not on this truck (NRC 0x31) |
+| Power in/out | derived V × A | kW | not displayed: it measures the session's energy (`SessionTracker.addPack`); the truck's dash has the kW |
+| Module temperatures (24) | `CB 2AF1` | u8 − 80 °C (disputed: (x−40)/2) | unverified: 16–17 °C, likely x−80 |
+| Module temperatures, second set | `CB 2AF2` | u8 − 80 °C | unverified: all 17 °C |
+| Temp stats with location | `CB 2AF3`, `2AF4` | raw for now | unverified, layout unknown |
+| Pack temp candidate | `CB 0046` | u8 − 40 °C | unverified: 20 °C, plausible |
+| HV battery temp | BCM `40 434F` @0x18 | u8 − 40 °C (Lyriq) | **wrong here:** 60 °C with a 17 °C pack. Polled, never displayed (`Profile.NOT_DISPLAYED`) |
+| Battery temp A / B | `40 4127`, `4124` @0x18 | u16 / 32 °C | unverified: 32.75 / 13.06 °C, meaning unclear. Polled, never displayed |
+| Coolant temps 1/2 | `40 40E5`, `40E6` @0x18 | u16 / 32 °C | confirmed: 21.6 / 19.6 °C, plausible |
+| Charge pilot current | `40 4149` @0x18 | u16 / 10 A | confirmed: 10.0 A (unplugged default); charging open |
+| Module count | non-zero bytes 2–25 of `CB 2B43` | count | confirmed: 24 (others: 20 on a 2024 truck, 24 on a 2025 Sierra); per-module meaning open |
+| BMS-internal SoC-like value | `CB 2B43` byte 0 | u8 × 100/255 % | read works; does not equal dash SoC |
+| Series count | `2885 ÷ 2AF5 avg` | ≈ 96 (24 modules), ≈ 80 (20 modules, inferred), unknown (14); detected at runtime | 96 |
+| Charge state code | `CB 5401` | enum (partly known) | confirmed: 0 idle; others open |
+| 12 V system | `CB 33E5`, `17 33E5` (1D also answers) | u8 / 10 V | confirmed: 12.4 V |
+| Unknown | `CB 2AF8`, `2AF9` | raw | unverified: meaning unknown |
+| Capacity kWh | BECM `27AE` (`battery_capability`) ÷ 100, kept in `capacity_kwh` while within 15 % of energy ÷ SoC | kWh | unverified: compare with Car Scanner's Battery Capability |
+| Capacity Ah | BECM `4676` (`pack_capacity_ah`) ÷ 100 is a guess, kept in `capacity_ah` only if it fits the pack voltage; else `ah_nominal_est` = kWh ÷ (series groups × 3.6 V), labelled as calculated | Ah | unverified. Coulomb counting (∫ `2414` dt ÷ ΔSoC, ΔSoC ≥ ~10 %) is not built |
+| Capacity deviation | Car Scanner's "battery total energy storage capacity deviation": integer, 0–50, 22 on the owner's screen. DID unknown; a profile field named `capacity_deviation` shows it | Ah | to find with `./probe scan` on the BECM |
+| SoC / kWh / capacity (VHAL) | `EV_BATTERY_LEVEL` 0x11600309, `INFO_EV_BATTERY_CAPACITY` 0x11600106 | Wh | read live on this truck (also Blazer EV) |
+| Range (VHAL) | `RANGE_REMAINING` 0x11600308 | m | read live on this truck (also Blazer EV) |
+| Charge rate (VHAL) | `EV_BATTERY_INSTANTANEOUS_CHARGE_RATE` 0x1160030C | mW ± | used for energy only once it agrees with the battery level (`SignalVerdict`); sign and liveness while driving still to read from the report |
+| Outside temp | `ENV_OUTSIDE_TEMPERATURE` 0x11600703 | °C | read live on this truck (also Blazer EV) |
+| Speed | `PERF_VEHICLE_SPEED` 0x11600207 | m/s | used by Simple and the driving state; 0.5 m/s noise allowance in Park unconfirmed |
+| Driving restrictions (UI gating) | `CarUxRestrictionsManager` (primary); `GEAR_SELECTION` 0x11400400 as a display hint | — | AOSP standard; the moving mode stays up in Drive |
+| Usable capacity now | `EV_CURRENT_BATTERY_CAPACITY` 0x1160030D | Wh | not offered on this truck (photo, 2026-11-03; build unknown). Reports elsewhere: Android 14 only, not exposed on 12L. The app falls back to nominal capacity |
+
+The battery log's columns (`log/LogModel.kt`, one row per CSV line):
+
+| Truck API (`source=car`): hourly, and every 5 min while a screen is up | MX+ (`source=mx`): every minute while connected, including on Trends in Park |
+|---|---|
+| `outside_c`, `car_soc_pct` (level ÷ capacity), `car_energy_kwh`, `car_capacity_kwh`, `car_capacity_nominal`, `car_nominal_kwh`, `car_usable_kwh`, `car_range_km`, `car_plugged`, `car_port_open`, `car_charge_kw`, `car_charge_state`, `car_charge_limit_pct`, `car_draw_limit_a`, `car_charge_minutes`, `car_battery_temp_c`, `car_regen_state`, `car_ignition`, `car_gear`, `car_speed_kmh` | `soc_pct`, `bms_soc_pct`, `energy_kwh`, `bms_range_km`, `since_full_km`, `capacity_kwh` + raw `becm_27ae_kwh`, `implied_kwh` (energy ÷ SoC), `capacity_ah` + raw `becm_4676_ah`, `nominal_ah`, `ah_deviation`, `module_temp_min_c`/`max`, `cell_min_v`/`max`, `cell_spread_mv`, `cell_avg_a_v`/`b`, `cell_min_group`/`max`, `coolant_1_c`/`2`, `pack_temp_c`, `battery_temp_a_c`/`b`, `hv_battery_temp_c`, `pack_v`, `pack_a`, `pack_kw`, `pack_v_du2`, `aux_12v_v`, `aux_12v_du_v`, `charge_state_code`, `evse_pilot_a`, raw `becm_27b9_raw`, `becm_2984_raw`, `becm_270d_raw`, `becm_28af_raw`, `becm_2770_raw` |
+
+`car_nominal_kwh` is a fixed figure, so it's a flat line whatever the pack's health. `car_usable_kwh` stays empty until the truck offers `EV_CURRENT_BATTERY_CAPACITY`. So the truck API can't show capacity changing on this truck: that takes the MX+. `car_capacity_kwh` is whichever of the two the SoC was worked out from. The `becm_*_raw` columns are short BECM values of unknown meaning: compared with Car Scanner, they may identify the deviation PID. `module_temp_*` are `2AF1` sensors at u8 − 80, still unverified; if the scale changes, the logged values can be converted back. `nominal_ah` is `implied_kwh` rescaled, not an Ah measurement. `27AE` and `4676` are kept raw as well as checked, so history stays usable if either turns out wrong.
+
+Not reachable: isolation resistance, contactor state, power limits, SoH %. GM's dealer tool shows isolation resistance from the BECM, but no DID is publicly known. Discovery may find some, read-only (§2, not built).
+
+---
+
+## 5. Truck findings
+
+The dated record, with every value and the raw-log references, is [`docs/session1-results.md`](docs/session1-results.md). The headlines:
+
+- **The pack:** 2024 truck, 24 modules (Max Range), 96 series groups: two 400 V halves of 12 modules, 192 cell-group records. Each half sums exactly to the pack voltage. Cell groups within a module agree within about 0.3 mV, while module averages differ by up to 7.7 mV.
+- **Who answers:** battery `CB` at both 0x14 and 0x18, drive unit `17` at both, body controller `40` at 0x18. `1D:2414` doesn't exist here. The census named only the gateway.
+- **Traps:** `2AF5`'s min/max cover half B only; pack min/max need `2AF6` + `2AF5` or the full array. `40:434F` reads 60 °C and is not displayed.
+- **Safety:** about 400 requests, all read-only, at least 75 ms apart. No gateway trouble codes before or after, and no warnings.
+
+**Window width (observation for layout work, from the owner's photo of Diagnostics in Park, 2026-11-04, on 0.4.0).** The header shows the tabs but no "Silverado Stats" title and no "Read-only" note. `DashLayout.of` drops the note, then the title, when its budget for the widest header (the Simple tab with demo chip and long summary) doesn't fit the window, whichever tab is showing. At font scale 1.0, parked, the title needs a window at least 2032 dp wide when it is 720 dp or taller, 1715 dp when it is 560–719 dp tall, and 1409 dp when shorter. So either the truck's window is narrower in dp than both proxy examples in `DashLayoutTest.knownWindows` (2331 x 735 and 2103 x 602 dp, which both draw the title), or its font scale is well above 1.0. The full-size screenshots in `docs/images/` may therefore show a larger layout than the truck gets; the `-compact` ones have no title either. The real window size, density and font scale are still unknown (§2, item 12).
+
+---
+
+## 6. Architecture and design rules
 
 ```
                    Silverado EV
@@ -52,13 +277,14 @@ Uncertain, to be decided by on-truck tests (Phases 1 and 3):
  │                 │ the app pairs with the MX+ and connects    │
  │                 │ out to it (no phone in the loop)           │
  │  ┌──────────────┴───────────────────────────────────────┐    │
- │  │ Head unit (AAOS 12L/14, arm64)                       │    │
+ │  │ Head unit (AAOS, arm64; build not recorded yet)      │    │
  │  │  Silverado Stats app (Play internal test)            │    │
  │  │   ├─ OBD client: allowlist, Ultium addressing,       │    │
  │  │   │  tiered poller, sleep back-off                   │    │
  │  │   ├─ VHAL reader: CarPropertyManager, read-only      │    │
- │  │   ├─ Model: derived kW, spreads, estimates, logs     │    │
- │  │   └─ UI: full dashboard (Park) / glance (Drive)      │    │
+ │  │   ├─ Model: derived kW, spreads, measured mi/kWh     │    │
+ │  │   └─ UI: Simple and Live (Park and Drive),           │    │
+ │  │      Diagnostics (Park), Battery Glance (fallback)   │    │
  │  └──────────────────────────────────────────────────────┘    │
  └──────────────────────────────────────────────────────────────┘
    Laptop: discovery and logging with tools/probe (same MX+,
@@ -69,311 +295,89 @@ Uncertain, to be decided by on-truck tests (Phases 1 and 3):
 Design rules:
 - One DID profile is shared by the probe and the app. `tools/probe/dids/silverado_ev.toml` is the source of truth and is exported to JSON for the app.
 - The read-only allowlist is enforced at the lowest transport layer in both the probe and the app, and unit-tested so nothing else can be sent.
-- The app is the Bluetooth client and does the pairing itself, because GM's Bluetooth settings may only list phones. The MX+ serves one host at a time, so the phone's OBD app must not be holding it.
+- The app is the Bluetooth client and does the pairing itself, because GM's Bluetooth settings may only list phones. The MX+ serves one host at a time, so the phone's OBD app must not be holding it, and the laptop and the head-unit app exclude each other.
+- Use integer property IDs, because GM strips the `VehiclePropertyIds` field names at runtime.
+- The battery log lives in SQLite in the app's private storage, some tens of MB a year at most, far under CarWatchdog's limits. **Uninstalling the app deletes it**, so export first. Demo mode shows simulated rows on Trends, but they are never stored or exported. Trends is parked only and fits one page.
+- There's no logcat on the truck, so the Diagnostics screen is how we learn what the truck exposes. **Send to laptop** posts the full report to `./probe receive`, which saves it under `logs/reports/`; the head unit dials out to it. It is untried on this truck. It needs a hotspot both the head unit and the laptop can join, and some GM EVs reportedly can't join Wi-Fi (`docs/play-console.md`). Otherwise, photograph the screen, though some report figures appear on no screen (§2, item 5).
+- Simple and Live fit one page without scrolling, sized from the window the app actually got (`ui/layout/DashLayout.kt`, `DashLayoutTest`, `AndroidWiringTest.simpleAndLiveNeverScroll`).
+- Kotlin and Jetpack Compose, minSdk 32, targetSdk 35, compileSdk 36, no native code (arm64 head unit).
+
+Emulator notes:
+- Google AAOS API 34 and 35 images. The current SDK channel lists no API 32 image, so API 32 can't be emulated here. What the truck runs is still unrecorded (§2, item 12).
+- Use no-Play images for distraction-optimization tests. Play images honor it only for Play-installed apps, and the custom 17.7" profile also needs a no-Play image.
+- 2914×1134 px at 200 dpi, the Blazer EV panel, is the best public proxy for the 17.7" (but see the window observation in §5).
+- Optionally GM's Lyriq image, from the GM SDK update site.
 
 ---
 
-## 3. Data map: dashboard field → source
+## 7. Limits and decisions
 
-Status key:
-- **S** = seen on a Silverado or Sierra EV by another owner
-- **U** = seen on another Ultium vehicle (Hummer EV, Lyriq, Equinox EV, BrightDrop)
-- **?** = unverified
+### What is and isn't possible
 
-Addressing: module `ecu` at priority 0x14 sends `0x14DA<ecu>F1` and gets the answer on `0x142AF1<ecu>`. At priority 0x18 it sends `0x18DA<ecu>F1` and gets `0x18DAF1<ecu>`.
-
-| Dashboard field | Source | Decode | Status |
-|---|---|---|---|
-| SoC (matches dash) | BECM `CB` @0x14, DID `27C6` | u16 × 100/65535 % | S |
-| Energy remaining | `CB 27AF` | u16 / 100 kWh | S |
-| BMS energy at 100 % | derived `27AF ÷ (27C6/100)` | — | S (varies 175–216 kWh by pack) |
-| Range (BMS) | `CB 27C7` | u24 / 103 mi | S |
-| Cell group avg / min / max | `CB 2AF6` (modules 1–12) and `CB 2AF5` (modules 13–24), bytes 0–5 | u16 / 10000 V each | ✅ confirmed on your truck |
-| Location of min / max group | `CB 2AF5` bytes 6–9 | (group #, module #) × 2 | U (Equinox), S-pattern |
-| **All cell-group voltages** | `CB 2AE1…2AF0`, 12 records of 3 bytes each | u16 / 10000 V + module # | U (Equinox, 80 groups); BT1 inferred |
-| Pack voltage | Drive unit `17 2885` (and `1D 2885`) | u16 / 100 V | S |
-| Pack voltage (BECM, 4 points) | `CB 2AF7` | u16 / 100 V each | S (meaning per point TBD) |
-| **Pack current** | `17 2414` | s16 / 20 A, + = discharge | U (Hummer, Lyriq, Equinox) |
-| **Power in/out** | derived V × A | kW | depends on `2414` |
-| Module temperatures (24) | `CB 2AF1` | u8 − 80 °C (disputed: (x−40)/2) | S (bytes), scaling ? |
-| Temp stats with location | `CB 2AF3`, `2AF4` | raw for now | S (layout ?) |
-| HV battery temp | BCM `40 434F` @0x18 | u8 − 40 °C | U (Lyriq) |
-| Coolant temps 1/2 | `40 40E5`, `40E6` @0x18 | u16 / 32 °C | U |
-| Charge pilot current | `40 4149` @0x18 | u16 / 10 A | U |
-| Module count | non-zero bytes 2–25 of `CB 2B43` | count | S (20 on a 2024 truck, 24 on 2025 Sierra) |
-| Series count | `2885 ÷ 2AF5 avg` | ≈ 96 (24 modules), ≈ 80 (20 modules, inferred), unknown (14); detected at runtime | S |
-| Charge state code | `CB 5401` | enum (partly known) | S |
-| 12 V system | `CB 33E5`, `17 33E5` (1D also answers) | u8 / 10 V | S |
-| Capacity Ah (est.) | ∫ `2414` dt ÷ ΔSoC over any stretch with ΔSoC ≥ ~10 % | Ah | derived |
-| SoC / kWh / capacity (VHAL) | `EV_BATTERY_LEVEL` 0x11600309, `INFO_EV_BATTERY_CAPACITY` 0x11600106 | Wh | seen on Blazer EV |
-| Range (VHAL) | `RANGE_REMAINING` 0x11600308 | m | Blazer EV |
-| Charge rate (VHAL) | `EV_BATTERY_INSTANTANEOUS_CHARGE_RATE` 0x1160030C | mW ± | Blazer EV (0 in Park) |
-| Outside temp | `ENV_OUTSIDE_TEMPERATURE` 0x11600703 | °C | Blazer EV |
-| Driving restrictions (UI gating) | `CarUxRestrictionsManager` (primary); `GEAR_SELECTION` 0x11400400 as a display hint | — | AOSP standard |
-| Usable capacity now | `EV_CURRENT_BATTERY_CAPACITY` 0x1160030D | Wh | Android 14 only; GM didn't expose it on 12L |
-
-Not reachable: isolation resistance, contactor state, power limits, SoH %. GM's dealer tool shows isolation resistance from the BECM, but no DID is publicly known. Discovery may find some in Phase 2, read-only.
-
----
-
-## 4. Safety model: how "no truck impact" is enforced
-
-1. **Read-only protocol allowlist** (`tools/probe/src/ultium_probe/safety.py`, mirrored in the app). Only these may be sent:
-   - `22 <DID>` with one DID, to a physical diagnostic address (`0x14DA<ecu>F1` / `0x18DA<ecu>F1` only)
-   - OBD `01`/`09` broadcasts, on `0x18DB33F1` only
-   - OBD `03`/`07`/`0A` DTC reads
-
-   Everything else is refused before transmission and unit-tested. That includes:
-   - services `10`/`11`/`14`/`27`/`28`/`2E`/`2F`/`31`/`34–38`/`3D`/`3E`/`85`
-   - OBD `04`/`08`
-   - multi-DID reads
-   - any other CAN ID, including 11-bit
-
-   The adapter link has its own guards:
-   - Its command set is allowlisted. Every protocol and addressing setting (`ATE0`, `ATH1`, `ATSP7`, `ATCP`, `ATSH`, `ATCRA`, `ATFCS*`) must be acknowledged with `OK`. Cosmetic ones (`ATL0`, `ATS0`, `ATCAF1`, `ATAT1`, `ATST`) are best-effort.
-   - Protocol auto-search is never run.
-   - A bare CR is refused; it makes an ELM repeat its last bus message.
-   - At connect, and after a timeout or Ctrl-C, the probe never writes to the adapter until it has shown its prompt and gone quiet. A busy ELM drops a character and can turn a read into another service.
-   - Anything else stops the run: an adapter reset (banner, `LV RESET`, echo coming back), a late error, unexpected output between commands, or a rejected setting.
-
-   The MX+ has no autonomous polling. Its phone app's write and clear-codes features are never used on this truck, because the probe's allowlist can't cover another app.
-2. **Gentle bus use.**
-   - One outstanding request at a time, at least 75 ms apart.
-   - Tiered polling: current and voltage about 1 s, SoC and cell stats 2 s, cell array 5 s, temperatures 10 s, energy and range 30 s.
-   - A busy reply (`7F 22 21`) gets one retry, then that DID is skipped. Repeated busy replies stop a scan.
-   - Bus or adapter errors are never treated as silence. They stop the run.
-3. **Let the truck sleep.** The OBD port is always powered.
-   - When modules stop answering for 3 polling cycles, `poll` exits.
-   - While the truck dozes off, only a single known-good read is retried, every 2 s, so at most about 4–5 requests go unanswered. Tested.
-   - In watch mode (`--keep-watching`, `serve`, and later the app), **nothing is sent on the bus**. Once a minute it reads only the adapter's own voltage, which is adapter-local. It sends a single read only when that voltage rises 0.5 V above its lowest value since sleep, meaning the truck's DC-DC came on. A failed voltage reading never triggers a read. Unit tests check zero requests while asleep, and exactly one per rise.
-   - Limits:
-     - A wake can be missed if the 12 V doesn't rise at least 0.5 V. Then restart `poll` by hand.
-     - An adapter that can't report voltage (SocketCAN) gets a single read at 1, 5 and 30 minutes, then polling stops.
-   - The MX+ has its own low-power sleep, about 2 mA asleep (research table). The Phase 2 drain test checks the whole setup.
-4. **DTC bracketing.** Scans read the gateway's OBD-mode trouble codes (03/07/0A) before and after.
-   - A scan refuses to start if the baseline read fails.
-   - It reads the codes again after Ctrl-C, a busy storm or a silence stop. After an adapter or bus error it stops writing and tells you to run `dtc` yourself.
-   - It reports any new code.
-   - It can't see UDS-only codes inside individual modules, so also watch the cluster and center screen for messages.
-5. **Physical:**
-   - The adapter connects through a **pin-limited extension or breakout box that passes only pins 4, 5, 6, 14 and 16**. Check it with a meter before first use.
-   - The MX+, like most multi-protocol adapters, has contacts on other pins for GM's older single-wire (pin 1) and medium-speed CAN. On Global B, pin 1 reportedly carries a secondary CAN-FD network (secondary source) and four pins may carry Ethernet. The probe never selects those protocols. A pin-limited extension keeps them physically disconnected; the Hummer EV project ran without one, but it's cheap insurance.
-   - The adapter's protocol is pinned to 29-bit CAN at 500 kbit/s, so it never runs a protocol search.
-   - No splicing, taps or splitters with electronics.
-   - The extension also keeps the adapter away from the driver's knee and pedals.
-6. **Head unit:**
-   - No exploits, sideloading, developer options, firmware or calibration changes.
-   - The app never calls `CarPropertyManager.setProperty` or any write API.
-   - It never calls `insert`, `update`, `delete` or `call` on any GM content provider (e.g. `com.gm.vehicleinfo.*`), some of which accept writes from any app, and it never binds GM private services. A Phase 4 lint check enforces this.
-   - A Play internal-test install is an ordinary app install and is removable at any time.
-7. **Driver distraction:** see §6. Detailed screens only in Park.
-8. **Privacy:** the VIN appears in several DIDs (`F190`, `4193`). `obd` and `read` mask VIN-shaped replies unless you pass `--show-vin`, and `scan`, `poll` and `serve` always mask them. `logs/` is git-ignored.
-
-Residual risks, stated plainly:
-- Any OBD device on an always-powered port can drain 12 V if misconfigured. Mitigated by the sleep logic and the drain test.
-- GM OTA updates can change module behavior. The app detects silent modules and falls back.
-- Unplug the adapter before service visits.
-
----
-
-## 5. Phases
-
-### Phase 0: prerequisites (you, about 1 hour plus shipping)
-- [ ] **Truck facts.** Model year, trim, pack (14/20/24 modules, i.e. Standard/Extended/Max Range), and the infotainment build: Settings → System → About, a string containing `SQBR…` (Android 12L) or `UQBM` (Android 14). Note whether the Android update is installed: GM Update 662.30 on MY2024, possibly a different 66x number on later years, all field action N25-253201. Don't toggle Developer Options.
-- [ ] **Connectivity.** Is OnStar / Connected Services data active? Play Store installs depend on it. The truck's Wi-Fi hotspot is only needed to send diagnostics reports to the laptop; photos of the screen work too.
-- [ ] **Google accounts.** Which Google account is signed into the truck's Play Store? It must be added as a tester. It can be the same as your developer account.
-- [ ] **Play developer account.** Personal accounts must complete identity and Android-device verification. The device step needs a physical Android 10+ phone with the Play Console app, and identity checks can take days. Check it's done.
-- [ ] **Hardware** (see §7): your **OBDLink MX+**; nothing to buy. Optional: an **OBD breakout box or extension that passes only pins 4/5/6/14/16**.
-- [x] **Android SDK packages.** Installed with your OK (platform 35, build-tools, emulator, AAOS images).
-
-### Phase 1: first truck session, laptop only (about 1 hour, parked, attended)
-Full step-by-step: **`docs/truck-connection.md`**. Summary:
-1. Pair the MX+ with the laptop over Bluetooth, with the phone's Bluetooth off so it doesn't hold the MX+.
-2. At the truck, in Park and on, check the probe finds the MX+.
-3. `./probe obd -t elm-bt:auto` lists the responding modules. Expect gateway `45`, drive units `17`/`1D`, body controller `40`, battery `CB` and brakes `28`.
-4. `./probe dtc …` records the baseline trouble codes.
-5. Find the priorities: `./probe read … --ecu CB --pri both --did 27C6`.
-6. Single reads of pack voltage and current, the cell stats, the cell array (`2AE1` …) and the BCM temperatures.
-7. Run `poll` for 5–10 minutes, then switch the truck off. The poller exits once the modules go quiet. Note how long that takes, and stop it yourself after 10 minutes if it doesn't.
-8. Read DTCs again (no change expected). Unplug.
-
-**Exit criteria:**
-- The battery module answers at a known priority.
-- Pack current is confirmed, or a fallback is chosen: `1D:2414`, else power estimated from ΔkWh/Δt, plus VHAL charge rate while charging.
-- The cell array's layout and module count are known, or its absence is noted.
-- The time for modules to go quiet after truck-off with the poller running is recorded.
-- No new gateway DTCs and no new cluster messages.
-- Logs saved in `logs/`.
-
-### Phase 2: confirm and extend data (1–3 short sessions)
-- Promote each profile entry to `status = "confirmed"` with its real scaling. Settle the open ones:
-  - `2AF1` temperature scaling, against `40 434F` and the dash
-  - what the four `2AF7` values mean
-  - the `2B43` per-module values
-  - the `5401` codes while AC and DC charging
-- Charging sessions:
-  - AC charging: pilot current and `2414` sign.
-  - DC fast charging on an 800 V charger: how `2885` and `2AF5` behave when the pack halves switch to series.
-- Optional, parked and attended, rate-limited: discovery `scan` of more BECM ranges for isolation resistance and similar (GM's tool shows these), with DTC bracketing.
-- **12 V drain test.** Measure with an independent instrument: a logging multimeter or a clip-on 12 V battery monitor on the 12 V battery.
-  1. Baseline: adapter unplugged, truck off, 2–3 hours.
-  2. MX+ plugged in, laptop awake and within Bluetooth range:
-     ```bash
-     ./probe poll -t elm-bt:auto --profile tools/probe/dids/silverado_ev.toml --keep-watching --out logs/drain.jsonl
-     ```
-     Turn the truck off. The probe goes bus-silent once modules stop answering. When the MX+ itself sleeps, the run ends with `stopped: adapter link failed`. That's expected; note the time. Then leave it for the rest of the 2–3 hours, measured by the meter only.
-  3. Pass if there's no extra 12 V drop or wake-up compared with the baseline.
-  4. If there's extra drain, adjust the MX+ sleep settings in the OBDLink phone app, or unplug for long parking. `poll` logs the adapter's voltage every 30 s, so a drive log also shows whether the MX+ ever drops out on the road. Some Ultium trucks hold 11.7–12.2 V in Ready.
-- Export the confirmed profile for the app: `./probe export-profile --profile tools/probe/dids/silverado_ev.toml --out android/app/src/main/assets/profile.json`.
-
-**Exit:**
-- Profile entries confirmed or explicitly parked.
-- Pack current or its fallback decided.
-- Drain test passed and sleep thresholds set.
-- JSON exported.
-
-### Phase 3: app MVP with no adapter (VHAL only) and the distribution path (1–2 evenings)
-0. **Mockups at the real size.** Dashboard and glance screen at 2914×1134. You pick a layout and option A or B (§6).
-1. Scaffold the Kotlin app:
-   - Kotlin and Jetpack Compose, minSdk 32, targetSdk 35, no native code (arm64 head unit).
-   - Manifest: `android.hardware.type.automotive` required=true; `usb.host`, `wifi`, `bluetooth_le` required=false.
-   - Permissions: `CAR_INFO`, `CAR_ENERGY` (runtime grant), `CAR_ENERGY_PORTS`, `CAR_EXTERIOR_ENVIRONMENT`, `CAR_POWERTRAIN`, `CAR_SPEED` (runtime), `READ_CAR_DISPLAY_UNITS`, `INTERNET`, `ACCESS_NETWORK_STATE`, `ACCESS_WIFI_STATE`, `CHANGE_WIFI_STATE`, `CHANGE_NETWORK_STATE`, `BLUETOOTH_SCAN` (neverForLocation), `BLUETOOTH_CONNECT`.
-   - Use integer property IDs, because GM strips the `VehiclePropertyIds` field names at runtime.
-2. **Diagnostics screen first** (built: `android/`). It covers:
-   - every VHAL property the app can see, with value, status and permission
-   - driving-restriction state, display size and insets, build and network info
-   - an adapter link test that sends only adapter-local `ATZ`/`ATI`/`ATRV`, so no truck traffic
-   - a BLE scan
-
-   There's no logcat on the truck, so this screen is how we learn what the truck exposes. **Send to laptop** posts the full report to `./probe receive`, which saves it under `logs/reports/`. That needs the laptop on the truck's hotspot; otherwise, photograph the screen. The head unit dials out to it.
-3. Test in emulators:
-   - Google AAOS API 34 and 35 images. The current SDK channel lists no API 32 image; 12L behavior is checked on the truck itself.
-   - Use no-Play images for distraction-optimization tests. Play images honor it only for Play-installed apps, and the custom 17.7" profile also needs a no-Play image.
-   - A custom profile of 2914×1134 px at 200 dpi, the Blazer EV panel and the best public proxy for the 17.7".
-   - Optionally GM's Lyriq image, from the GM SDK update site.
-4. **Play Console setup** (you, about 30 minutes; exact clicks in `docs/play-console.md`):
-   1. Check Play Console › Device catalog (form factor: Car) for the Silverado EV / GM VCU head unit. If it isn't listed, stop. We'll spike first under a throwaway package name, or use the regular mobile track, which changes the manifest to `automotive` required=false.
-   2. Create the app with a permanent package name.
-   3. Add the Android Automotive OS form factor with a dedicated track. This is irreversible per package, so it's a dedicated app.
-   4. Release to Internal testing (AAOS).
-   5. Add the tester email list.
-   6. Use the opt-in link.
-   7. Install from the Play website by picking the truck.
-5. On the truck:
-   - Grant `CAR_ENERGY` and `CAR_SPEED` (Settings → Apps → Silverado Stats → Permissions).
-   - Open the Diagnostics screen and photograph or export it.
-   - Check that the app survives a drive: the Diagnostics screen is blocked out of Park, as expected. The glance screen is tested in Phase 4.
-   - Check whether the head unit and the app keep running while charging with the truck off. This decides when Ah can be counted.
-6. **Transport test** from the Diagnostics screen:
-   - (a) **Bluetooth Classic to your MX+**: the app pairs with it (you press the MX+ button and confirm on screen), opens the serial channel (RFCOMM) and sends only the adapter-local `ATZ`/`ATI`/`ATRV`. That's no truck traffic, and it proves the link.
-   - (b) BLE scan. It only matters if we fall back to an OBDLink CX.
-   - Phone's Bluetooth off during the test, so it doesn't hold the MX+.
-
-**Exit:**
-- The app is installed from Play and updates via a versionCode bump.
-- The real VHAL property list and display metrics are known.
-- At least one working transport to the adapter.
-
-### Phase 4: OBD inside the app (main build)
-- `obd` module, a Kotlin port of the probe:
-  - Transport interface with a Bluetooth Classic (RFCOMM) ELM implementation for the MX+, and BLE as an optional second.
-  - An ELM session with the AT allowlist.
-  - The same read-only guard as `safety.py`, with the same unit tests.
-  - Ultium addressing and ISO-TP reassembly from ELM lines.
-  - The tiered poller with busy retry and sleep back-off.
-  - Decoding from the shared profile JSON.
-- Model:
-  - Derived kW, cell spread, series and module counts, BMS energy at 100 %.
-  - A coulomb counter for Ah, with persistence across sessions in Room or DataStore.
-  - Value ages and staleness indicators.
-- UI (layout per your feedback on the mockups):
-  - Full dashboard in Park: KPI tiles, power history, a temperatures card, a cell-group heatmap that shows its own grid size (112/160/192 groups for 14/20/24 modules), module temperatures, and a charging view.
-  - Glance screen while driving (see §6).
-  - Settings: units (°F/°C, mi/km), the adapter address, and the poll tiers.
-- Logging: a rolling JSONL session log on the head unit, exportable to a USB stick through the system file picker or by HTTP POST to the laptop on the hotspot (`./probe receive`).
-- **Exit:** a 30-minute drive and a charging session with stable data, no app crashes, no truck warnings, and no DTCs.
-
-### Phase 5: hardening
-- Long-term: OTA resilience (re-test after each GM update), and a reconnect strategy for when Bluetooth drops or the phone grabs the MX+.
-- Cold-weather behavior and 800 V DC fast-charge mode.
-- Capacity estimate quality (several charges).
-- Optional: contribute the confirmed Silverado EV DIDs back to OBDb (its Silverado EV signal set is currently empty).
-
-Fallbacks if a phase fails:
-- **Head unit can't reach the MX+.**
-  - (a) An OBDLink CX over BLE, if the head unit allows LE.
-  - (b) Your phone over CarPlay, as today. The same app can also be built for a phone or tablet.
-- **GM closes internal-test installs.** Same phone or tablet fallback.
-- **BECM silent after an OTA.** Use drive-unit and BCM DIDs plus VHAL, a reduced dashboard.
-
----
-
-## 6. While-driving display: a decision for you
-
-Android Automotive blocks any screen that isn't marked "distraction-optimized" whenever the truck is out of Park, including R or D at a standstill. The app gates its own UI on `CarUxRestrictionsManager`. There are two options:
-
-| Option | What it looks like | Trade-offs |
+| Want | Possible? | How |
 |---|---|---|
-| **A. Templated glance screen** (Car App Library) *(your choice)* | Up to 4–6 rows of big text: kW, cell spread, pack and coolant temps, SoC/kWh | Google's while-driving UI. A stats app isn't one of Google's app categories, but that only matters for a public release; internal tests aren't reviewed. Updates are throttled by the host: about 1 s historically, about 7–8 s on newer hosts per one developer, to be measured on the truck. No charts. |
-| **B. Custom Compose screen marked distraction-optimized** | The same glance layout, updating every second | Technically works for Play internal-test installs, and other owners' apps do this. It's against Google's car-app guidelines, which are only enforced at review, and internal tests aren't reviewed. Keep it minimal. GM could disable it in an OTA. |
+| App on the infotainment screen | **Yes** | Your own Play Console app on the **regular internal testing track**, installed from the Play website onto the truck. Owners install internal-test apps today on 2024–2025 Silverado EV, Sierra EV, Blazer EV and Equinox EV, including Android 14. |
+| `adb install` from the laptop | **No** | GM production head units gate ADB behind GM certificates. The in-cab USB ports are host-only, and wireless debugging is unreachable. Every workaround needs radio hardware or EEPROM mods, which are ruled out. |
+| SoC, kWh remaining, nominal capacity, range, charge-port state, outside temp | **Yes, no extra hardware** | Standard Android vehicle properties (VHAL) via `CarPropertyManager`. Read live by another owner's app on a 2024 Blazer EV (same head-unit family), and on your truck. |
+| HV pack power in/out from VHAL | **Maybe** | `EV_BATTERY_INSTANTANEOUS_CHARGE_RATE` (mW, + charging / − discharging in AOSP). Only 0.00 kW was seen parked; while driving the owner saw kW with the signs swapped and a long delay, which an inverted rate and the old level-based estimate would both explain. The session now checks the rate against the battery level for sign and scale before using it for energy, and the diagnostics report says what it found (`chargeRateCheck`). |
+| Pack V and A, cell-group voltages, module temps, coolant temps | **Partly confirmed, with your OBDLink MX+** | Read-only UDS `0x22` requests through the OBD-II port. Session 1 confirmed pack voltage, idle pack current, the cell-group array and coolant temps. Still open: the `2AF1` scaling and the `2414` sign under load. |
+| Per-cell voltages | **Per cell group, confirmed** | Ultium cells are wired 3 in parallel per group, so the BMS reports groups: 192 on a 24-module pack (96 in series per 400 V half), 160 on 20 modules, 112 on 14. Your truck has 192, in DIDs `2AE1…2AF0`. Individual parallel cells are never visible. |
+| Capacity in kWh and Ah, SoH | **Being confirmed** | The owner's Car Scanner shows Battery Capability 208.44 kWh, Total Energy Storage 602.2 Ah and a capacity deviation of 22 Ah, so they are PIDs. `27AE` is very likely the kWh (public Car Scanner log of another Silverado EV). `4676` is a guess for the Ah, shown only if it fits the pack voltage; otherwise kWh ÷ (series × 3.6 V), labelled. The deviation's DID is unknown and its tile says so. To find them: `./probe scan` over the BECM on the truck, then compare with Car Scanner. |
+| Cabin / HVAC temperature | **No** | `HVAC_TEMPERATURE_CURRENT` needs a privileged permission. |
+| Driver cluster or HUD widget | **No** | Rendered by the QNX host, and GM kills third-party cluster services. |
+| Display while driving | **Yes, limited** | Only Play-installed apps may show distraction-optimized screens. See the decision below. |
+| CarPlay as a fallback | **No** | This truck has no CarPlay (`docs/research/hardware-connectivity.md`). |
 
-With A, the dense dashboard (cell heatmap, charts) is Park-only, enforced by the OS. **You first chose A, then switched to B on 2026-11-03** because Park-only made the app nearly useless. The main screen is now being marked distraction-optimized with a locked-down moving mode (no Diagnostics, pairing, resets, toggles or tap details; no cell heatmap on Live). The app must stay on internal testing, and Battery Glance remains the fallback if GM blocks it.
-
----
-
-## 7. Hardware
+### Hardware
 
 | Item | Why | Approx. |
 |---|---|---|
-| **OBDLink MX+** (you have it) | STN2255, Bluetooth Classic. Proven on a 2024 Hummer EV (BT1, the Silverado's twin). Low-power sleep. Used for laptop discovery and by the head-unit app. | owned |
+| **OBDLink MX+** (you have it) | The only adapter. STN2255, Bluetooth Classic. Proven on a 2024 Hummer EV (BT1, the Silverado's twin). Low-power sleep. Used for laptop discovery and by the head-unit app. | owned |
 | *Optional:* **OBD-II breakout box with per-pin switches**, or a passive extension wired **only** on pins 4/5/6/14/16 | Keeps the adapter's other contacts (pin 1, Ethernet pins) disconnected and the adapter clear of the driver's knee. Check with a meter. | $15–40 |
-| *Only if needed:* **OBDLink CX** | Bluetooth LE. Only if the head unit turns out to allow LE but not Classic connections. | $80 |
-| Not needed | Wi-Fi adapters (ruled out), CAN-FD interfaces (PCAN-FD, red panda), Raspberry Pi bridges, splitters | — |
+| Not needed | Wi-Fi adapters (ruled out), CAN-FD interfaces (PCAN-FD, red panda), Raspberry Pi bridges, splitters. The laptop has no CAN interface. | — |
 
 The CAN-FD gear isn't needed because every public Ultium read works over classic 29-bit CAN at 500 kbit/s on pins 6/14. The gateway isolates the port, so passive sniffing captures nothing; only requests get answers.
 
----
+### Decisions
 
-## 8. Laptop environment (status)
-
-| Item | State |
-|---|---|
-| Python probe (`tools/probe`, stdlib only) | ✅ built; two adversarial review rounds; 39 tests (38 pass, 1 skipped without a `vcan0` interface) |
-| JDK 21 (Temurin) in `~/.local/share/jdks` | ✅ installed (user space, checksum-verified) |
-| Android command-line tools in `~/Android/Sdk` | ✅ installed (checksum-verified) |
-| SDK packages (platform 35, build-tools, emulator, AAOS images) | ✅ installed with your OK |
-| Android Studio (optional, AUR `android-studio`) | optional; command-line builds are enough |
-| `sudo pacman -S android-tools` | optional (adb for emulators; the SDK's platform-tools also provides it) |
+- **2026-11-03, Wi-Fi adapters ruled out** by the owner. The MX+ over Bluetooth Classic is the path, and it works from the head unit.
+- **2026-11-03, regular internal-testing track.** The dedicated Android Automotive OS track, on `com.vincel.silveradostats`, stayed Inactive, and that choice is irreversible per package, so it was abandoned. The regular track on `com.vincel.silveradoev`, with `android.hardware.type.automotive` not required, works. Details: `docs/play-console.md`.
+- **2026-11-03, while-driving display: option B.** Android Automotive blocks any screen that isn't marked "distraction-optimized" whenever the truck is out of Park, including R or D at a standstill.
+  - The owner first chose option A, a templated glance screen with the Car App Library and a Park-only dashboard, then switched to option B, a Compose screen marked distraction-optimized, because Park-only made the app nearly useless.
+  - The moving mode is locked down: no Diagnostics, pairing, resets, toggles or tap details, and no cell heatmap on Live (§3, item 7). The owner confirmed on 2026-11-04 that it stays up in Drive.
+  - **The app must stay on internal testing.** Option B goes against Google's car-app guidelines, which are only enforced at review, and internal tests aren't reviewed. Never a production track.
+  - GM could disable it in an OTA. Battery Glance remains the fallback. Its template refresh is throttled by the host (about 10 s on the emulator's host, 7–8 s reported elsewhere) and unmeasured on the truck, which only matters if the fallback is needed.
+  - Known limit: a system permission dialog opened in Park stays up if the truck then leaves Park, and Android gives the app no way to close it (§2, item 9). The emulator's OS didn't cover it; the truck's is untested.
 
 ---
 
-## 9. Risk register
+## 8. Open risks
 
 | # | Risk | Likelihood | Mitigation |
 |---|---|---|---|
-| R1 | GM's head unit won't let the app pair with or connect to the MX+ over Bluetooth Classic | Medium | Tested first, in Phase 3. Then an OBDLink CX (BLE). Then your phone app via CarPlay, as today. |
-| R2 | GM OTA closes internal-test or distraction-optimized behavior | Low–medium | Phone or tablet fallback; keep the Park-only dashboard. |
-| R3 | BECM silent at both priorities (as some MY2025 reports at 0x18 only) | Low for Silverado | Dual-priority probe; fall back to drive-unit and BCM DIDs plus VHAL. |
-| R4 | Cell-group array not at `2AE1…` on BT1 | Low–medium | Show min/max/avg with location and per-module values; parked discovery scan. |
-| R5 | 12 V drain from the always-on port | Medium if misconfigured | Bus-silent sleep watch, adapter sleep threshold, independent-meter drain test; unplug for long parking. |
-| R6 | The phone grabs the MX+ before the head unit does (single host) | High until handled | Turn the phone's Bluetooth off or unpair the MX+ from the phone. The app shows "adapter busy" clearly and retries in the background. |
-| R7 | Play account or verification hurdles | Low | Do it in Phase 0. |
-| R8 | Template refresh too slow for driving | Medium | Option B (§6), your call. |
-| R9 | A DID's meaning is wrong (e.g. the 2AF1 scaling) | Medium | "Unverified" badges in the UI until confirmed against the dash or the second source. |
+| R2 | GM OTA closes internal-test installs or distraction-optimized behavior | Low–medium | Battery Glance if only distraction optimization goes. If installs close, the same app can also be built for a phone or tablet. |
+| R3 | A GM OTA changes module behavior, e.g. BECM silent at both priorities (as some MY2025 reports at 0x18 only) | Low for Silverado | Re-test after each GM update. Fall back to drive-unit and BCM DIDs plus VHAL, a reduced dashboard. |
+| R5 | 12 V drain from the always-on port | Medium if misconfigured | Bus-silent sleep watch, adapter sleep threshold, independent-meter drain test (not yet run); unplug for long parking. |
+| R6 | Another host holds the MX+ (one host at a time: phone, laptop or head unit) | Medium, now handled in the app | Disconnect in the app before a phone or laptop session; unpair the MX+ from the phone if it grabs it first. The app says the MX+ isn't reachable and retries in the background (`bt/BtErrors.kt`, `RetryPolicy`). |
+| R9 | A DID's meaning is wrong, now the `2AF1` scaling and the `2414` sign under load | Medium | "Unverified" badges in the UI until confirmed against outside temperature, coolant or the dash. |
+| R10 | Measuring stops when no screen is visible: Android freezes the process (cached-app freezer, 10 s to about 6 min on API 34) | Expected | Keep the main screen or Battery Glance on screen; a frozen stretch becomes a gap the session leaves out. |
+| R11 | The system disables a Play app after a day or weeks, as other GM owners saw (`docs/research/vhal-properties.tables.md`, Table 5) | Unknown; not seen on this truck | Note it if it happens; reinstalling from Play is an ordinary install. |
 
 ---
 
-## 10. Repository layout
+## 9. History
 
-```
-PLAN.md                    this plan
-docs/truck-connection.md   step-by-step first truck session (Phase 1)
-docs/play-console.md       Play Console internal testing for AAOS (Phase 3)
-docs/research/             verified research notes with sources
-android/                   the Android Automotive app (Gradle root; module :app)
-probe                      wrapper: ./probe <command> (no install needed)
-tools/probe/               read-only Python probe (laptop): obd, dtc, read, poll, scan, serve,
-                           export-profile, receive, sniff, iface
-  dids/silverado_ev.toml   shared DID profile (source of truth for the app)
-tools/setup-android-sdk.sh installs the Android SDK packages (after your OK)
-```
+- **Research (2026-11-03):** 10 agents, adversarially verified; `docs/research/`, whose [README](docs/research/README.md) says what was overtaken.
+- **Phase 0, prerequisites:** done in practice, except that the infotainment build was never recorded (§2, item 12).
+- **Phase 1, first truck session, laptop only:** done 2026-11-03, except truck-off (§2, item 1). Runbook: `docs/truck-connection.md`.
+- **Phase 2, confirm and extend data:** profile confirmed as far as a parked truck allows; the rest is §2.
+- **Phase 3, app without an adapter, and distribution:** done 2026-11-03; diagnostics app installed from Play and running on the truck.
+- **Phase 4, OBD inside the app:** Kotlin port of the probe, tiered poller, Live, Simple, Battery Glance, moving mode; 0.4.0 (code 7, tag `v0.4.0`) published 2026-11-04. Not built: §2.
+- **Phase 5, hardening:** reconnect strategy built (`RetryPolicy`). Cold-weather and 800 V behavior remain in §2.
+- **0.5.0 (2026-11-04):** removed the Wi-Fi TCP link test, the BLE scan and their permissions from the app, and SocketCAN, TCP and USB-serial transports, `sniff`, `iface` and `serve` from the probe. All of it is still in `v0.4.0`.
+  - The same release, after the owner's first drive: kW readouts removed (the truck's dash has them). Session energy now comes from pack V × A (MX+), else the charge rate once it agrees with the battery level, else the level, which stays in the report and on screen for comparison. Capacity tiles replace them: the car API's kWh on Simple, the BECM's kWh, Ah and deviation on Live. Simple uses the MX+ when it is connected. A Disconnect / Connect button on Simple, Live and Diagnostics, usable while driving at the owner's request, keeps the MX+ free until Connect, across app restarts.
+
+- **0.6.0 (code 9, published 2026-11-04):** battery log (hourly job and MX+ rows), the Trends tab and CSV export.
+- **0.7.0 (code 10, published 2026-11-04):** Trends shows one source at a time, Truck API or MX+: capacity tiles with their PID and the change over the range, one chart with low, high and change under it, and every logged PID in groups, with its latest value and why it has none, L and R putting it on the chart. The log gained every single-value PID of both sources, nominal and usable capacity in columns of their own, a built-in row every 5 min while a screen is up, and the MX+ stays connected on Trends in Park. Older rows are kept and sorted into the new capacity columns when the log opens. Export no longer loads the whole log into memory.
+
+The full earlier plan, with every phase's steps: `git show v0.4.0:PLAN.md`.

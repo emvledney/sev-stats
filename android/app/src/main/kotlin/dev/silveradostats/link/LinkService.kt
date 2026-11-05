@@ -5,6 +5,7 @@ import android.content.Intent
 import android.os.Binder
 import android.os.IBinder
 import dev.silveradostats.bt.BtController
+import dev.silveradostats.log.LogHub
 import dev.silveradostats.obd.Profile
 import dev.silveradostats.vehicle.SessionHub
 import dev.silveradostats.vehicle.VehicleSession
@@ -21,8 +22,9 @@ import kotlinx.coroutines.launch
  * the poller on one background thread ([LinkEngine]) and the Bluetooth pairing flow ([BtController]).
  *
  * Bound only, never started, and not exported (the manifest declares android:exported="false"), so
- * only this app's own screens can reach it. Polling runs only while a visible screen is attached
- * (LinkConnection attaches on onStart and detaches on onStop). Without a visible screen nothing is
+ * only this app's own code can reach it. Polling runs only while a visible screen is attached
+ * (LinkConnection attaches on onStart and detaches on onStop) or during the log's hourly visit with the
+ * truck on (LogHub.visit, through the same LinkConnection), which keeps one row of what is read. Without a visible screen nothing is
  * sent; the socket stays open, silent, for at most [LinkEngine.GRACE_MS] in case a screen comes
  * back (glance <-> dashboard), then closes and releases the MX+. When the last client
  * unbinds, the service is destroyed and the socket is closed at once.
@@ -49,6 +51,7 @@ class LinkService : Service() {
     private set
   lateinit var vehicle: VehicleSession
     private set
+  private lateinit var logs: LogHub
 
   override fun onCreate() {
     super.onCreate()
@@ -57,16 +60,42 @@ class LinkService : Service() {
     engine = LinkEngine(profile)
     bt = BtController(this, engine, settings)
     vehicle = SessionHub.get(this)
+    logs = LogHub.get(this)
     scope.launch {
-      settings.state.map { Triple(it.demo, it.mxAddress, it.mxName) }.distinctUntilChanged().collect { (demo, address, name) ->
+      settings.state.map { LinkChoice(it.demo, it.mxAddress, it.mxName, it.mxOff) }.distinctUntilChanged().collect { c ->
+        // First: a source must never start connecting before it knows it is disconnected.
+        engine.setDisconnected(c.mxOff)
         engine.setSource(
           when {
-            demo -> LinkSource.Demo
-            address != null -> bt.sourceFor(address, name)
+            c.demo -> LinkSource.Demo
+            c.address != null -> bt.sourceFor(c.address, c.name)
             else -> null
           },
         )
       }
+    }
+    scope.launch { engine.state.collect { passOn(it) } }
+    scope.launch { engine.state.collect { logs.onLive(it) } }
+  }
+
+  private data class LinkChoice(val demo: Boolean, val address: String?, val name: String?, val mxOff: Boolean)
+
+  private var packReadAtMs = 0L
+
+  /** What a real, connected MX+ delivers beyond its own screens: pack power for the session, capacity to keep. */
+  private fun passOn(s: LiveState) {
+    if (s.status != LinkStatus.CONNECTED || s.demo) return
+    val current = s.values["pack_current"]
+    val kw = (s.derived["power_kw"] as? Number)?.toDouble()
+    if (current != null && kw != null && current.atMs != packReadAtMs) {
+      packReadAtMs = current.atMs
+      vehicle.addPackPower(kw)
+    }
+    val kwh = (s.derived["capacity_kwh"] as? Number ?: s.derived["bms_energy_at_100_kwh"] as? Number)?.toDouble()
+    val ah = (s.derived["capacity_ah"] as? Number ?: s.derived["ah_nominal_est"] as? Number)?.toDouble()
+    val saved = settings.state.value.savedCapacity
+    if (kwh != null && (saved == null || saved.kwh != kwh || saved.ah != ah) && (saved == null || System.currentTimeMillis() - saved.atWallMs >= SAVE_CAPACITY_MS)) {
+      settings.setSavedCapacity(SavedCapacity(kwh, ah, System.currentTimeMillis()))
     }
   }
 
@@ -88,5 +117,8 @@ class LinkService : Service() {
 
   private companion object {
     const val PROFILE_ASSET = "profile.json"
+
+    /** The last capacity read is written at most this often. */
+    const val SAVE_CAPACITY_MS = 60_000L
   }
 }

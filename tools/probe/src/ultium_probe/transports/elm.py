@@ -1,4 +1,4 @@
-"""ELM327 / OBDLink (STN) / WiCAN transport over USB serial, Bluetooth RFCOMM or TCP.
+"""ELM327 / OBDLink (STN) transport over Bluetooth RFCOMM.
 
 Only a fixed allowlist of adapter-configuration commands is ever sent; the
 only thing that reaches the vehicle bus is the hex payload of a request, which
@@ -15,11 +15,9 @@ adapter reset, errored or rejected a setting, the run stops (FatalTransportError
 
 from __future__ import annotations
 
-import os
 import re
 import select
 import socket
-import termios
 import time
 
 from .. import safety
@@ -51,28 +49,10 @@ HEX_LINE = re.compile(r"^[0-9A-F]+$")
 class ElmLink:
     """Line-oriented connection to the adapter (prompt is '>')."""
 
-    def __init__(self, fd: int | None = None, sock: socket.socket | None = None) -> None:
-        self.fd = fd
+    def __init__(self, sock: socket.socket | None = None) -> None:
         self.sock = sock
         self.dirty = False
         self.echo_off = False   # set once ATE0 is confirmed; an echo afterwards means a reset
-
-    @classmethod
-    def serial(cls, path: str, baud: int) -> "ElmLink":
-        try:
-            fd = os.open(path, os.O_RDWR | os.O_NOCTTY | os.O_NONBLOCK)
-        except OSError as e:
-            raise TransportError(f"cannot open {path}: {e}") from e
-        attrs = termios.tcgetattr(fd)
-        speed = getattr(termios, f"B{baud}")
-        attrs[0] = 0                                      # iflag
-        attrs[1] = 0                                      # oflag
-        attrs[2] = termios.CS8 | termios.CREAD | termios.CLOCAL
-        attrs[3] = 0                                      # lflag (raw)
-        attrs[4] = attrs[5] = speed
-        termios.tcsetattr(fd, termios.TCSANOW, attrs)
-        termios.tcflush(fd, termios.TCIOFLUSH)
-        return cls(fd=fd)
 
     @classmethod
     def rfcomm(cls, mac: str, channel: int) -> "ElmLink":
@@ -84,36 +64,21 @@ class ElmLink:
             raise TransportError(f"cannot reach Bluetooth adapter {mac}: {e}") from e
         return cls(sock=s)
 
-    @classmethod
-    def tcp(cls, host: str, port: int) -> "ElmLink":
-        """Wi-Fi adapters (WiCAN PRO / most clones: 192.168.0.10:35000)."""
-        try:
-            s = socket.create_connection((host, port), timeout=10)
-        except OSError as e:
-            raise TransportError(f"cannot reach adapter at {host}:{port} ({e}); "
-                                 "is the laptop joined to the adapter's Wi-Fi?") from e
-        s.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-        return cls(sock=s)
-
     def _write(self, data: bytes) -> None:
         try:
-            if self.sock:
-                self.sock.sendall(data)
-            else:
-                os.write(self.fd, data)
+            self.sock.sendall(data)
         except OSError as e:
             raise FatalTransportError(f"adapter link failed: {e}") from e
 
     def _read_available(self, timeout: float) -> bytes:
         try:
-            target = self.sock if self.sock else self.fd
-            ready, _, _ = select.select([target], [], [], timeout)
+            ready, _, _ = select.select([self.sock], [], [], timeout)
             if not ready:
                 return b""
-            data = self.sock.recv(4096) if self.sock else os.read(self.fd, 4096)
+            data = self.sock.recv(4096)
         except OSError as e:
             raise FatalTransportError(f"adapter link failed: {e}") from e
-        if self.sock and not data:
+        if not data:
             raise FatalTransportError("adapter closed the connection")
         return data
 
@@ -194,12 +159,10 @@ class ElmLink:
         return lines
 
     def close(self) -> None:
-        sock, fd, self.sock, self.fd = self.sock, self.fd, None, None
+        sock, self.sock = self.sock, None
         try:
             if sock:
                 sock.close()
-            elif fd is not None:
-                os.close(fd)
         except OSError:
             pass
 

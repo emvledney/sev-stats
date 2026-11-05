@@ -151,15 +151,6 @@ object SystemInfo {
       "iface $iface; addrs $addrs; gateway ${gw.ifEmpty { "-" }}; dns ${dns.ifEmpty { "-" }}"
   }
 
-  /** The first Wi-Fi network, for binding the adapter socket to it (Wi-Fi without internet is not the default network). */
-  fun wifiNetwork(context: Context): Network? = try {
-    val cm = context.getSystemService(ConnectivityManager::class.java)
-    @Suppress("DEPRECATION")
-    cm.allNetworks.firstOrNull { cm.getNetworkCapabilities(it)?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true }
-  } catch (e: Exception) {
-    null
-  }
-
   private fun f(pattern: String, vararg args: Any?) = String.format(Locale.US, pattern, *args)
 
   private fun rect(r: Rect) = "[${r.left},${r.top},${r.right},${r.bottom}]"

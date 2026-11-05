@@ -1,3 +1,5 @@
+> **Superseded in part, see [README](README.md):** the dedicated Automotive OS track, `required=true` and the Park-only UI plan below were overtaken: the dedicated track stayed Inactive, and the regular internal track works at the app's targetSdk 35, so the API-level advice calls for no change.
+
 # play-distribution
 
 ## SUMMARY

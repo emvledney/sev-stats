@@ -10,6 +10,7 @@ import dev.silveradostats.ui.live.DashboardModel
 import dev.silveradostats.ui.live.DistUnit
 import dev.silveradostats.ui.live.TempUnit
 import dev.silveradostats.ui.live.Units
+import dev.silveradostats.ui.live.VhalFigures
 import dev.silveradostats.ui.simple.SimpleModel
 import dev.silveradostats.vehicle.EffStatus
 import dev.silveradostats.vehicle.FeedKind
@@ -29,9 +30,9 @@ import dev.silveradostats.vehicle.Signal
  * never shown, and every value whose profile status is not "confirmed" is marked "unverified".
  *
  * Two sources, same 4 row titles: the OBD link while it is connected and delivering (MX+ or the
- * demo simulator), else the truck's built-in data from the session (no adapter needed): Power from
- * the charge rate (or "est." from the battery level), Battery with SoC · kWh · truck range and the
- * efficiency measured since the app was opened, Temps with the outside temperature.
+ * demo simulator), else the truck's built-in data from the session (no adapter needed): Capacity from
+ * the car's API, Battery with SoC · kWh · truck range and the efficiency measured since the app was
+ * opened, Temps with the outside temperature.
  */
 
 /** One pane row: a fixed [title] and 1 or 2 lines of text (the most a pane row may have). */
@@ -51,11 +52,11 @@ data class GlanceView(
 
 object GlanceModel {
   const val TITLE = "Battery Glance"
-  const val POWER = "Power"
+  const val CAPACITY = "Capacity"
   const val BATTERY = "Battery"
   const val CELLS = "Cells"
   const val TEMPS = "Temps"
-  val ROW_TITLES = listOf(POWER, BATTERY, CELLS, TEMPS)
+  val ROW_TITLES = listOf(CAPACITY, BATTERY, CELLS, TEMPS)
 
   /** Marker for any value whose profile status is not "confirmed" (2AF1 module temperatures). */
   const val UNVERIFIED = "unverified"
@@ -75,7 +76,7 @@ object GlanceModel {
       canRetry = live.canRetry,
       demo = live.demo,
       rows = listOf(
-        power(v, live.derived, nowMs),
+        capacity(v, live.derived, nowMs),
         battery(v, dist, nowMs, session),
         cells(v, live.derived, nowMs, live.power),
         temps(v, temp, nowMs),
@@ -92,6 +93,7 @@ object GlanceModel {
   fun status(live: LiveState): String {
     val base = when (live.status) {
       LinkStatus.NO_ADAPTER -> "No adapter"
+      LinkStatus.DISCONNECTED -> "MX+ disconnected"
       LinkStatus.PAIRING -> "Pairing…"
       LinkStatus.CONNECTING -> if (live.demo) "Starting demo…" else "Connecting…"
       LinkStatus.CONNECTED -> "MX+ connected"
@@ -111,15 +113,16 @@ object GlanceModel {
 
   // --- Rows -------------------------------------------------------------------------------------
 
-  /** "+15.2 kW · Discharging" / "375.1 V · +40.0 A" (+ = discharge, as on the truck). */
-  fun power(v: Map<String, LiveValue>, derived: Map<String, Any>, nowMs: Long): GlanceRow {
-    val k = DashboardModel.power(v, derived, nowMs)
-    if (!k.hasValue) return GlanceRow(POWER, listOf("$DASH kW", k.lines.first()))
-    val first = if (k.pill != null) "${k.value} kW · ${k.pill}" else "${k.value} kW"
-    return GlanceRow(POWER, listOf(first, note(k.lines.first(), k.marker != null, k.stale, k.age)))
+  /** "208.44 kWh · 602.2 Ah" / "Battery capability, from the BECM · unverified". */
+  fun capacity(v: Map<String, LiveValue>, derived: Map<String, Any>, nowMs: Long): GlanceRow {
+    val kwh = DashboardModel.capacity(v, derived, VhalFigures(), nowMs)
+    val ah = DashboardModel.capacityAh(v, derived, nowMs)
+    if (!kwh.hasValue) return GlanceRow(CAPACITY, listOf("$DASH kWh · $DASH Ah", NEEDS_MX))
+    val first = "${kwh.value} kWh · ${if (ah.marker == "est.") "≈" else ""}${ah.value} Ah"
+    return GlanceRow(CAPACITY, listOf(first, note(kwh.lines.first(), kwh.marker == UNVERIFIED || ah.marker == UNVERIFIED, kwh.stale, kwh.age)))
   }
 
-  /** "72.0 % · 147.9 kWh remaining" / "Range 317 mi" (+ " · 2.32 mi/kWh since opened"). */
+  /** "72.0 % · 147.9 kWh remaining" / "Range 322 mi · truck 317 mi" (+ " · 2.32 mi/kWh since opened"). */
   fun battery(v: Map<String, LiveValue>, dist: DistUnit, nowMs: Long, session: SessionState? = null): GlanceRow {
     val soc = v["soc"]
     val energy = v["energy_remaining"]
@@ -128,7 +131,9 @@ object GlanceModel {
     if (socV == null && energyV == null) return GlanceRow(BATTERY, listOf("$DASH % · $DASH kWh", NEEDS_MX))
     val first = "${socV?.let { Units.num(it, 1) } ?: DASH} % · ${energyV?.let { Units.num(it, 1) } ?: DASH} kWh remaining"
     val eff = session?.let { sessionEfficiency(it, dist) }
-    val range = listOfNotNull(num(v["range_estimate"])?.let { "Range ${Units.distText(it, dist)}" }, eff)
+    val own = session?.rangeEstimate?.let { "Range ${SimpleModel.distText(it.m, dist, 0)}" }
+    val truck = num(v["range_estimate"])?.let { "${if (own == null) "Range" else "truck"} ${Units.distText(it, dist)}" }
+    val range = listOfNotNull(own, truck, eff)
       .takeIf { it.isNotEmpty() }?.joinToString(" · ")
     val used = listOfNotNull(soc, energy)
     val stale = used.filter { isStale(it, nowMs) }
@@ -199,7 +204,7 @@ object GlanceModel {
     status = builtInStatus(live),
     canRetry = live.canRetry,
     demo = live.demo || s.feed.kind == FeedKind.DEMO,
-    rows = listOf(builtInPower(s, dist), builtInBattery(s, dist), GlanceRow(CELLS, listOf("$DASH mV spread", NEEDS_MX)), builtInTemps(s, temp)),
+    rows = listOf(builtInCapacity(s), builtInBattery(s, dist), GlanceRow(CELLS, listOf("$DASH mV spread", NEEDS_MX)), builtInTemps(s, temp)),
   )
 
   /** Why the built-in data has no value yet (permissions, device, car service). */
@@ -211,22 +216,22 @@ object GlanceModel {
     else -> "Waiting for the truck's data"
   }
 
-  /** "+23.4 kW · Discharging · est." / "45 mph · est. from battery level". */
-  fun builtInPower(s: SessionState, dist: DistUnit): GlanceRow {
-    val p = s.power ?: return GlanceRow(POWER, listOf("$DASH kW", builtInHint(s)))
-    val (label, _) = SimpleModel.direction(p.direction)
-    val first = "${Units.signed(p.kw, 1)} kW · $label" + if (p.estimated) " · est." else ""
-    val speed = s.speedMps?.let { SimpleModel.speedText(it, dist) } ?: "$DASH ${if (dist == DistUnit.MI) "mph" else "km/h"}"
-    return GlanceRow(POWER, listOf(first, "$speed · ${if (p.estimated) "est. from battery level" else "truck's charge rate"}"))
+  /** "205.1 kWh" / "Usable now, from the car's API". */
+  fun builtInCapacity(s: SessionState): GlanceRow {
+    val k = SimpleModel.capacity(s)
+    if (!k.hasValue) return GlanceRow(CAPACITY, listOf("$DASH kWh", builtInHint(s)))
+    return GlanceRow(CAPACITY, listOf("${k.value} kWh", k.lines.first()))
   }
 
-  /** "41.6 % · 85.3 kWh · 189 mi range" / "2.32 mi/kWh since opened · 9.8 mi". */
+  /** "41.6 % · 85.3 kWh · 198 mi range · truck 189 mi" / "2.32 mi/kWh since opened · 9.8 mi". */
   fun builtInBattery(s: SessionState, dist: DistUnit): GlanceRow {
     val level = s.levelWh ?: return GlanceRow(BATTERY, listOf("$DASH % · $DASH kWh", builtInHint(s)))
+    val own = s.rangeEstimate?.let { "${SimpleModel.distText(it.m, dist, 0)} range" }
     val first = listOfNotNull(
       "${s.socPct?.let { Units.num(it, 1) } ?: DASH} %",
       "${Units.num(level / 1000.0, 1)} kWh",
-      s.rangeM?.let { "${Units.num(Units.distFromMeters(it, dist), 0)} ${dist.symbol} range" },
+      own,
+      s.rangeM?.let { if (own == null) "${SimpleModel.distText(it, dist, 0)} range" else "truck ${SimpleModel.distText(it, dist, 0)}" },
     ).joinToString(" · ")
     return GlanceRow(BATTERY, listOf(first, sessionEfficiency(s, dist)))
   }

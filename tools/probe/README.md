@@ -29,34 +29,16 @@ The ELM/STN adapter link (e.g. the MX+) has its own guards (`transports/elm.py`)
 - The probe never writes while the adapter may be busy: at connect, after a timeout and after Ctrl-C it waits for the prompt and then silence.
 - Any reset, late error or unexpected output stops the run.
 
-`poll` stops when the truck sleeps. In `--keep-watching` and `serve` mode, nothing is sent while the truck is asleep; only the adapter's own voltage is read, see `Poller` in `cli.py`.
+`poll` stops when the truck sleeps. With `--keep-watching`, nothing is sent while the truck is asleep; only the adapter's own voltage is read, see `Poller` in `cli.py`.
 
 The tests in `tests/` check all of this.
 
 ## Transports
 | Spec | Adapter |
 |---|---|
-| `elm-bt:auto` | The paired OBDLink MX+, found by name via `bluetoothctl`. Pair it first (docs/truck-connection.md §2), and keep the phone off it |
+| `elm-bt:auto` | The paired OBDLink MX+, found by name via `bluetoothctl`. Pair it first (docs/truck-connection.md §2). Nothing else may hold it: keep the phone off it and the head-unit app disconnected |
 | `elm-bt:XX:XX:XX:XX:XX:XX[:channel]` | A specific Bluetooth Classic ELM/STN adapter (RFCOMM channel 1 by default) |
-| `elm:/dev/ttyUSB0` | OBDLink EX / SX on USB (your user needs to be in the `uucp` group) |
-| `elm-tcp:HOST:PORT` | Wi-Fi ELM327 adapters (not used in this project) |
-| `socketcan:can0` | A SocketCAN interface with kernel ISO-TP; set up as below |
 | `sim` | Built-in simulated Silverado EV (default) |
-
-### SocketCAN setup
-The transport refuses to transmit unless the interface is exactly:
-- classic CAN at 500 kbit/s, with FD off
-- one-shot mode on, so an un-ACKed frame isn't retransmitted forever
-- `restart-ms 0`, so the controller doesn't silently recover from bus-off
-- `ERROR-ACTIVE`
-
-```bash
-sudo ip link set can0 down
-sudo ip link set can0 type can bitrate 500000 restart-ms 0 one-shot on
-sudo ip link set can0 up
-```
-
-`slcan` can't do one-shot, so use a gs_usb (candleLight) or PEAK adapter. For passive capture with `sniff`, use `listen-only on` instead of `one-shot on`. Note that the Global B OBD port is silent unless asked, so `sniff` captures nothing there.
 
 ## Commands
 | Command | What it does | Exit codes |
@@ -66,20 +48,10 @@ sudo ip link set can0 up
 | `read` | Read DIDs from one module: `--ecu CB --pri 14\|18\|both`, or `--module` with `--profile` | 0; 1 on any NRC, no answer or adapter error |
 | `poll` | Tiered polling of a profile with decoding, derived values and the adapter voltage every 30 s. Exits when the truck sleeps. `--keep-watching` instead waits bus-silently and resumes on wake | 0; 1 on adapter error |
 | `scan` | Discovery over a DID range. Needs `--parked`, checks speed is 0, brackets with DTC reads | 0 ok; 2 not parked or moving; 3 new DTCs; 4 DTC read failed; 5 adapter error |
-| `serve` | Like `poll --keep-watching`, publishing `/latest.json` and `/events` (SSE) on `127.0.0.1:8765` (`--host`/`--port`); `--max-runtime` stops polling | runs until Ctrl-C |
 | `export-profile` | Writes a profile as JSON for the head-unit app | 0 |
-| `receive` | Saves diagnostics reports the head-unit app POSTs to `http://<laptop>:8766/report` into `logs/reports/` (no truck traffic). The laptop must be on the truck's hotspot, and its firewall must allow the port | runs until Ctrl-C |
-| `sniff`, `iface` | SocketCAN passive capture and interface info | |
+| `receive` | Saves diagnostics reports the head-unit app POSTs to `http://<laptop>:8766/report` into `logs/reports/` (no truck traffic). It needs a hotspot both the laptop and the head unit can join (untried on this truck), and the laptop's firewall must allow the port | runs until Ctrl-C |
 
 ## Tests
 ```bash
 cd tools/probe && PYTHONPATH=src python3 -m unittest discover -s tests -v
-```
-
-The kernel ISO-TP test needs a virtual CAN interface:
-
-```bash
-sudo modprobe vcan
-sudo ip link add vcan0 type vcan
-sudo ip link set vcan0 up
 ```

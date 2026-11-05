@@ -15,7 +15,7 @@ class SessionTrackerTest {
   /** A scripted truck: advances time, speed and the true battery level; feeds the tracker. */
   private class Drive(var t: Long = 1_000_000L, var trueLevel: Double = 150_000.0) {
     var now = t
-    val tracker = SessionTracker { now }
+    val tracker = SessionTracker(warmupMs = 0) { now }
     var quantWh = 1.0
     /** Level updates only every this many ms (sample-and-hold), 0 = every sample. */
     var holdMs = 0L
@@ -104,24 +104,14 @@ class SessionTrackerTest {
     assertTrue("${s.series.size} vs $expected", abs(s.series.size - expected) <= 2)
     s.series.forEach { assertEquals(2.3, EffUnits.miPerKwh(it.mPerWh), 0.05) }
     assertEquals(0.1 * EffUnits.METERS_PER_MILE, s.series[1].distM - s.series[0].distM, 1e-6)
-    // Nine full miles, each ~2.3; 14 full kilometres (14.99 km driven).
-    assertEquals(9, s.miSegments.size)
-    s.miSegments.forEach { assertEquals(2.3, EffUnits.miPerKwh(it.mPerWh!!), 0.05) }
-    assertEquals(14, s.kmSegments.size)
-    assertEquals(EffUnits.fromMiPerKwh(2.3), s.kmSegments[5].mPerWh!!, 0.03)
     // Range at the measured efficiency: remaining Wh x m/Wh.
     assertEquals(s.levelWh!! * s.efficiency.mPerWh!!, s.rangeAtMeasuredM!!, 1e-6)
-    // Power from the charge-rate property, + discharge.
-    val p = s.power!!
-    assertEquals(PowerSource.CHARGE_RATE, p.source)
-    assertEquals(PowerDirection.DISCHARGING, p.direction)
-    assertEquals(kw, p.kw, 1e-9)
-    assertFalse(p.estimated)
+    // Energy from the charge-rate property once it has agreed with the level.
+    assertEquals(EnergySource.CHARGE_RATE, s.energySource)
     assertTrue(s.chargeRateSeenNonZero)
     // Context values.
     assertEquals(12.0, s.outsideC!!, 0.0)
     assertEquals(s.levelWh!! / 205_080.0 * 100, s.socPct!!, 1e-9)
-    assertEquals(300_000.0 / s.levelWh!!, s.truckImpliedMPerWh!!, 1e-9)
   }
 
   @Test
@@ -150,7 +140,7 @@ class SessionTrackerTest {
   }
 
   @Test
-  fun regenSegmentsAreNetAndNeverCountAsCharging() {
+  fun regenIsNetAndNeverCountsAsCharging() {
     val d = Drive()
     d.run(130.0, 25.0, kwFor(25.0, 2.0)) // ~2 mi at 2.0
     val before = d.state()
@@ -161,15 +151,6 @@ class SessionTrackerTest {
     assertEquals(0.0, s.chargedWh, 0.0)
     assertTrue("net use falls with regen", s.usedWh < before.usedWh - 100)
     assertTrue("efficiency improves", eff(s) > eff(before) + 0.3)
-    assertEquals(PowerDirection.REGEN, s.power!!.direction)
-    assertEquals(-8.0, s.power!!.kw, 1e-9)
-    // The downhill mile is a net-regen segment: no efficiency figure, flagged.
-    val regen = s.miSegments.last()
-    assertTrue(regen.netRegen)
-    assertNull(regen.mPerWh)
-    assertEquals(2.0, EffUnits.miPerKwh(s.miSegments.first().mPerWh!!), 0.05)
-    assertEquals(-8.0, s.peakRegenKw!!, 1e-9)
-    assertEquals(kwFor(25.0, 2.0), s.peakDischargeKw!!, 1e-9)
   }
 
   @Test
@@ -202,7 +183,6 @@ class SessionTrackerTest {
     d.chargeState = ChargeState.CHARGING
     d.run(600.0, 0.0, -60.0) // +10 kWh at a DC charger
     assertTrue(d.state().charging)
-    assertEquals(PowerDirection.CHARGING, d.state().power!!.direction)
     d.plug = false
     d.chargeState = ChargeState.NOT_CHARGING
     d.run(130.0, 25.0, kw) // ~2 mi
@@ -275,6 +255,7 @@ class SessionTrackerTest {
     // 10 Wh steps; a fine value held for 17 s (time-quantised, like the charge rate on GM).
     for ((quant, hold) in listOf(500.0 to 0L, 100.0 to 17_000L, 10.0 to 0L, 1.0 to 17_000L)) {
       val d = Drive()
+      d.rate = null // the level alone: no power signal to go by
       d.quantWh = quant
       d.holdMs = hold
       val kw = kwFor(27.0, 2.3)
@@ -298,72 +279,7 @@ class SessionTrackerTest {
       assertTrue(tag, s.levelStepWh!! >= quant - 1e-6)
       // A coarse step lengthens the warm-up (3 steps of energy).
       if (quant == 500.0) assertTrue(tag, figures.first().first * kw / 3.6 >= 1500.0)
-      s.miSegments.drop(1).forEach { seg -> assertEquals(tag, 2.3, EffUnits.miPerKwh(seg.mPerWh!!), 0.35) }
     }
-  }
-
-  @Test
-  fun stuckChargeRateFallsBackToTheEstimateAndRecovers() {
-    val d = Drive()
-    d.rate = { 0.0 } // GM: 0.00 kW in Park; maybe also while driving
-    d.quantWh = 10.0
-    val kw = kwFor(25.0, 2.3)
-    d.run(25.0, 25.0, kw)
-    assertEquals(PowerSource.CHARGE_RATE, d.state().power!!.source)
-    assertEquals(0.0, d.state().power!!.kw, 0.0)
-    d.run(10.0, 25.0, kw) // > 30 s of exactly 0 while moving > 2 m/s
-    var p = d.state().power!!
-    assertFalse(d.state().chargeRateSeenNonZero)
-    assertEquals(PowerSource.ESTIMATED, p.source)
-    assertTrue(p.estimated)
-    d.run(60.0, 25.0, kw)
-    p = d.state().power!!
-    assertEquals(PowerSource.ESTIMATED, p.source)
-    assertEquals(kw, p.kw, kw * 0.05)
-    assertEquals(PowerDirection.DISCHARGING, p.direction)
-    // Stopping: the estimate decays towards 0 instead of holding the cruise figure.
-    d.run(90.0, 0.0, 0.0)
-    assertTrue("decayed: ${d.state().power!!.kw}", d.state().power!!.kw < kw * 0.5)
-    // The property comes alive: the real value at once.
-    d.rate = { k -> -k * 1_000_000.0 }
-    d.run(1.0, 20.0, 30.0)
-    p = d.state().power!!
-    assertEquals(PowerSource.CHARGE_RATE, p.source)
-    assertEquals(30.0, p.kw, 1e-9)
-  }
-
-  @Test
-  fun zeroChargeRateInParkIsTrusted() {
-    val d = Drive()
-    d.rate = { 0.0 }
-    d.run(120.0, 0.0, 0.4)
-    val p = d.state().power!!
-    assertEquals(PowerSource.CHARGE_RATE, p.source)
-    assertEquals(PowerDirection.IDLE, p.direction)
-  }
-
-  @Test
-  fun missingChargeRateUsesTheEstimate() {
-    val d = Drive()
-    d.rate = null
-    d.quantWh = 10.0
-    val kw = kwFor(22.0, 2.4)
-    d.run(65.0, 22.0, kw)
-    val p = d.state().power!!
-    assertEquals(PowerSource.ESTIMATED, p.source)
-    assertEquals(kw, p.kw, kw * 0.05)
-  }
-
-  @Test
-  fun powerHistoryKeepsTenMinutesAtOneSecond() {
-    val d = Drive()
-    d.run(300.0, 25.0, 60.0)
-    d.run(601.0, 20.0, 15.0)
-    val s = d.state()
-    assertTrue("size ${s.powerHistory.size}", s.powerHistory.size in 595..601)
-    s.powerHistory.zipWithNext { a, b -> assertTrue(b.atMs - a.atMs >= 500) }
-    assertEquals(15.0, s.peakDischargeKw!!, 1e-9) // the 60 kW stretch is older than 10 min
-    assertNull(s.peakRegenKw)
   }
 
   @Test
@@ -379,7 +295,7 @@ class SessionTrackerTest {
     assertEquals(0.0, s.usedWh, 0.0)
     assertEquals(0L, s.activeMs)
     assertEquals(EffStatus.WARMING_UP, s.efficiency.status)
-    assertTrue(s.series.isEmpty() && s.miSegments.isEmpty() && s.powerHistory.isEmpty())
+    assertTrue(s.series.isEmpty())
     assertEquals(0, s.gaps)
     // And it works again afterwards.
     d.t = d.now
@@ -408,7 +324,6 @@ class SessionTrackerTest {
     assertFalse(s.hasData)
     assertNull(s.avgSpeedMps)
     assertNull(s.socPct)
-    assertNull(s.truckImpliedMPerWh)
     assertNull(s.rangeAtMeasuredM)
     // Level only, no speed: energy is counted, distance stays 0, still warming up.
     for (i in 1..120) {
@@ -421,11 +336,10 @@ class SessionTrackerTest {
     assertEquals(EffStatus.WARMING_UP, s.efficiency.status)
     assertEquals(0.0, s.efficiency.progress, 0.0)
     assertNull(s.socPct) // capacity 0 ignored
-    assertNull(s.truckImpliedMPerWh) // range 0
     // Zero level: no range figure, no NaN.
     t.add(VehicleSample(now + 1000, levelWh = 0.0, speedMps = 0.0))
     s = t.snapshot()
-    assertNull(s.truckImpliedMPerWh)
+    assertNull(s.rangeAtMeasuredM)
     listOf(s.distanceM, s.usedWh, s.efficiency.progress).forEach { assertTrue(it.isFinite()) }
   }
 
@@ -448,9 +362,6 @@ class SessionTrackerTest {
     assertEquals(ChargeState.CHARGING, ChargeState.fromAosp(1))
     assertEquals(ChargeState.UNKNOWN, ChargeState.fromAosp(99))
     assertNull(ChargeState.fromAosp(null))
-    assertEquals("P", Gear.letter(Gear.PARK))
-    assertEquals("D", Gear.letter(32))
-    assertNull(Gear.letter(null))
     assertNotNull(Efficiency.NONE)
   }
 }

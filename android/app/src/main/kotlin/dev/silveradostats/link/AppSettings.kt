@@ -13,21 +13,16 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import java.util.Locale
 
-/** The main screen's tabs, in order. Only Live and Diagnostics need the OBD link (the MX+). */
+/** The main screen's tabs, in order. Only Live and Diagnostics show the OBD link's data (the MX+). */
 enum class AppTab(val label: String, val needsObd: Boolean) {
   SIMPLE("Simple", false),
   LIVE("Live", true),
+  TRENDS("Trends", false),
   DIAGNOSTICS("Diagnostics", true),
   ;
 
   /** Whether the OBD link is wanted. While restricted Diagnostics is a text panel with no OBD data. */
   fun wantsObd(restricted: Boolean): Boolean = needsObd && !(this == DIAGNOSTICS && restricted)
-}
-
-/** The Simple tab's layout: A "Efficiency" (trip efficiency first) or B "Battery" (battery first). */
-enum class SimpleLayout(val label: String) {
-  EFFICIENCY("Efficiency"),
-  BATTERY("Battery"),
 }
 
 /** The persisted user choices the dashboard and the link use. */
@@ -41,8 +36,20 @@ data class UiSettings(
   val mxName: String?,
   /** The last selected tab (the app reopens on it). */
   val tab: AppTab = AppTab.SIMPLE,
-  val simpleLayout: SimpleLayout = SimpleLayout.EFFICIENCY,
-)
+  /** The user disconnected the MX+: the app leaves it alone until they tap Connect. */
+  val mxOff: Boolean = false,
+  val savedCapacity: SavedCapacity? = null,
+) {
+  /**
+   * Whether the OBD link is wanted: on the tabs that show it, and on Simple too with a chosen MX+ that is
+   * not disconnected, because its pack power is what the session's energy is best measured from. The same
+   * on Trends in Park, so that the MX+ keeps logging while its log is being read.
+   */
+  fun wantsObd(restricted: Boolean): Boolean {
+    val mxUsable = mxAddress != null && !mxOff && !demo
+    return tab.wantsObd(restricted) || (tab == AppTab.SIMPLE && mxUsable) || (tab == AppTab.TRENDS && !restricted && mxUsable)
+  }
+}
 
 /** SharedPreferences-backed settings, one instance per process. Call from the main thread. */
 class AppSettings private constructor(context: Context) {
@@ -60,19 +67,37 @@ class AppSettings private constructor(context: Context) {
       mxAddress = prefs.getString(KEY_MX_ADDRESS, null),
       mxName = prefs.getString(KEY_MX_NAME, null),
       tab = prefs.getString(KEY_TAB, null)?.let { runCatching { AppTab.valueOf(it) }.getOrNull() } ?: AppTab.SIMPLE,
-      simpleLayout = prefs.getString(KEY_SIMPLE_LAYOUT, null)?.let { runCatching { SimpleLayout.valueOf(it) }.getOrNull() }
-        ?: SimpleLayout.EFFICIENCY,
+      mxOff = prefs.getBoolean(KEY_MX_OFF, false),
+      savedCapacity = prefs.getLong(KEY_CAPACITY_AT, 0L).takeIf { it > 0 }?.let { at ->
+        SavedCapacity(prefs.getString(KEY_CAPACITY_KWH, null)?.toDoubleOrNull(), prefs.getString(KEY_CAPACITY_AH, null)?.toDoubleOrNull(), at)
+      },
     )
+  }
+
+  fun setMxOff(off: Boolean) {
+    prefs.edit { putBoolean(KEY_MX_OFF, off) }
+    _state.update { it.copy(mxOff = off) }
+  }
+
+  fun setSavedCapacity(c: SavedCapacity) {
+    prefs.edit {
+      if (c.kwh == null) remove(KEY_CAPACITY_KWH) else putString(KEY_CAPACITY_KWH, c.kwh.toString())
+      if (c.ah == null) remove(KEY_CAPACITY_AH) else putString(KEY_CAPACITY_AH, c.ah.toString())
+      putLong(KEY_CAPACITY_AT, c.atWallMs)
+    }
+    _state.update { it.copy(savedCapacity = c) }
+  }
+
+  /** The last settled efficiency, m/Wh: VehicleSession's, from any thread, and not in [state] as no screen chooses it. */
+  fun lastEfficiency(): Double? = prefs.getString(KEY_EFFICIENCY, null)?.toDoubleOrNull()
+
+  fun setLastEfficiency(mPerWh: Double) {
+    prefs.edit { putString(KEY_EFFICIENCY, mPerWh.toString()) }
   }
 
   fun setTab(t: AppTab) {
     prefs.edit { putString(KEY_TAB, t.name) }
     _state.update { it.copy(tab = t) }
-  }
-
-  fun setSimpleLayout(l: SimpleLayout) {
-    prefs.edit { putString(KEY_SIMPLE_LAYOUT, l.name) }
-    _state.update { it.copy(simpleLayout = l) }
   }
 
   fun setDemo(v: Boolean) {
@@ -90,13 +115,14 @@ class AppSettings private constructor(context: Context) {
     _state.update { it.copy(distUnit = u) }
   }
 
-  /** Remembers the chosen adapter (null forgets it). */
+  /** Remembers the chosen adapter (null forgets it). Choosing one also ends a disconnect. */
   fun setAdapter(address: String?, name: String?) {
     prefs.edit {
+      remove(KEY_MX_OFF)
       if (address == null) remove(KEY_MX_ADDRESS) else putString(KEY_MX_ADDRESS, address)
       if (name == null) remove(KEY_MX_NAME) else putString(KEY_MX_NAME, name)
     }
-    _state.update { it.copy(mxAddress = address, mxName = name) }
+    _state.update { it.copy(mxAddress = address, mxName = name, mxOff = false) }
   }
 
   companion object {
@@ -106,7 +132,11 @@ class AppSettings private constructor(context: Context) {
     private const val KEY_MX_ADDRESS = "mx_address"
     private const val KEY_MX_NAME = "mx_name"
     private const val KEY_TAB = "last_tab"
-    private const val KEY_SIMPLE_LAYOUT = "simple_layout"
+    private const val KEY_MX_OFF = "mx_off"
+    private const val KEY_CAPACITY_KWH = "capacity_kwh"
+    private const val KEY_CAPACITY_AH = "capacity_ah"
+    private const val KEY_CAPACITY_AT = "capacity_at"
+    private const val KEY_EFFICIENCY = "last_efficiency"
 
     @Volatile private var instance: AppSettings? = null
 

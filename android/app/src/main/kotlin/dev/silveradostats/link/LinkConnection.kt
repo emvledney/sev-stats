@@ -24,8 +24,8 @@ import java.io.Closeable
  *
  * Binds for its whole lifetime (a ViewModel's, or Battery Glance's screen) so the engine keeps its
  * history while the app is in the background. Two attachments, independent of each other:
- *  - the OBD engine: only while [setVisible] is true AND the screen needs OBD ([setObdWanted]; the
- *    Simple tab does not), so the MX+ is polled only while a screen that shows its data is on;
+ *  - the OBD engine: only while [setVisible] is true AND the screen wants OBD ([setObdWanted]), so the
+ *    MX+ is polled only while a screen that uses its data is on (UiSettings.wantsObd);
  *  - the built-in vehicle session (LinkService.vehicle): for the whole binding, visible or not, so
  *    sampling goes on behind another app for as long as Android lets the process run (it froze an
  *    app with no visible screen after 10 s to about 6 min on API 34: the main screen or Battery Glance
@@ -84,7 +84,7 @@ class LinkConnection(context: Context, scope: CoroutineScope, obdWanted: Boolean
     syncEngine()
   }
 
-  /** Whether the visible screen shows OBD data (Live, Diagnostics, Battery Glance) or not (Simple). */
+  /** Whether the visible screen uses OBD data (UiSettings.wantsObd; Battery Glance does). */
   fun setObdWanted(w: Boolean) {
     obd = w
     syncEngine()

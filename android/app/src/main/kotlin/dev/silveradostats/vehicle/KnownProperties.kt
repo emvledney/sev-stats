@@ -108,7 +108,7 @@ object Fmt {
 
   fun whToKwh(v: Any?): String = num(v)?.let { f("%.2f kWh", it / 1000.0) } ?: raw(v)
 
-  /** EV_BATTERY_INSTANTANEOUS_CHARGE_RATE: mW, + charging / - discharging (AOSP convention). */
+  /** EV_BATTERY_INSTANTANEOUS_CHARGE_RATE: mW, + charging / - discharging (AOSP; the session checks GM's sign). */
   fun kwFromMw(v: Any?): Double? = num(v)?.let { it / 1_000_000.0 }
 
   fun mwToKw(v: Any?): String {

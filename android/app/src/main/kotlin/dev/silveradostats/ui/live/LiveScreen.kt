@@ -1,7 +1,6 @@
 package dev.silveradostats.ui.live
 
 import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -41,17 +40,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.luminance
-import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.drawText
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -66,13 +59,9 @@ import dev.silveradostats.ui.layout.FitColumn
 import dev.silveradostats.ui.layout.FitColumnScope
 import dev.silveradostats.ui.layout.FitText
 import dev.silveradostats.ui.layout.PriorityRow
-import dev.silveradostats.ui.layout.PriorityRowScope
 import dev.silveradostats.ui.layout.Segmented
 import dev.silveradostats.ui.layout.SizeTier
 import dev.silveradostats.ui.layout.WindowTooSmall
-import dev.silveradostats.ui.layout.inspectTap
-import dev.silveradostats.ui.theme.ChargeRegen
-import dev.silveradostats.ui.theme.Discharge
 import dev.silveradostats.ui.theme.DivergingHigh
 import dev.silveradostats.ui.theme.DivergingLow
 import dev.silveradostats.ui.theme.DivergingMid
@@ -88,8 +77,6 @@ import dev.silveradostats.vehicle.KnownProperties
 import dev.silveradostats.vehicle.PropertyRow
 import dev.silveradostats.vehicle.RowStatus
 import kotlinx.coroutines.delay
-import kotlin.math.abs
-import kotlin.math.ceil
 import kotlin.math.max
 import kotlin.math.roundToInt
 
@@ -107,18 +94,21 @@ fun vhalFigures(rows: List<PropertyRow>): VhalFigures {
 
 /**
  * Live dashboard, on one page in any landscape window: KPI tiles of a fixed height, then cards that
- * share what is left. Parked: power chart, temperatures, cell-group heatmap with its module strip.
- * Driving ([DashLayout.restricted]): larger tiles, power chart, a temperature summary; the heatmap
- * and the strip are not composed, there is nothing to tap, and cell min / max stays in its tile.
+ * share what is left. Parked: pack and temperatures, cell-group heatmap with its module strip.
+ * Driving ([DashLayout.restricted]): larger tiles, pack, a temperature summary; the heatmap and the
+ * strip are not composed, there is nothing to tap, and cell min / max stays in its tile.
  */
 @Composable
 fun LiveScreen(
   live: LiveState,
   vhal: VhalFigures,
+  /** The session's own range, m (the truck's is in [live] and [vhal]). */
+  ownRangeM: Double?,
   settings: UiSettings,
   layout: DashLayout,
   chrome: Chrome,
   onRetry: () -> Unit,
+  onMxOff: (Boolean) -> Unit,
   onTempUnit: (TempUnit) -> Unit,
   onDistUnit: (DistUnit) -> Unit,
   onOpenDiagnostics: () -> Unit,
@@ -132,13 +122,14 @@ fun LiveScreen(
   // While driving the figures all change together on the clock's tick, once a second, whatever
   // the two sources do between ticks.
   val dash = remember(now, settings.tempUnit, settings.distUnit, if (layout.restricted) Unit else live, if (layout.restricted) Unit else vhal) {
-    DashboardModel.build(live, vhal, settings.tempUnit, settings.distUnit, now)
+    DashboardModel.build(live, vhal, settings.tempUnit, settings.distUnit, now, settings.savedCapacity, System.currentTimeMillis(), ownRangeM)
   }
 
   Column(Modifier.fillMaxSize()) {
     chrome(
       { LiveSummary(dash.status, layout) },
       {
+        MxButton(settings, layout, onMxOff)
         if (layout.controls) {
           if (dash.status.canRetry) {
             Button(
@@ -173,12 +164,12 @@ fun LiveScreen(
   }
 }
 
-/** Driving: the power chart and a temperature summary, nothing to tap, no cell or module grid. */
+/** Driving: the pack and a temperature summary, nothing to tap, no cell or module grid. */
 @Composable
 private fun LiveDriving(dash: Dashboard, layout: DashLayout, modifier: Modifier) {
   Row(modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(layout.gapDp.dp)) {
-    PowerCard(dash.powerChart, null, null, layout, Modifier.weight(2f).fillMaxHeight())
-    TempsCard(dash.tempSummary, layout, Modifier.weight(1f).fillMaxHeight())
+    TempsCard("Pack", dash.pack, layout, Modifier.weight(1f).fillMaxHeight())
+    TempsCard("Temperatures", dash.tempSummary, layout, Modifier.weight(1f).fillMaxHeight())
   }
 }
 
@@ -186,24 +177,35 @@ private fun LiveDriving(dash: Dashboard, layout: DashLayout, modifier: Modifier)
 @Composable
 private fun LiveParked(dash: Dashboard, noAdapter: Boolean, unit: TempUnit, layout: DashLayout, onOpenDiagnostics: () -> Unit, modifier: Modifier) {
   var selectedGroup by rememberSaveable { mutableStateOf<Int?>(null) }
-  var selectedPowerAt by remember { mutableStateOf<Long?>(null) }
   Row(modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(layout.gapDp.dp)) {
-    PowerCard(dash.powerChart, selectedPowerAt, { selectedPowerAt = it }, layout, Modifier.weight(1f).fillMaxHeight())
-    TempsCard(dash.temps, layout, Modifier.weight(0.92f).fillMaxHeight())
+    TempsCard(if (layout.liveShort) "Pack and temps" else "Pack, temperatures and 12 V", dash.pack + dash.temps, layout, Modifier.weight(1f).fillMaxHeight())
     if (dash.heatmap == null) {
-      NoCellDataCard(noAdapter, dash.obdHint, dash.moduleTemps, unit, layout, onOpenDiagnostics, Modifier.weight(1.8f).fillMaxHeight())
+      NoCellDataCard(noAdapter, dash.obdHint, dash.moduleTemps, unit, layout, onOpenDiagnostics, Modifier.weight(2.4f).fillMaxHeight())
     } else {
-      HeatmapCard(dash.heatmap, dash.moduleTemps, unit, selectedGroup, { selectedGroup = it }, layout, Modifier.weight(1.8f).fillMaxHeight())
+      HeatmapCard(dash.heatmap, dash.moduleTemps, unit, selectedGroup, { selectedGroup = it }, layout, Modifier.weight(2.4f).fillMaxHeight())
     }
   }
+}
+
+/**
+ * Disconnect / Connect for the MX+, on every Simple and Live state, driving too: one tap, as big as
+ * the other driving targets, so the phone can have Bluetooth back without pulling over.
+ */
+@Composable
+internal fun MxButton(settings: UiSettings, layout: DashLayout, onMxOff: (Boolean) -> Unit) {
+  if (settings.demo || settings.mxAddress == null) return
+  val word = if (settings.mxOff) "Connect" else "Disconnect"
+  OutlinedButton(
+    onClick = { onMxOff(!settings.mxOff) },
+    modifier = Modifier.heightIn(min = layout.mxButtonDp.dp),
+    contentPadding = PaddingValues(horizontal = layout.segmentPadDp.dp),
+  ) { FitText(if (!layout.shortChrome) "$word MX+" else if (settings.mxOff) "MX+ on" else "MX+ off", sp = layout.type.tab - 2) }
 }
 
 internal fun toneColor(t: Tone): Color = when (t) {
   Tone.GOOD -> StatusOk
   Tone.WARN -> StatusWarn
   Tone.ERROR -> StatusError
-  Tone.DISCHARGE -> Discharge
-  Tone.CHARGE -> ChargeRegen
   Tone.DIM -> TextDim
   Tone.NORMAL -> Color(0xFFE8EDF2)
 }
@@ -226,7 +228,7 @@ private fun DashCard(modifier: Modifier, layout: DashLayout, content: @Composabl
 /** Small marker beside a title: "unverified" / "likely" (warning tint), "VHAL" / "est." (neutral). */
 @Composable
 internal fun Marker(text: String, sp: Int, modifier: Modifier = Modifier) {
-  val c = if (text == "unverified" || text == "likely") StatusWarn else MaterialTheme.colorScheme.primary
+  val c = if (text == "unverified" || text == "likely" || text == "sign unverified" || text == "unknown") StatusWarn else MaterialTheme.colorScheme.primary
   Surface(modifier, color = c.copy(alpha = 0.16f), shape = RoundedCornerShape(6.dp)) {
     FitText(text, Modifier.padding(horizontal = 6.dp, vertical = 1.dp), sp = sp, color = c)
   }
@@ -236,15 +238,6 @@ internal fun Marker(text: String, sp: Int, modifier: Modifier = Modifier) {
 internal fun Dot(color: Color, size: Int = 14, modifier: Modifier = Modifier) {
   Box(modifier.size(size.dp).clip(CircleShape).background(color))
 }
-
-/** The direction in a [PriorityRow]: the pill where there is room, else its dot (the sign says it too). */
-@Composable
-internal fun PriorityRowScope.Direction(text: String, tone: Tone, sp: Int, priority: Int, end: Boolean = true) {
-  Pill(text, tone, sp, Modifier.slot(priority, group = DIRECTION, end = end))
-  Dot(toneColor(tone), 12, Modifier.slot(priority + 1, group = DIRECTION, end = end))
-}
-
-private const val DIRECTION = 1
 
 // --- Header summary -------------------------------------------------------------------------------
 
@@ -283,7 +276,7 @@ private fun RowScope.LiveSummary(s: StatusView, layout: DashLayout) {
 
 @Composable
 private fun ColumnScope.KpiTiles(dash: Dashboard, layout: DashLayout) {
-  val tiles = listOf(dash.soc, dash.power, dash.capacity, dash.spread)
+  val tiles = listOf(dash.soc, dash.capacity, dash.capacityAh, dash.capacityDeviation)
   val rows = tiles.chunked(layout.liveTileCols)
   val size = if (layout.liveCards) Modifier.height(layout.liveTilesDp.dp) else Modifier.weight(1f)
   Column(Modifier.fillMaxWidth().then(size), verticalArrangement = Arrangement.spacedBy(layout.gapDp.dp)) {
@@ -300,11 +293,10 @@ private fun KpiTile(k: Kpi, layout: DashLayout, modifier: Modifier) {
   val type = layout.type
   val short = layout.liveShort
   DashCard(modifier, layout) {
-    // Who gives way first: an age that is not a warning, the pill's words, then the label.
+    // Who gives way first: an age that is not a warning, then the label.
     PriorityRow(Modifier.fit(1).fillMaxWidth()) {
       FitText(if (short) k.shortTitle else k.title, Modifier.slot(1, minWidth = layout.labelMinDp(type.title).dp), sp = type.title, color = TextDim)
       k.marker?.let { Marker(it, type.label, Modifier.slot(0)) }
-      (if (short) k.pillShort else k.pill)?.let { Direction(it, k.pillTone, type.label, priority = 3) }
       k.age?.takeIf { layout.ages || k.stale }?.let {
         FitText(it, Modifier.slot(if (k.stale) 2 else 5, end = true), sp = type.label, color = if (k.stale) StatusWarn else TextDim)
       }
@@ -330,125 +322,14 @@ private fun KpiTile(k: Kpi, layout: DashLayout, modifier: Modifier) {
   }
 }
 
-/** Direction pill: a coloured dot and tint carry the colour; the label stays in text ink. */
-@Composable
-internal fun Pill(text: String, tone: Tone, sp: Int, modifier: Modifier = Modifier) {
-  Surface(modifier, color = toneColor(tone).copy(alpha = 0.22f), shape = RoundedCornerShape(16.dp)) {
-    Row(Modifier.padding(horizontal = 10.dp, vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {
-      Dot(toneColor(tone), 10)
-      Spacer(Modifier.width(6.dp))
-      FitText(text, sp = sp, weight = FontWeight.SemiBold)
-    }
-  }
-}
-
-// --- Power history -----------------------------------------------------------------------------------
-
-/** [onSelect] null = no details and no gesture (driving). */
-@Composable
-private fun PowerCard(view: PowerView, selectedAt: Long?, onSelect: ((Long?) -> Unit)?, layout: DashLayout, modifier: Modifier) {
-  val type = layout.type
-  DashCard(modifier, layout) {
-    FitText(if (layout.liveShort) "Power, 5 min" else "Power, last 5 min", Modifier.fit(2), sp = type.cardTitle, weight = FontWeight.SemiBold)
-    val sel = selectedAt?.let { at -> view.points.firstOrNull { it.atMs == at } }
-    if (layout.legends) {
-      Row(Modifier.fit(3).fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-        Dot(Discharge, 12)
-        FitText(if (layout.liveShort) "Drive (+)" else "Discharge (+)", sp = type.body)
-        Dot(ChargeRegen, 12)
-        FitText(if (layout.liveShort) "Regen (${Units.MINUS})" else "Charge / regen (${Units.MINUS})", sp = type.body)
-        FitText(
-          when {
-            sel != null -> "· ${Units.age(view.nowMs - sel.atMs)} ago: ${Units.signed(sel.kw, 1)} kW"
-            view.points.isEmpty() -> "· no data yet (needs pack V and A from the MX+)"
-            layout.liveShort -> ""
-            else -> "· tap for a value"
-          },
-          Modifier.weight(1f),
-          sp = type.body,
-          color = if (sel != null) MaterialTheme.colorScheme.onSurface else TextDim,
-        )
-      }
-    }
-    PowerChart(view, sel?.atMs, onSelect, layout, Modifier.fill(1, layout.chartMinDp.dp).fillMaxWidth())
-  }
-}
-
-@Composable
-private fun PowerChart(view: PowerView, selectedAt: Long?, onSelect: ((Long?) -> Unit)?, layout: DashLayout, modifier: Modifier) {
-  val measurer = rememberTextMeasurer()
-  val labelStyle = TextStyle(color = TextDim, fontSize = layout.type.axis.sp)
-  val axisLeft = layout.axisLeftDp.dp
-  val axisBottom = layout.axisBottomDp.dp
-  val points = view.points
-  Canvas(
-    modifier.inspectTap(onSelect != null, points, view.nowMs) { o ->
-      val left = axisLeft.toPx()
-      val w = size.width - left
-      if (w <= 0 || points.isEmpty()) {
-        onSelect?.invoke(null)
-      } else {
-        val t = view.nowMs - view.windowMs + ((o.x - left) / w * view.windowMs).toLong()
-        val nearest = points.minBy { abs(it.atMs - t) }
-        onSelect?.invoke(if (abs(nearest.atMs - t) <= 5_000) nearest.atMs else null)
-      }
-    },
-  ) {
-    val left = axisLeft.toPx()
-    val bottom = axisBottom.toPx()
-    val w = size.width - left
-    val plotH = size.height - bottom
-    if (w <= 0 || plotH <= 0) return@Canvas
-    val mid = plotH / 2f
-    // Recessive grid: ±scale, ±scale/2 dashed; zero line solid.
-    val dash = PathEffect.dashPathEffect(floatArrayOf(6f, 6f))
-    for (f in listOf(-1f, -0.5f, 0.5f, 1f)) {
-      val y = mid - f * mid
-      drawLine(GridLine, Offset(left, y), Offset(size.width, y), strokeWidth = 1.dp.toPx(), pathEffect = dash)
-    }
-    drawLine(TextDim, Offset(left, mid), Offset(size.width, mid), strokeWidth = 1.5.dp.toPx())
-    val s = Units.num(view.scaleKw, 0)
-    for ((label, y) in listOf("+$s kW" to 0f, "0" to mid, "${Units.MINUS}$s kW" to plotH)) {
-      val r = measurer.measure(label, labelStyle)
-      drawText(r, topLeft = Offset(left - r.size.width - 8.dp.toPx(), (y - r.size.height / 2f).coerceIn(0f, (size.height - r.size.height).coerceAtLeast(0f))))
-    }
-    // Fewer labels on a narrow chart, so they never touch; "now" always shows.
-    val widest = measurer.measure("${Units.MINUS}5 min", labelStyle).size.width
-    // The first label starts at the plot's edge instead of centring on its tick: half a label closer.
-    val every = max(1, ceil((widest * 1.5f + 8.dp.toPx()) / (w / 5f)).toInt())
-    for (m in 0..5) {
-      if ((5 - m) % every != 0) continue
-      val label = if (m == 5) "now" else "${Units.MINUS}${5 - m} min"
-      val r = measurer.measure(label, labelStyle)
-      val x = left + w * m / 5f
-      drawText(r, topLeft = Offset((x - r.size.width / 2f).coerceIn(left, (size.width - r.size.width).coerceAtLeast(left)), plotH + 2.dp.toPx()))
-    }
-    if (points.isEmpty()) return@Canvas
-    val start = view.nowMs - view.windowMs
-    val barW = maxOf(1.5.dp.toPx(), w / (view.windowMs / 1000f) * 0.8f)
-    for (p in points) {
-      val x = left + w * ((p.atMs - start).toFloat() / view.windowMs)
-      val h = (p.kw / view.scaleKw).coerceIn(-1.0, 1.0).toFloat() * mid
-      if (abs(h) < 0.5f) continue
-      val color = if (p.kw >= 0) Discharge else ChargeRegen
-      val top = if (h > 0) mid - h else mid
-      drawRect(color, Offset(x - barW / 2f, top), Size(barW, abs(h)))
-    }
-    if (selectedAt != null) {
-      val x = left + w * ((selectedAt - start).toFloat() / view.windowMs)
-      drawLine(Color.White, Offset(x, 0f), Offset(x, plotH), strokeWidth = 2.dp.toPx())
-    }
-  }
-}
-
 // --- Temperatures -----------------------------------------------------------------------------------
 
 @Composable
-private fun TempsCard(lines: List<TempLine>, layout: DashLayout, modifier: Modifier) {
+private fun TempsCard(title: String, lines: List<TempLine>, layout: DashLayout, modifier: Modifier) {
   val type = layout.type
   val short = layout.liveShort
   DashCard(modifier, layout) {
-    FitText(if (short) "Temperatures" else "Temperatures and 12 V", Modifier.fit(2), sp = type.cardTitle, weight = FontWeight.SemiBold)
+    FitText(title, Modifier.fit(2), sp = type.cardTitle, weight = FontWeight.SemiBold)
     // In order of importance, so a short card keeps the pack's own figures.
     lines.forEachIndexed { i, l ->
       PriorityRow(Modifier.fit(3 + i).fillMaxWidth()) {

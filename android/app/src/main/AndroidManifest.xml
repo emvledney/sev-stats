@@ -11,8 +11,6 @@
     <uses-feature android:name="android.hardware.type.automotive" android:required="false" />
     <uses-feature android:name="android.software.car.templates_host" android:required="false" />
     <uses-feature android:name="android.hardware.wifi" android:required="false" />
-    <uses-feature android:name="android.hardware.usb.host" android:required="false" />
-    <uses-feature android:name="android.hardware.bluetooth_le" android:required="false" />
     <uses-feature android:name="android.hardware.screen.portrait" android:required="false" />
     <uses-feature android:name="android.hardware.screen.landscape" android:required="false" />
 
@@ -25,16 +23,17 @@
     <uses-permission android:name="android.car.permission.CAR_SPEED" />
     <uses-permission android:name="android.car.permission.READ_CAR_DISPLAY_UNITS" />
 
-    <!-- Adapter link (TCP client), report upload, network diagnostics. -->
+    <!-- Send to laptop report upload, network diagnostics. -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
-    <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
-    <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE" />
+
+    <!-- Battery log: the hourly job is persisted, so it survives a reboot of the head unit. -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
     <!--
       Bluetooth: Classic discovery and pairing with the OBDLink MX+, then one RFCOMM serial
-      connection to it (bt/ package only); BLE scan only (never connect).
+      connection to it (bt/ package only).
     -->
     <uses-permission
         android:name="android.permission.BLUETOOTH_SCAN"
@@ -68,6 +67,16 @@
         <service
             android:name=".link.LinkService"
             android:exported="false" />
+
+        <!--
+          The battery log's hourly job (log/LogScheduler.kt). Only the system's JobScheduler may run it. It
+          reads the built-in data once and, only with the truck reporting ignition on and an MX+ chosen,
+          takes one row through the LinkService above.
+        -->
+        <service
+            android:name=".log.LogJobService"
+            android:exported="false"
+            android:permission="android.permission.BIND_JOB_SERVICE" />
 
         <!--
           Battery Glance: the Car App Library's templated service, also usable while driving. The

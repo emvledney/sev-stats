@@ -28,17 +28,14 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -52,7 +49,6 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.silveradostats.DiagState
 import dev.silveradostats.DiagnosticsViewModel
 import dev.silveradostats.LiveViewModel
-import dev.silveradostats.adapter.AdapterLinkTest
 import dev.silveradostats.diag.KV
 import dev.silveradostats.ui.theme.StatusError
 import dev.silveradostats.ui.theme.StatusOk
@@ -103,8 +99,6 @@ fun DiagnosticsScreen(
       items(rows, key = { "p-${it.id}-${it.areaId}" }) { PropertyRowItem(it) }
       item(key = "system") { KvSection("System & display", s.build + s.display + s.composeDisplay) }
       item(key = "network") { KvSection("Network", s.network, action = "Refresh" to vm::refreshStatic) }
-      item(key = "adapter") { AdapterSection(s, vm) }
-      item(key = "ble") { BleSection(s, vm::runBleScan) }
       item(key = "report") { ReportSection(s, vm, liveVm) }
     }
   }
@@ -328,7 +322,7 @@ private fun EnergySection(s: DiagState) {
       s.live.forEach { LiveTile(it) }
     }
     Text(
-      "Pack power uses the AOSP sign convention (+ charging, − discharging); GM's sign is unverified. " +
+      "Pack power uses the AOSP sign convention (+ charging, − discharging); the session checks GM's against the battery level. " +
         "Pack voltage, current, cell and module data are not in Android's vehicle API: they need the OBD adapter.",
       style = MaterialTheme.typography.bodySmall,
       color = TextDim,
@@ -447,78 +441,6 @@ private fun PropertyRowItem(r: PropertyRow) {
       }
       Text(meta.joinToString("  ·  "), style = MaterialTheme.typography.bodySmall, color = TextDim)
       if (r.detail.isNotEmpty()) Text(r.detail, style = MaterialTheme.typography.bodySmall, color = statusColor(r.status))
-    }
-  }
-}
-
-@Composable
-private fun AdapterSection(s: DiagState, vm: DiagnosticsViewModel) {
-  Section(
-    "Wi-Fi adapter link test (TCP)",
-    "For ELM327-compatible Wi-Fi adapters (not used with the OBDLink MX+). Connect + adapter setup only " +
-      "(ATZ, settings, ATI, STI, ATRV, all adapter-local); never any vehicle request.",
-  ) {
-    Row(horizontalArrangement = Arrangement.spacedBy(16.dp), verticalAlignment = Alignment.CenterVertically) {
-      OutlinedTextField(
-        value = s.adapterHost,
-        onValueChange = vm::setAdapterHost,
-        label = { Text("Host") },
-        singleLine = true,
-        textStyle = MaterialTheme.typography.bodyLarge,
-        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
-        modifier = Modifier.width(360.dp),
-      )
-      OutlinedTextField(
-        value = s.adapterPort,
-        onValueChange = vm::setAdapterPort,
-        label = { Text("Port") },
-        singleLine = true,
-        textStyle = MaterialTheme.typography.bodyLarge,
-        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-        modifier = Modifier.width(180.dp),
-      )
-      Switch(checked = s.adapterBindWifi, onCheckedChange = vm::setAdapterBindWifi)
-      Text("Bind to Wi-Fi network", Modifier.weight(1f), color = TextDim)
-      BigButton(if (s.adapterRunning) "Running…" else "Run", enabled = !s.adapterRunning, onClick = vm::runAdapterTest)
-    }
-    Text(
-      "Default ${AdapterLinkTest.DEFAULT_HOST}:${AdapterLinkTest.DEFAULT_PORT} (WiCAN access point). Use \"Bind to Wi-Fi\" when the head unit " +
-        "joined the adapter's own Wi-Fi, which has no internet and is not the default network.",
-      style = MaterialTheme.typography.bodySmall,
-      color = TextDim,
-    )
-    s.adapterError?.let { Text(it, color = StatusError) }
-    val r = s.adapterResult ?: return@Section
-    HorizontalDivider()
-    LinkCheckView(r)
-  }
-}
-
-@Composable
-private fun BleSection(s: DiagState, onScan: () -> Unit) {
-  Section("BLE scan", "10 s low-latency scan. Lists devices only; never connects or pairs.") {
-    Row(horizontalArrangement = Arrangement.spacedBy(16.dp), verticalAlignment = Alignment.CenterVertically) {
-      BigButton(if (s.bleRunning) "Scanning…" else "Scan 10 s", enabled = !s.bleRunning, onClick = onScan)
-      if (s.bleRunning) CircularProgressIndicator(Modifier.size(32.dp))
-      s.bleResult?.let { r ->
-        Text(
-          if (r.ok) "${r.devices.size} devices in ${r.durationMs / 1000.0} s" else "Failed: ${r.error}",
-          color = if (r.ok) MaterialTheme.colorScheme.onSurface else StatusError,
-        )
-      }
-    }
-    val devices = s.bleResult?.devices ?: s.bleLive
-    devices.forEach { d ->
-      Row(Modifier.fillMaxWidth()) {
-        Text(d.address, Modifier.width(260.dp), fontFamily = FontFamily.Monospace)
-        Text("${d.rssi} dBm", Modifier.width(130.dp), color = TextDim)
-        Column(Modifier.weight(1f)) {
-          Text(d.name ?: "(no name)", fontWeight = FontWeight.SemiBold)
-          if (d.serviceUuids.isNotEmpty()) {
-            Text(d.serviceUuids.joinToString(", "), style = MaterialTheme.typography.bodySmall, color = TextDim)
-          }
-        }
-      }
     }
   }
 }

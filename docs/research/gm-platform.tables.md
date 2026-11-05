@@ -1,3 +1,5 @@
+> **Superseded in part, see [README](README.md):** the dedicated-track entries in T4 and T5 were overtaken: that track stayed Inactive on this account, and the regular internal-testing track works.
+
 ### T1. GM Ultium/Global-B head-unit platform facts (verified unless marked *inference*)
 | Item | Value | Source (date) |
 |---|---|---|

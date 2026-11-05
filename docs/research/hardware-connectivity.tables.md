@@ -1,3 +1,5 @@
+> **Superseded in part, see [README](README.md):** the MX+ over Bluetooth Classic is the only adapter, so the other adapters' roles and the WiCAN, BLE and USB options below no longer apply. Nothing needs buying.
+
 ### Table 1 – OBD and CAN adapters compared for Silverado EV (GM Ultium / VIP)
 | Adapter | Link to host | Chip / controller | CAN FD | 29-bit headers, custom flow control, long ISO-TP | Sleep current | Reported on Ultium? | Role in plan | Sources |
 |---|---|---|---|---|---|---|---|---|

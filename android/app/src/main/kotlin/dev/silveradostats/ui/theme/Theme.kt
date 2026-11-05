@@ -19,11 +19,8 @@ val StatusWarn = Color(0xFFF2C14E)
 val StatusError = Color(0xFFFF7A70)
 val TextDim = Color(0xFFA9B4BF)
 
-// Data colours. Power direction is a two-hue pair (orange / aqua, validated for colour-vision
-// deficiency and contrast on a dark surface); the cell heatmap is diverging blue <-> red with a
-// gray midpoint (= pack average); module temperatures use one amber hue, dark -> bright.
-val Discharge = Color(0xFFD95926)
-val ChargeRegen = Color(0xFF199E70)
+// Data colours. The cell heatmap is diverging blue <-> red with a gray midpoint (= pack average);
+// module temperatures use one amber hue, dark -> bright.
 val DivergingLow = Color(0xFF3987E5)
 val DivergingMid = Color(0xFF383835)
 val DivergingHigh = Color(0xFFE66767)
@@ -32,12 +29,9 @@ val TempRampHigh = Color(0xFFEDA100)
 val DemoBannerColor = Color(0xFFFAB219)
 val GridLine = Color(0xFF39434D)
 
-// Simple tab: cumulative efficiency (green line) over per-mile bars (blue), validated as a pair on
-// the dark card surface (lightness band, CVD and normal-vision separation, >= 3:1 contrast).
+// Simple tab: the efficiency sparkline and the battery ring.
 val EfficiencyLine = Color(0xFF3FAE4A)
-val EfficiencyBars = Color(0xFF3987E5)
 val BatteryFill = Color(0xFF7CC4FF)
-val CardSurface = Color(0xFF171C21)
 
 private val Colors = darkColorScheme(
   primary = Accent,

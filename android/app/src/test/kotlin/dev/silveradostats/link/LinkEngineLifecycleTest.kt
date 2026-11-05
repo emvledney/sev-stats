@@ -365,4 +365,62 @@ class LinkEngineLifecycleTest {
     e.retryIfStoppedBy(BtErrors.NO_CONNECT_PERMISSION)
     await(e, "retried") { opens.get() == 2 && it.status == LinkStatus.ADAPTER_UNREACHABLE }
   }
+
+  @Test
+  fun disconnectClosesTheLinkAndNothingReconnectsUntilConnect() {
+    val fake = fake(MultiFakeElm())
+    val opens = AtomicInteger()
+    val links = ArrayList<Recording>()
+    val e = engine()
+    e.setSource(source {
+      opens.incrementAndGet()
+      Recording(fake.connect()).also { links += it }
+    })
+    val token = Any()
+    e.attach(token)
+    await(e, "polling") { it.polling && it.status == LinkStatus.CONNECTED }
+
+    e.setDisconnected(true)
+    val off = await(e, "disconnected") { it.status == LinkStatus.DISCONNECTED }
+    assertEquals(LinkMessages.DISCONNECTED, off.message)
+    assertEquals(false, off.canRetry)
+    assertTrue("the socket is closed", links.single().closedAtNanos > 0)
+
+    // Nothing brings it back: not time, not Retry, not another screen coming and going.
+    offset.addAndGet(120_000)
+    e.retry()
+    e.detach(token)
+    e.attach(token)
+    Thread.sleep(400)
+    assertEquals(1, opens.get())
+    assertEquals(LinkStatus.DISCONNECTED, e.state.value.status)
+
+    e.setDisconnected(false)
+    await(e, "connected again") { it.polling && it.status == LinkStatus.CONNECTED }
+    assertEquals(2, opens.get())
+  }
+
+  @Test
+  fun disconnectedFromTheStartNeverOpensTheLink() {
+    val opens = AtomicInteger()
+    val e = engine()
+    e.setDisconnected(true)
+    e.setSource(source {
+      opens.incrementAndGet()
+      throw ConnectFailure("not reached", retryable = true)
+    })
+    e.attach(Any())
+    await(e, "disconnected") { it.status == LinkStatus.DISCONNECTED }
+    Thread.sleep(200)
+    assertEquals(0, opens.get())
+  }
+
+  @Test
+  fun disconnectDoesNotStopTheSimulator() {
+    val e = engine()
+    e.setDisconnected(true)
+    e.setSource(LinkSource.Demo)
+    e.attach(Any())
+    await(e, "demo") { it.status == LinkStatus.DEMO && it.polling }
+  }
 }
