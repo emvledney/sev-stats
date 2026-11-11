@@ -1,3 +1,5 @@
+> **Superseded in part, see [README](README.md):** `required=true` and the parked-only view in the recommendations were overtaken: the manifest declares `required=false`, and the main screen runs in Drive with a locked-down moving mode. The property facts stay the reference.
+
 # vhal-properties
 
 ## SUMMARY

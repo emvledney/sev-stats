@@ -57,7 +57,7 @@ Raw logs are in `logs/`, which is git-ignored.
    - modules 13–18: 3671.8, 3676.8, 3675.9, 3676.1, 3671.9, 3672.9
    - modules 19–24: 3673.5, 3673.7, 3671.0, 3671.4, 3670.9, 3671.2
 
-## Still to do on the truck (Phase 2)
+## Still to do on the truck (now tracked under Open work in `PLAN.md`)
 - **Pack current under real load:** sign and scale while driving, plus regen.
 - **Charging:**
   - AC: pilot current, `2414` sign, `5401` codes

@@ -75,10 +75,10 @@ class DrivingStateTest {
 
   @Test
   fun theReasonLineSaysWhatTheStateIsGoingBy() {
-    assertEquals("Gear Park · speed 0.1 m/s · restrictions off", DrivingPolicy.reason(DrivingInputs(true, false, park, 0.1)))
-    assertEquals("Gear Drive · speed 15.0 m/s · restrictions on", DrivingPolicy.reason(DrivingInputs(true, true, drive, 15.0)))
+    assertEquals("Gear Park · speed 0.2 mph · restrictions off", DrivingPolicy.reason(DrivingInputs(true, false, park, 0.1)))
+    assertEquals("Gear Drive · speed 33.6 mph · restrictions on", DrivingPolicy.reason(DrivingInputs(true, true, drive, 15.0)))
     assertEquals("Gear not read · speed not read · restrictions no answer", DrivingPolicy.reason(DrivingInputs(true)))
-    assertEquals("Gear 777 · speed -1.5 m/s · restrictions off", DrivingPolicy.reason(DrivingInputs(true, false, 777, -1.5)))
+    assertEquals("Gear 777 · speed -3.4 mph · restrictions off", DrivingPolicy.reason(DrivingInputs(true, false, 777, -1.5)))
   }
 
   @Test

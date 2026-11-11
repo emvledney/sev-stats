@@ -72,6 +72,7 @@ import dev.silveradostats.map.powerTier
 import dev.silveradostats.ui.Chrome
 import dev.silveradostats.ui.layout.DashLayout
 import dev.silveradostats.ui.layout.FitText
+import dev.silveradostats.ui.live.Units
 import dev.silveradostats.ui.simple.SimpleModel
 import dev.silveradostats.ui.theme.StatusOk
 import dev.silveradostats.ui.theme.TextDim
@@ -93,8 +94,8 @@ private enum class Picker { POWER, PLUGS, NETWORKS }
  * and filtering chargers on the move is what it is for. Only the location-permission request waits
  * for Park, like every other system dialog.
  *
- * The range in the header and the outline on the map use the session's measured efficiency once it
- * has one, and the truck's own estimate until then.
+ * The range in the header and the outline on the map use the session's own estimate (the energy left
+ * at the last 15 minutes' efficiency, as on the Simple tab) once it has one, and the truck's until then.
  */
 @Composable
 fun MapScreen(
@@ -124,8 +125,8 @@ fun MapScreen(
     }
   }
 
-  val measured = session.rangeAtMeasuredM
-  val rangeM = measured ?: session.rangeM
+  val estimate = session.rangeEstimate
+  val rangeM = estimate?.m ?: session.rangeM
   LaunchedEffect(rangeM) { controller.setRange(rangeM) }
 
   var query by remember { mutableStateOf("") }
@@ -153,10 +154,8 @@ fun MapScreen(
       {
         if (rangeM != null) {
           Icon(painterResource(R.drawable.map_ic_battery), null, Modifier.size(28.dp), tint = StatusOk)
-          FitText(SimpleModel.distText(rangeM, settings.distUnit, 0), sp = layout.type.tab, weight = FontWeight.Bold)
-          val basis = session.efficiency.mPerWh?.takeIf { measured != null }
-            ?.let { "at ${SimpleModel.effText(it, settings.distUnit)} ${SimpleModel.effUnit(settings.distUnit)} measured" }
-            ?: "truck's estimate"
+          FitText(SimpleModel.distText(rangeM, Units.DIST, 0), sp = layout.type.tab, weight = FontWeight.Bold)
+          val basis = estimate?.let { "at ${SimpleModel.effText(it.mPerWh, Units.DIST)} ${SimpleModel.effUnit(Units.DIST)}, last 15 min" } ?: "truck's estimate"
           FitText(basis, Modifier.weight(1f), sp = body, color = TextDim)
         }
       },

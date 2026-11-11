@@ -15,8 +15,6 @@ from __future__ import annotations
 
 FUNCTIONAL_29 = 0x18DB33F1
 FUNCTIONAL_RESP_29 = (0x18DAF100, 0x1FFFFF00)  # id, mask
-FUNCTIONAL_11 = 0x7DF
-FUNCTIONAL_RESP_11 = (0x7E8, 0x7F8)
 TESTER = 0xF1
 
 
@@ -32,12 +30,3 @@ def ids(ecu: int, pri: int) -> tuple[int, int]:
     else:
         raise ValueError("priority must be 0x14 or 0x18")
     return tx, rx
-
-
-def flow_control_target(resp_id: int) -> int:
-    """Where to send ISO-TP flow control for a multi-frame answer from ``resp_id``."""
-    if resp_id <= 0x7FF:
-        return resp_id - 8
-    ecu = resp_id & 0xFF
-    pri = resp_id >> 24
-    return ids(ecu, pri if pri in (0x14, 0x18) else 0x18)[0]

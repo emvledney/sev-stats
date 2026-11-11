@@ -1,3 +1,5 @@
+> **Superseded in part, see [README](README.md):** answered for this truck in `docs/session1-results.md` and `tools/probe/dids/silverado_ev.toml`: the `434F`, `4127` and `4124` fallback is wrong here, `2AF5` covers half B only, and coulomb-counted Ah is not built. Decodes and sources remain the reference.
+
 # ultium-uds
 
 ## SUMMARY

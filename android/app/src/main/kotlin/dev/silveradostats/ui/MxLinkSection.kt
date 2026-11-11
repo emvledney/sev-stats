@@ -31,6 +31,7 @@ import dev.silveradostats.bt.BtDevice
 import dev.silveradostats.diag.KV
 import dev.silveradostats.link.LinkCheckResult
 import dev.silveradostats.link.MonoClock
+import dev.silveradostats.link.MxAction
 import dev.silveradostats.ui.live.DashboardModel
 import dev.silveradostats.ui.live.Tone
 import dev.silveradostats.ui.live.Units
@@ -47,6 +48,7 @@ internal fun MxLinkSection(vm: LiveViewModel, onRequestPermissions: () -> Unit) 
   val bt by vm.bt.collectAsStateWithLifecycle()
   val live by vm.live.collectAsStateWithLifecycle()
   val settings by vm.settings.collectAsStateWithLifecycle()
+  val mxAction by vm.mxAction.collectAsStateWithLifecycle()
   val now by produceState(MonoClock.ms(), bt.discovering) {
     while (true) {
       value = MonoClock.ms()
@@ -56,7 +58,7 @@ internal fun MxLinkSection(vm: LiveViewModel, onRequestPermissions: () -> Unit) 
   Section(
     "OBDLink MX+ link",
     "Bluetooth Classic serial link to the adapter. Test link connects and runs the adapter's own setup only " +
-      "(ATZ banner, settings, ATI, STI, ATRV): no vehicle requests. Keep your phone's Bluetooth off so it doesn't hold the MX+.",
+      "(ATZ banner, settings, ATI, STI, ATRV): no vehicle requests. Disconnect frees the MX+ for your phone and stays that way until you tap Connect. Keep your phone's own link to the MX+ off so it doesn't hold it.",
     action = "Refresh" to vm::refreshBluetooth,
   ) {
     // Live link status.
@@ -64,7 +66,15 @@ internal fun MxLinkSection(vm: LiveViewModel, onRequestPermissions: () -> Unit) 
     Row(horizontalArrangement = Arrangement.spacedBy(16.dp), verticalAlignment = Alignment.CenterVertically) {
       Badge(chip, toneColor(tone))
       Text(live.message, Modifier.weight(1f), style = MaterialTheme.typography.bodyLarge)
-      if (live.canRetry) BigButton("Retry", onClick = vm::retry)
+      if (settings.demo) {
+        if (live.canRetry) BigButton("Retry", onClick = vm::retry)
+      } else if (settings.mxAddress != null) {
+        BigButton(mxAction.label, onClick = { vm.onMxAction(mxAction) })
+        // A failed link keeps retrying by itself: this is how to make it stop before it gets through.
+        if (mxAction == MxAction.CONNECT && !settings.mxOff) {
+          OutlinedButton(onClick = { vm.onMxAction(MxAction.CANCEL) }, modifier = Modifier.heightIn(min = 56.dp)) { Text("Stop trying") }
+        }
+      }
     }
     live.adapter?.let { Text("Link: $it", style = MaterialTheme.typography.bodyMedium, color = TextDim) }
 
@@ -74,7 +84,7 @@ internal fun MxLinkSection(vm: LiveViewModel, onRequestPermissions: () -> Unit) 
       Column(Modifier.weight(1f)) {
         Text("Demo data (simulated truck)", style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold)
         Text(
-          "Uses the built-in simulator instead of the MX+; the dashboard shows a DEMO DATA banner. " +
+          "Uses the built-in simulator instead of the MX+. Nothing on Simple says so: its figures are made up while this is on. " +
             "On by default on emulators and non-car devices.",
           style = MaterialTheme.typography.bodySmall,
           color = TextDim,
@@ -190,7 +200,7 @@ private fun DeviceRow(d: BtDevice, chosen: Boolean, actions: List<Pair<String, (
   }
 }
 
-/** Result of an init-only adapter check (MX+ or TCP). */
+/** Result of an init-only adapter check (Test link). */
 @Composable
 internal fun LinkCheckView(r: LinkCheckResult) {
   Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {

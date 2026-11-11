@@ -1,3 +1,5 @@
+> **Superseded in part, see [README](README.md):** answered for this truck in `docs/session1-results.md` and `tools/probe/dids/silverado_ev.toml`: `434F` reads 60 °C here and is never displayed, and the polling tiers in use are in that profile.
+
 ### Table 1: DLC (SAE J1962) pinout on GM Global B / VIP (Silverado EV)
 | Pin | Function on Global B | Use? | Confidence | Source |
 |---|---|---|---|---|

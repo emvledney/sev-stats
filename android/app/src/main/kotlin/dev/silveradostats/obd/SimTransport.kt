@@ -45,6 +45,13 @@ class UltiumSim(private val clock: () -> Double = Monotonic::seconds) {
       when (did) {
         0x27C6 -> return u16(s.soc * 655.35)
         0x27AF -> return u16(s.soc / 100 * 205.4 * 100)
+        0x27AE -> return u16(20520.0)
+        0x4676 -> return u16(59340.0)
+        0x27B9 -> return bytesFromHex("001566")
+        0x2984 -> return bytesFromHex("2041")
+        0x270D -> return bytesFromHex("0fa0")
+        0x28AF -> return bytesFromHex("2710")
+        0x2770 -> return bytesFromHex("16")
         0x27C7 -> return u24((s.soc / 100 * 440 * 103).toLong())
         0x27C0 -> return u24((42 * 16.09344).toLong())
         0x2AF5, 0x2AF6 -> {

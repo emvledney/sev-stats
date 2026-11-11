@@ -7,53 +7,51 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.sp
 
-// Always dark: a car screen at night must not glare. High-contrast text, muted surfaces.
-private val Background = Color(0xFF0E1114)
-private val Surface = Color(0xFF171C21)
-private val SurfaceHigh = Color(0xFF212830)
-private val Accent = Color(0xFF7CC4FF)
-private val AccentDim = Color(0xFF1F3B52)
+// Always dark: a car screen at night must not glare. Cell Pack, the owner's choice (2026-11-06): the blue and
+// coral of the app icon and the Live heatmap, on navy, with near-white text.
+private val Background = Color(0xFF0B1020)
+private val Surface = Color(0xFF141B30)
+private val SurfaceHigh = Color(0xFF1E2742)
+private val Accent = Color(0xFF6CB4FF)
+private val AccentDim = Color(0xFF1E3A66)
+
+/** Text: what the theme calls onSurface, for what is drawn outside a theme's reach. */
+val Ink = Color(0xFFEEF3FF)
 
 val StatusOk = Color(0xFF6FD08C)
 val StatusWarn = Color(0xFFF2C14E)
 val StatusError = Color(0xFFFF7A70)
-val TextDim = Color(0xFFA9B4BF)
+val TextDim = Color(0xFFAEBBDA)
 
-// Data colours. Power direction is a two-hue pair (orange / aqua, validated for colour-vision
-// deficiency and contrast on a dark surface); the cell heatmap is diverging blue <-> red with a
-// gray midpoint (= pack average); module temperatures use one amber hue, dark -> bright.
-val Discharge = Color(0xFFD95926)
-val ChargeRegen = Color(0xFF199E70)
+// Data colours. The cell heatmap is diverging blue <-> red with a gray midpoint (= pack average);
+// module temperatures use one amber hue, dark -> bright.
 val DivergingLow = Color(0xFF3987E5)
 val DivergingMid = Color(0xFF383835)
 val DivergingHigh = Color(0xFFE66767)
 val TempRampLow = Color(0xFF2B2A26)
 val TempRampHigh = Color(0xFFEDA100)
-val DemoBannerColor = Color(0xFFFAB219)
-val GridLine = Color(0xFF39434D)
+val GridLine = Color(0xFF2E3A5C)
 
-// Simple tab: cumulative efficiency (green line) over per-mile bars (blue), validated as a pair on
-// the dark card surface (lightness band, CVD and normal-vision separation, >= 3:1 contrast).
-val EfficiencyLine = Color(0xFF3FAE4A)
-val EfficiencyBars = Color(0xFF3987E5)
-val BatteryFill = Color(0xFF7CC4FF)
-val CardSurface = Color(0xFF171C21)
+// Simple tab, what a tile is about: energy you have, energy spent, and what one got out of the other.
+val ToneHave = Color(0xFF3987E5)
+val ToneSpent = Color(0xFFE66767)
+val ToneEfficiency = Color(0xFF9273E6)
 
 private val Colors = darkColorScheme(
   primary = Accent,
   onPrimary = Color(0xFF00213A),
   primaryContainer = AccentDim,
   onPrimaryContainer = Color(0xFFD3E9FF),
-  secondary = Color(0xFFB7C8D9),
+  secondary = Color(0xFFB4C4E4),
   background = Background,
-  onBackground = Color(0xFFE8EDF2),
+  onBackground = Ink,
   surface = Surface,
-  onSurface = Color(0xFFE8EDF2),
+  onSurface = Ink,
   surfaceVariant = SurfaceHigh,
   onSurfaceVariant = TextDim,
   surfaceContainer = Surface,
   surfaceContainerHigh = SurfaceHigh,
-  outline = Color(0xFF55616D),
+  outline = Color(0xFF4A5A85),
   error = StatusError,
 )
 

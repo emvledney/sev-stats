@@ -16,16 +16,21 @@ import androidx.lifecycle.repeatOnLifecycle
 import dev.silveradostats.diag.AppPermissions
 import dev.silveradostats.diag.CrashLog
 import dev.silveradostats.diag.SystemInfo
+import dev.silveradostats.link.AppSettings
+import dev.silveradostats.log.LogHub
 import dev.silveradostats.ui.AppShell
 import dev.silveradostats.ui.theme.SilveradoStatsTheme
 import dev.silveradostats.vehicle.CarPerm
+import dev.silveradostats.vehicle.VehicleWatch
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 
 /**
  * Simple, Live dashboard and Diagnostics tabs. Marked distraction-optimized (see the manifest for the
  * trade-off), so it stays on screen out of Park and switches itself to its restricted driving
- * layouts (LiveViewModel.restricted). Measuring continues while this activity or Battery Glance is on
- * screen; with another app in front Android freezes the process within seconds to minutes.
+ * layouts (LiveViewModel.restricted). It starts VehicleWatchService, which goes on measuring with another
+ * app in front or none of the app's screens up.
  *
  * No permission dialog and no Settings screen is ever opened while restricted. A request asks one
  * dialog at a time and stops when the restriction begins. Known limit: a dialog already open then
@@ -73,11 +78,22 @@ class MainActivity : ComponentActivity() {
         )
       }
     }
-    // Whatever Diagnostics had running ends with the restriction, seen from any tab.
+    val logs = LogHub.get(this)
+    logs.onAppOpened()
+    // Send to laptop refuses under the restriction, seen from any tab.
     vm.followRestriction(liveVm.restricted)
     // Live energy values: 1 s refresh only while the screen is visible.
     lifecycleScope.launch {
       repeatOnLifecycle(Lifecycle.State.STARTED) { vm.liveLoop() }
+    }
+    lifecycleScope.launch {
+      repeatOnLifecycle(Lifecycle.State.STARTED) { logs.whileOnScreen() }
+    }
+    // From a visible screen, as Android asks, and again when demo data goes off (with it on, there is nothing to watch).
+    lifecycleScope.launch {
+      repeatOnLifecycle(Lifecycle.State.STARTED) {
+        AppSettings.get(this@MainActivity).state.map { it.demo }.distinctUntilChanged().collect { VehicleWatch.start(this@MainActivity) }
+      }
     }
   }
 
@@ -93,7 +109,6 @@ class MainActivity : ComponentActivity() {
     if (!isChangingConfigurations) {
       liveVm.setVisible(false)
       // The driving state is not watched behind another app, and nothing here would show the result.
-      vm.stopRunningWork()
       liveVm.onLeftScreen()
     }
     super.onStop()

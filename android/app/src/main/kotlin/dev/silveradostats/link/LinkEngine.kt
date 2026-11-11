@@ -67,12 +67,13 @@ class RetryPolicy(val minMs: Long = MIN_AUTO_RETRY_MS, val maxMs: Long = 60_000)
 
 /** User-facing texts for link problems (pure, unit tested). */
 object LinkMessages {
+  const val DISCONNECTED = "The MX+ is disconnected and free for your phone or laptop. Tap Connect to read it again."
   const val NO_ADAPTER = "Choose your OBDLink MX+ under Diagnostics › OBDLink MX+ link, or turn on demo data there."
   const val IDLE = "Connects while the app is on screen."
   const val ASLEEP_SILENT = "Truck asleep: nothing is sent on the bus. The adapter's own voltage is checked once a minute; " +
     "polling resumes when the truck wakes."
   const val ASLEEP_NO_VOLTAGE = "Truck asleep: single checks at 1, 5 and 30 minutes (this adapter can't report its voltage)."
-  const val POLLING_STOPPED = "Polling stopped: the truck stayed asleep. Tap Retry once the truck is on."
+  const val POLLING_STOPPED = "Polling stopped: the truck stayed asleep. Tap Connect once the truck is on."
   const val POLLING_DEMO = "Simulated truck: these values are not from your battery."
   const val POLLING = "Reading the truck through the MX+ (read-only, one request at a time)."
 
@@ -80,9 +81,9 @@ object LinkMessages {
   fun recovering(e: Throwable): String {
     val m = e.message ?: e.javaClass.simpleName
     return if (e is AdapterTimeoutError) {
-      "The MX+ did not answer in time ($m). Reconnecting automatically with a full adapter setup; tap Retry to do it now."
+      "The MX+ did not answer in time ($m). Reconnecting automatically with a full adapter setup; tap Connect to do it now."
     } else {
-      "Connection to the MX+ was lost ($m). Reconnecting automatically; tap Retry to do it now."
+      "Connection to the MX+ was lost ($m). Reconnecting automatically; tap Connect to do it now."
     }
   }
 
@@ -91,10 +92,10 @@ object LinkMessages {
     val m = e.message ?: e.javaClass.simpleName
     return when {
       e is LinkLostError || m.startsWith("adapter link failed") || m.startsWith("adapter closed the connection") || m == "adapter link is closed" ->
-        "Connection to the MX+ was lost ($m). Check that it is plugged in and awake, then tap Retry."
+        "Connection to the MX+ was lost ($m). Check that it is plugged in and awake, then tap Connect."
       e is UnsafeRequestError -> "Stopped: a request was refused by the read-only guard ($m). Nothing was sent."
-      e is FatalTransportError -> "Stopped: $m. Nothing more was sent; tap Retry to reconnect and set the adapter up again."
-      e is TransportError -> "Stopped: $m. Tap Retry to reconnect."
+      e is FatalTransportError -> "Stopped: $m. Nothing more was sent; tap Connect to reconnect and set the adapter up again."
+      e is TransportError -> "Stopped: $m. Tap Connect to reconnect."
       else -> "Stopped by an unexpected error: ${e.javaClass.simpleName}: $m"
     }
   }
@@ -126,8 +127,11 @@ object LinkMessages {
  *    row, spaced by [RetryPolicy]. Anything else (adapter reset, bus error, rejected setting,
  *    refused request) waits for Retry. An unreachable adapter is retried automatically too. No
  *    automatic attempt comes sooner than [RetryPolicy.MIN_AUTO_RETRY_MS] after the previous one;
- *  - the poller runs in watch mode (stopWhenAsleep = false), exactly as the probe's `serve`: it goes
- *    bus-silent while the truck sleeps.
+ *  - while disconnected ([setDisconnected]) nothing connects to an adapter, automatically or by Retry:
+ *    the Bluetooth socket is closed at once, whatever screen is attached, until Connect. Only an
+ *    explicit link test still opens it, and closes it again;
+ *  - the poller runs in watch mode (stopWhenAsleep = false), exactly as the probe's
+ *    `poll --keep-watching`: it goes bus-silent while the truck sleeps.
  */
 class LinkEngine(
   private val profile: Profile,
@@ -148,6 +152,12 @@ class LinkEngine(
   private var blocked = false
   private var blockedAtMs = 0L
   private var retryRequested = false
+
+  /** The user disconnected the adapter. */
+  private var disconnected = false
+
+  /** The worker has published [LinkStatus.DISCONNECTED] since the last connect attempt. */
+  private var disconnectShown = false
   private var autoRetryAtMs: Long? = null
   private var failures = 0
   private val checks = ArrayDeque<CheckRequest>()
@@ -197,12 +207,13 @@ class LinkEngine(
 
   private sealed class Action {
     object Exit : Action()
+    object ShowDisconnected : Action()
     object Close : Action()
     object ResetData : Action()
     object Park : Action()
     object Resume : Action()
     object Cycle : Action()
-    class Connect(val source: LinkSource) : Action()
+    class Connect(val source: LinkSource, val automaticRetry: Boolean = false) : Action()
     class Check(val request: CheckRequest) : Action()
   }
 
@@ -279,6 +290,27 @@ class LinkEngine(
     }
   }
 
+  /**
+   * The Disconnect / Connect button. True closes the link now and keeps it closed; false connects
+   * again as soon as a screen wants it. The simulator has nothing to disconnect.
+   */
+  fun setDisconnected(off: Boolean) {
+    lock.withLock {
+      if (disconnected == off) return
+      disconnected = off
+      disconnectShown = false
+      abort = true
+      abortSetup()
+      blocked = false
+      retryRequested = false
+      autoRetryAtMs = null
+      failures = 0
+      recoveries = 0
+      wake.signalAll()
+    }
+    if (!off) publish { it.copy(status = LinkStatus.CONNECTING, message = LinkMessages.IDLE, canRetry = false, nextAutoRetryAtMs = null) }
+  }
+
   /** Re-runs the full connect and adapter setup (after an error, an unreachable adapter or a stop). */
   fun retry() {
     lock.withLock {
@@ -286,6 +318,8 @@ class LinkEngine(
       recoveries = 0
       wake.signalAll()
     }
+    // Tapped during an automatic attempt: that attempt is now the user's, so show it at once.
+    publish { if (it.status == LinkStatus.CONNECTING) it.copy(canRetry = false) else it }
   }
 
   /**
@@ -368,12 +402,15 @@ class LinkEngine(
       while (true) {
         when (val a = nextAction()) {
           Action.Exit -> return
+          Action.ShowDisconnected -> publish {
+            it.copy(status = LinkStatus.DISCONNECTED, message = LinkMessages.DISCONNECTED, canRetry = false, nextAutoRetryAtMs = null, polling = false)
+          }
           Action.Close -> closeSession()
           Action.ResetData -> resetData()
           Action.Park -> publish { it.copy(polling = false) }
           Action.Resume -> publish { it.copy(polling = true) }
           Action.Cycle -> cycle()
-          is Action.Connect -> connect(a.source)
+          is Action.Connect -> connect(a.source, a.automaticRetry)
           is Action.Check -> runCheck(a.request)
         }
       }
@@ -394,7 +431,8 @@ class LinkEngine(
       }
       val src = source
       val s = session
-      if (s != null && (src == null || s.source.key != src.key)) return Action.Close
+      val off = disconnected && src is LinkSource.Adapter
+      if (s != null && (src == null || s.source.key != src.key || off)) return Action.Close
       if (s != null && clients.isEmpty()) {
         // Parked: nothing is sent; the link stays open for the grace period, then closes.
         if (!parkShown) {
@@ -409,6 +447,15 @@ class LinkEngine(
         return Action.Close
       }
       if (s == null && dataKey != src?.key) return Action.ResetData
+      if (off) {
+        if (!disconnectShown) {
+          disconnectShown = true
+          return Action.ShowDisconnected
+        }
+        retryRequested = false
+        wake.await()
+        continue
+      }
       if (src == null || clients.isEmpty()) {
         wake.await()
         continue
@@ -447,7 +494,7 @@ class LinkEngine(
           continue
         }
       }
-      return Action.Connect(src)
+      return Action.Connect(src, automaticRetry = failures > 0 || recoveries > 0)
     }
     @Suppress("UNREACHABLE_CODE")
     Action.Exit
@@ -510,7 +557,7 @@ class LinkEngine(
 
   /** Lock held. connect() should go on with [src]: a client still wants it and nothing else is pending. */
   private fun stillWanted(src: LinkSource): Boolean =
-    !shutdown && !abort && clients.isNotEmpty() && source?.key == src.key && checks.isEmpty()
+    !shutdown && !abort && clients.isNotEmpty() && source?.key == src.key && checks.isEmpty() && !(disconnected && src is LinkSource.Adapter)
 
   /** Opens the adapter and runs the setup; null when the connect was called off meanwhile. */
   private fun openAdapter(src: LinkSource.Adapter): Transport? {
@@ -539,8 +586,9 @@ class LinkEngine(
     publish { it.copy(status = LinkStatus.CONNECTING, message = LinkMessages.IDLE, polling = false) }
   }
 
-  private fun connect(src: LinkSource) {
+  private fun connect(src: LinkSource, automaticRetry: Boolean) {
     abort = false
+    lock.withLock { disconnectShown = false }
     val demo = src is LinkSource.Demo
     publish {
       it.copy(
@@ -548,7 +596,8 @@ class LinkEngine(
         message = if (demo) "Starting the simulator…" else "Connecting to ${src.description}…",
         demo = demo,
         adapter = src.description,
-        canRetry = false,
+        // Retry stays offered through an automatic attempt: the MX+ button must not change under a finger.
+        canRetry = automaticRetry,
         nextAutoRetryAtMs = null,
         polling = false,
       )

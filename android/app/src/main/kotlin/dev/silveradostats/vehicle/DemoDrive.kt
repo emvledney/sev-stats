@@ -85,6 +85,13 @@ class DemoDrive(
     const val LEVEL_STEP_WH = 10.0
 
     const val TRUCK_M_PER_WH = 3.05
+
+    /** What the Simple tab shows as the last charge in demo mode: never saved, never the truck's. */
+    val LAST_CHARGE = LastCharge(toWh = 186_400.0, toPct = 186_400.0 / 205_080.0 * 100.0)
+    private val MILES_BEFORE_M = (186_400.0 - 152_400.0) * EffUnits.fromMiPerKwh(2.25)
+
+    /** The same with the miles since: this drive's, after what the energy gone before it took at about 2.25 mi/kWh. */
+    fun lastCharge(driveM: Double): LastCharge = LAST_CHARGE.copy(drivenM = MILES_BEFORE_M + driveM)
     private const val MASS = 4_100.0
     private const val CDA = 1.15
     private const val CRR = 0.009

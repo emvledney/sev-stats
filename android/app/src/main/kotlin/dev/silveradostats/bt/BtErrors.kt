@@ -16,7 +16,6 @@ import java.util.concurrent.atomic.AtomicReference
 object BtErrors {
   const val UNREACHABLE = "MX+ not reachable: is your phone connected to it? Turn the phone's Bluetooth off."
   const val UNREACHABLE_HINT = "Also check that the MX+ is plugged in and awake (press its button)."
-  const val PAIRING_NEEDED = "Pairing needed: open Diagnostics › OBDLink MX+ link › Pair new, press the MX+ button and confirm."
   const val NO_BLUETOOTH = "This device has no Bluetooth, so the MX+ can't be used here (demo data still works)."
   const val BLUETOOTH_OFF = "Bluetooth is off on this screen: turn it on in the system settings."
   const val NO_CONNECT_PERMISSION =

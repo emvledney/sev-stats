@@ -19,12 +19,8 @@ enum class SizeTier { COMPACT, MEDIUM, LARGE }
 
 /** Text sizes, sp. */
 data class TypeScale(
-  /** The one big figure of layout A. */
-  val hero: Int,
   /** Tile figures. */
   val value: Int,
-  /** The figures above a power chart. */
-  val stat: Int,
   val unit: Int,
   val cardTitle: Int,
   val title: Int,
@@ -32,7 +28,7 @@ data class TypeScale(
   val body: Int,
   /** Badges and small marks. */
   val label: Int,
-  /** Tabs and the layout selector. */
+  /** Tabs and the header's controls. */
   val tab: Int,
   /** Chart axes. */
   val axis: Int,
@@ -46,9 +42,7 @@ data class DashLayout(
   val tier: SizeTier,
   val type: TypeScale,
   val headerDp: Int,
-  /** Height of the Efficiency / Battery selector. */
-  val selectorDp: Int,
-  /** Height of the unit toggles and buttons (not shown while driving). */
+  /** Height of the header's buttons and toggles, the MX+ button aside ([mxButtonDp]). */
   val controlDp: Int,
   val segmentPadDp: Int,
   val tabMinWidthDp: Int,
@@ -59,26 +53,13 @@ data class DashLayout(
   val cardPadHDp: Int,
   val cardPadVDp: Int,
   val cardGapDp: Int,
-  val barDp: Int,
   val noticeDp: Int,
   val chartMinDp: Int,
   val axisLeftDp: Int,
   val axisBottomDp: Int,
   val heatLabelDp: Int,
-  /** App title, "Read-only" and the long session summary fit the header row beside everything else. */
-  val appTitle: Boolean,
-  val readOnlyNote: Boolean,
-  val longSummary: Boolean,
-  /** Tight even without those: "Reset", "DEMO" instead of "Reset session", "DEMO DATA". */
+  /** The header row is tight: "Reset", "MX+ off" instead of "Reset session", "Disconnect MX+". */
   val shortChrome: Boolean,
-  /** The one-line note / how-measuring-works strip under the header. */
-  val strip: Boolean,
-  /** Secondary lines a Simple tile may show. */
-  val tileLines: Int,
-  /** Of [tileLines], how many are sure to fit a Simple page: all of them at the default font size. */
-  val plainTileLines: Int,
-  /** The same with a notice above the tiles. */
-  val noticeTileLines: Int,
   /** Secondary lines a Live tile shows. */
   val liveTileLines: Int,
   /** Live tiles per row. */
@@ -89,21 +70,19 @@ data class DashLayout(
   val liveCards: Boolean,
   /** Live's short titles and labels: its tiles and cards are narrow beside a badge or a marker. */
   val liveShort: Boolean,
+  /** Simple's one layout: the tabs and the MX+ button are as tall in Park as Drive wants them. See [ofSimple]. */
+  val drivingTargets: Boolean = false,
 ) {
-  /** Unit toggles, Reset session, Retry, Allow access, Open Diagnostics. */
+  /** Live's Retry, and every other parked control. Not the MX+ button: that stays while driving. Simple's page does not ask. */
   val controls: Boolean get() = !restricted
-  val tapToInspect: Boolean get() = !restricted
+
+  /** Connect / Disconnect MX+, the one control that stays while driving: as tall as the other driving targets then. */
+  val mxButtonDp: Int get() = if (restricted || drivingTargets) MIN_DRIVING_TARGET_DP else controlDp
   val diagnosticsTab: Boolean get() = !restricted
+  val trendsTab: Boolean get() = !restricted && widthDp >= TRENDS_MIN_WIDTH_DP
 
   /** The 192-cell heatmap and the module temperature strip. */
   val heatmap: Boolean get() = !restricted
-  val legends: Boolean get() = !restricted
-
-  /** The hero's and the ring's explanatory lines. */
-  val heroDetail: Boolean get() = !restricted
-
-  /** Peak figures above the power chart. */
-  val peakStats: Boolean get() = !restricted
 
   /** The age of a value that is not stale. */
   val ages: Boolean get() = !restricted && tier != SizeTier.COMPACT
@@ -114,7 +93,6 @@ data class DashLayout(
   /** Height of a text line of [sp] at this font scale. */
   fun lineDp(sp: Int, factor: Float = LINE_FACTOR): Int = ceil(sp * factor * fontScale).toInt()
 
-  val stripDp: Int get() = lineDp(type.body)
   val badgeDp: Int get() = lineDp(type.label) + 4
   val tileHeadDp: Int get() = max(lineDp(type.title), badgeDp)
   val valueLineDp: Int get() = lineDp(type.value, VALUE_LINE_FACTOR)
@@ -125,12 +103,12 @@ data class DashLayout(
   /** Height of the module-number row. */
   val heatHeadDp: Int get() = lineDp(type.axis)
 
-  /** What is left under the header, strip and page padding. */
-  val bodyDp: Int get() = heightDp - headerDp - (if (strip) stripDp else 0) - 2 * pagePadVDp
+  /** What is left under the header and page padding. */
+  val bodyDp: Int get() = heightDp - headerDp - 2 * pagePadVDp
 
-  /** A tile's height: head, figure, optional fill bar, [lines] secondary lines. */
-  fun tileDp(lines: Int, bar: Boolean = false, valueSp: Int = type.value): Int =
-    2 * cardPadVDp + tileHeadDp + cardGapDp + lineDp(valueSp, VALUE_LINE_FACTOR) + (if (bar) cardGapDp + barDp else 0) + lines * (cardGapDp + lineDp(type.body))
+  /** A tile's height: head, figure, [lines] secondary lines. */
+  fun tileDp(lines: Int, valueSp: Int = type.value): Int =
+    2 * cardPadVDp + tileHeadDp + cardGapDp + lineDp(valueSp, VALUE_LINE_FACTOR) + lines * (cardGapDp + lineDp(type.body))
 
   /**
    * Height of the row of Live tiles (two rows when the window is too narrow for four across), with
@@ -152,35 +130,95 @@ data class DashLayout(
   fun tooSmall(notice: Boolean = false): Boolean =
     bodyDp - (if (notice) noticeBudgetDp else 0) < 2 * (2 * cardPadVDp + valueLineDp) + gapDp
 
-  private val heroLineDp: Int get() = lineDp(type.hero, VALUE_LINE_FACTOR)
   private val cardHeadDp: Int get() = lineDp(type.cardTitle)
   private val noticeBudgetDp: Int get() = noticeDp + gapDp
 
-  /** The shortest page layout A can be: a tile keeps the lines this window is sure to fit. */
-  fun requiredSimpleA(notice: Boolean): Int = simpleA(notice, if (notice) noticeTileLines else plainTileLines)
+  // --- Simple: four columns of two cells alike, the last charge's row under all four ---
 
-  private fun simpleA(notice: Boolean, lines: Int): Int {
-    val grid = tileDp(lines, bar = true) + gapDp + tileDp(lines)
-    val chartCard = 2 * cardPadVDp + cardHeadDp + cardGapDp + heroLineDp + cardGapDp + chartMinDp
-    return page(max(grid, chartCard), notice)
+  /** The shortest page Simple can be: the figures at their smallest, and no room for Range's line, which is the first to give way. */
+  fun requiredSimple(notice: Boolean): Int = page(2 * tileDp(0, LIVE_VALUE_MIN_SP) + gapDp + gapDp + chargeMinDp, notice)
+
+  /** A column's width: the page's, shared evenly by [SIMPLE_COLUMNS]. */
+  val simpleColumnDp: Float get() = (widthDp - 2f * pagePadHDp - (SIMPLE_COLUMNS - 1) * gapDp) / SIMPLE_COLUMNS
+
+  /** The height the tiles share, under any notice. */
+  private fun simpleTilesDp(notice: Boolean): Int = bodyDp - if (notice) noticeBudgetDp else 0
+
+  /** The height the columns have above the last charge. */
+  private fun simpleColumnsDp(notice: Boolean): Int = simpleTilesDp(notice) - simpleChargeDp(notice) - gapDp
+
+  /** The largest figure of [ems] that fits a column and [heightDp], with its unit beside it. */
+  private fun figureFitSp(ems: Float, heightDp: Int): Int {
+    val forWidth = (simpleColumnDp - 2 * cardPadHDp - LIVE_FIGURE_GAP_DP) / (ems * fontScale)
+    val forHeight = heightDp / (VALUE_LINE_FACTOR * fontScale)
+    return max(LIVE_VALUE_MIN_SP, minOf(forWidth, forHeight).toInt())
   }
 
-  fun requiredSimpleB(notice: Boolean): Int = simpleB(notice, if (notice) noticeTileLines else plainTileLines)
-
-  private fun simpleB(notice: Boolean, lines: Int): Int {
-    val ringLines = (if (heroDetail) 2 else 1) * (cardGapDp + lineDp(type.body))
-    val ring = 2 * cardPadVDp + cardHeadDp + cardGapDp + chartMinDp + ringLines
-    val statsDp = if (peakStats) lineDp(type.body) + lineDp(type.stat, VALUE_LINE_FACTOR) else lineDp(type.stat, VALUE_LINE_FACTOR)
-    val power = 2 * cardPadVDp + cardHeadDp + cardGapDp + statsDp + cardGapDp + chartMinDp
-    // With a notice above it, the sparkline is what gives way (FitColumn drops it).
-    val minis = tileDp(lines) + gapDp + tileDp(lines) + if (notice) 0 else cardGapDp + SPARK_MIN_DP
-    return page(maxOf(ring, power, minis), notice)
+  /** All eight cells, one size: each has its head and room for one line under the figure, as Range uses. */
+  fun simpleFigureSp(notice: Boolean): Int {
+    val tile = (simpleColumnsDp(notice) - gapDp) / 2
+    // Each part of a tile rounds up: without the spare room a tall window would lose Range's line.
+    return figureFitSp(SIMPLE_FIGURE_EM, tile - 2 * cardPadVDp - tileHeadDp - cardGapDp - simpleLineDp - TILE_ROUNDING_DP)
   }
+
+  /** Under a cell's figure: the same in every cell, so that a row's figures line up with or without a line there. */
+  val simpleLineDp: Int get() = cardGapDp + lineDp(type.body)
+
+  /** A figure's unit: in proportion, down to what can still be read. */
+  fun simpleUnitSp(figureSp: Int): Int = max(type.label, (figureSp * SIMPLE_UNIT_SHARE).toInt())
+
+  /**
+   * The words under each figure of the last charge's row: as a tile's head, but where the height is short, or where a
+   * column is too narrow for "last charged to" and "of capacity" side by side at that size: the figures would only
+   * shrink for words that do not.
+   */
+  val simpleChargeLabelSp: Int get() = if (tier == SizeTier.COMPACT || !chargeWordsFit(type.title)) type.label else type.title
+
+  private fun chargeWordsFit(sp: Int): Boolean =
+    (CHARGE_REACHED_KWH.labelChars + CHARGE_REACHED_PCT.labelChars) * SUMMARY_EM * sp * fontScale + cardPadHDp <= simpleColumnDp - 2 * cardPadHDp
+
+  private val chargeLabelDp: Int get() = cardGapDp + lineDp(simpleChargeLabelSp)
+
+  private val chargeMinDp: Int get() = 2 * cardPadVDp + lineDp(LIVE_VALUE_MIN_SP, VALUE_LINE_FACTOR) + chargeLabelDp
+
+  /** The last charge's row: a share of the height, so that its figure never takes room from the cells above as the width grows. */
+  fun simpleChargeDp(notice: Boolean): Int = max(chargeMinDp, (simpleTilesDp(notice) * SIMPLE_CHARGE_SHARE).toInt())
+
+  /** What goes beside a figure in the last charge's row. */
+  fun simpleChargeUnitSp(figureSp: Int): Int = max(type.label, (figureSp * CHARGE_UNIT_SHARE).toInt())
+
+  /** A figure of that row at [sp]: the figure and its unit, or the words under them, whichever is wider. A unit stops shrinking long before a figure does. */
+  private fun chargeFigureDp(c: ChargeFigure, sp: Int): Float {
+    val figure = (c.figureChars * FIGURE_EM * sp + c.unitChars * CHARGE_UNIT_CHAR_EM * simpleChargeUnitSp(sp)) * fontScale + LIVE_FIGURE_GAP_DP + CHARGE_ROUNDING_DP
+    val words = c.labelChars * SUMMARY_EM * simpleChargeLabelSp * fontScale
+    return max(figure, words)
+  }
+
+  /** What the charge reached, the kWh then the %, side by side in the row's first part: each as wide as it gets, the kWh with a card's padding after it. */
+  private fun chargeReachedDp(sp: Int): List<Float> = listOf(chargeFigureDp(CHARGE_REACHED_KWH, sp) + cardPadHDp, chargeFigureDp(CHARGE_REACHED_PCT, sp))
+
+  /** Each of the row's four parts holds what it has at [sp], inside the padding of the column above it. */
+  private fun chargeFits(sp: Int): Boolean {
+    val room = simpleColumnDp - 2 * cardPadHDp
+    return chargeReachedDp(sp).sum() <= room && CHARGE_SINCE.all { chargeFigureDp(it, sp) <= room }
+  }
+
+  /**
+   * The last charge's figures: as tall as the row leaves over its words, as long as each of its four parts still
+   * fits under its column (what the charge reached, then the energy used since, the mi/kWh since and the drift).
+   */
+  fun simpleChargeSp(notice: Boolean): Int {
+    var sp = ((simpleChargeDp(notice) - 2 * cardPadVDp - chargeLabelDp) / (VALUE_LINE_FACTOR * fontScale)).toInt()
+    while (sp > LIVE_VALUE_MIN_SP && !chargeFits(sp)) sp -= 1
+    return max(LIVE_VALUE_MIN_SP, sp)
+  }
+
+  /** The kWh's and the %'s shares of the first part: what each needs at its widest, so that the % stays put as the figures change. */
+  fun simpleChargeReachedWeights(notice: Boolean): List<Float> = chargeReachedDp(simpleChargeSp(notice))
 
   fun requiredLive(): Int = page(liveTilesDp + if (liveCards) gapDp + liveCardsDp() else 0, notice = false)
 
   private fun liveCardsDp(): Int {
-    val power = 2 * cardPadVDp + cardHeadDp + cardGapDp + (if (legends) lineDp(type.body) + cardGapDp else 0) + chartMinDp
     val tempRows = if (restricted) TEMP_SUMMARY_LINES else TEMP_LINES
     val temps = 2 * cardPadVDp + cardHeadDp + tempRows * (cardGapDp + lineDp(type.body))
     val heat = if (heatmap) {
@@ -188,14 +226,44 @@ data class DashLayout(
     } else {
       0
     }
-    return maxOf(power, temps, heat)
+    return maxOf(temps, heat)
   }
 
   private fun page(content: Int, notice: Boolean): Int =
     heightDp - bodyDp + content + if (notice) noticeBudgetDp else 0
 
-  /** The widest the header row can get: the Simple tab, with the demo chip and a long summary. */
-  fun headerNeededDp(): Int = headerWidth(type, restricted, appTitle, readOnlyNote, longSummary, shortChrome, fontScale, segmentPadDp, tabMinWidthDp, headerGapDp, pagePadHDp)
+  // --- Trends: tiles and a chart on the left, the PID list on the right ------------------------------
+
+  /** Trends' height under the header: its cards reach the header. */
+  val trendBodyDp: Int get() = heightDp - headerDp - pagePadVDp
+
+  /** The PID list's width: its rows and seven group chips need the minimum, in units of text. */
+  val trendPidsDp: Int get() = max((widthDp * TREND_PIDS_SHARE).toInt(), ceil(TREND_PIDS_MIN_DP * fontScale).toInt())
+
+  /** A capacity tile's figure: smaller than Live's, where four figures share the row with a chart. */
+  val trendValueSp: Int get() = max(LIVE_VALUE_MIN_SP, type.value * 2 / 3)
+
+  /** Title, figure, source and change, a gap between each: the change is the line a tile is there for. */
+  val trendTileDp: Int
+    get() = 2 * cardPadVDp + max(lineDp(type.body), badgeDp) + lineDp(trendValueSp, VALUE_LINE_FACTOR) + 2 * lineDp(type.label) + 3 * cardGapDp + TILE_ROUNDING_DP
+
+  val trendChipDp: Int get() = max(TREND_CHIP_MIN_DP, lineDp(type.body) + 8)
+
+  /** Both lines of a PID's name and source, with the room a marker adds. */
+  val trendRowLinesDp: Int get() = lineDp(type.body) + lineDp(type.axis) + 2
+
+  /** The height a PID row gets: seven must fit, whichever group is chosen, so no group ever scrolls. */
+  val trendRowDp: Int
+    get() {
+      val room = trendBodyDp - 2 * cardPadVDp - lineDp(type.title) - trendChipDp - 2 * cardGapDp
+      return minOf(room / TREND_MAX_ROWS, trendRowLinesDp + TREND_ROW_SPARE_DP)
+    }
+
+  /** The widest the L and R buttons get, and as tall as their row allows. */
+  val trendAxisButtonDp: Int get() = minOf(trendRowDp - 4, TREND_BUTTON_MAX_DP)
+
+  /** What the header row needs: the tabs, the buttons, and the least of a status for the tabs that draw one. */
+  fun headerNeededDp(): Int = headerWidth(type, restricted, shortChrome, fontScale, segmentPadDp, tabMinWidthDp, headerGapDp, pagePadHDp, widthDp)
 
   /** The tiles' figures and secondary lines give way until the Live page fits; the cards go last. */
   private fun fitLive(): DashLayout {
@@ -220,20 +288,13 @@ data class DashLayout(
     return minOf(type.value, (room / (LIVE_VALUE_CHARS * FIGURE_EM * fontScale)).toInt())
   }
 
-  private fun fitSimple(): DashLayout {
-    fun keeps(lines: Int, notice: Boolean) = simpleA(notice, lines) <= heightDp && simpleB(notice, lines) <= heightDp
-    val plain = (tileLines downTo 0).firstOrNull { keeps(it, notice = false) } ?: 0
-    val withNotice = (minOf(tileLines, 1) downTo 0).firstOrNull { keeps(it, notice = true) } ?: 0
-    return copy(plainTileLines = plain, noticeTileLines = withNotice)
-  }
-
   companion object {
     const val LINE_FACTOR = 1.3f
 
     /** A big figure's real height: its font's natural line, more than the line height asked for. */
     const val VALUE_LINE_FACTOR = 1.2f
 
-    /** The selector and the tabs are at least this tall while restricted (one tap, eyes on the road). */
+    /** The MX+ button and the tabs are at least this tall while restricted (one tap, eyes on the road). */
     const val MIN_DRIVING_TARGET_DP = 76
     const val LIVE_TILES = 4
 
@@ -241,8 +302,39 @@ data class DashLayout(
     const val LIVE_VALUE_MIN_SP = 26
     const val HEAT_ROWS = 8
     const val HEAT_ROW_MIN_DP = 9
-    const val SPARK_MIN_DP = 24
+
+    /** Simple's columns, all alike: the owner had the battery ring taken out for cells like the others (2026-11-07). */
+    const val SIMPLE_COLUMNS = 4
+
+    /** The rules between the last charge's columns. */
+    const val SIMPLE_RULE_DP = 1
+    private const val SIMPLE_UNIT_SHARE = 0.27f
+
+    /** The last charge's row against the height of the tiles. */
+    private const val SIMPLE_CHARGE_SHARE = 0.24f
+    private const val CHARGE_UNIT_SHARE = 0.42f
+
+    /** A unit's characters: "kWh" and "mi/kWh" are wide ones, and an end cut off would say nothing. */
+    private const val CHARGE_UNIT_CHAR_EM = 0.68f
     private const val TILE_ROUNDING_DP = 4
+
+    /** A figure's glyphs round up to whole pixels at small sizes: without this, "100.0 %" lost its % on a 1250 dp window. */
+    const val CHARGE_ROUNDING_DP = 4
+
+    /** One figure of the last charge's row, at its widest. */
+    private class ChargeFigure(val figureChars: Int, val unitChars: Int, val labelChars: Int)
+
+    private val CHARGE_REACHED_KWH = ChargeFigure(5, 3, 15) // 186.4 kWh, last charged to
+    private val CHARGE_REACHED_PCT = ChargeFigure(5, 1, 11) // 100.0 %, of capacity
+
+    /** The row's other three parts, one figure each. */
+    private val CHARGE_SINCE = listOf(
+      ChargeFigure(5, 3, 10), // 186.4 kWh, used since
+      ChargeFigure(4, 6, 5), // 2.24 mi/kWh, since
+      ChargeFigure(5, 3, 5), // +12.3 kWh, drift
+    )
+
+    /** What a short window is sure to keep of the pack and temperature card; a taller one shows them all. */
     const val TEMP_LINES = 5
     const val TEMP_SUMMARY_LINES = 4
 
@@ -250,26 +342,36 @@ data class DashLayout(
 
     /** Width of a figure's average character: digits and sign, with a narrow point among them. */
     private const val FIGURE_EM = 0.54f
+
+    /** "204.5 kWh" in ems of the figure: five characters, then "kWh" at [SIMPLE_UNIT_SHARE] of the size. */
+    private const val SIMPLE_FIGURE_EM = 5 * FIGURE_EM + SIMPLE_UNIT_SHARE * 2.1f
     private const val SUMMARY_EM = 0.5f // digits and narrow punctuation: "1:23 · 123.4 mi"
+
     private const val LABEL_MIN_EM = 2.5f
-    private const val LIVE_VALUE_CHARS = 6 // +345.6
-    private const val LIVE_UNIT_CHARS = 2 // kW
+    private const val LIVE_VALUE_CHARS = 6 // 208.44
+    private const val LIVE_UNIT_CHARS = 3 // kWh
     private const val LIVE_FIGURE_GAP_DP = 8
     private const val MIN_SEGMENT_PAD_DP = 6
 
-    /** A unit toggle's segment stays this wide, whatever its text needs: still one easy tap. */
+    /** A toggle's segment stays this wide, whatever its text needs: still one easy tap. */
     const val MIN_SEGMENT_DP = 44
-    private val TAB_CHARS = listOf(6, 4, 11) // Simple, Live, Diagnostics
+    private val TAB_CHARS = listOf(6, 4, 11, 6) // Simple, Live, Diagnostics, Trends
+    private const val PARKED_TABS_NARROW = 3 // no Trends
+
+    /** Trends' tiles, chart, PID list and controls need this much window; narrower, the tab is not offered. */
+    const val TRENDS_MIN_WIDTH_DP = 1100
+    const val TREND_MAX_ROWS = 7
+    private const val TREND_PIDS_SHARE = 0.36f
+    private const val TREND_PIDS_MIN_DP = 420
+    private const val TREND_ROW_SPARE_DP = 20
+    private const val TREND_CHIP_MIN_DP = 36
+    private const val TREND_BUTTON_MAX_DP = 48
     private const val DRIVING_TABS = 2 // Simple, Live
-    private val SELECTOR_CHARS = listOf(10, 7) // Efficiency, Battery
-    private const val APP_TITLE_CHARS = 15 // Silverado Stats
-    private const val READ_ONLY_CHARS = 9 // Read-only
-    private const val SUMMARY_CHARS = 15 // 1:23 · 123.4 mi
-    private const val LONG_SUMMARY_CHARS = 31 // Since app opened 1:23 · 123.4 mi
-    private const val DEMO_CHARS = 9 // DEMO DATA
-    private const val DEMO_SHORT_CHARS = 4 // DEMO
+    private const val STATUS_CHARS = 15 // The least Live's link state and Trends' row count get.
     private const val RESET_CHARS = 13 // Reset session
     private const val RESET_SHORT_CHARS = 5 // Reset
+    private const val MX_CHARS = 14 // Disconnect MX+
+    private const val MX_SHORT_CHARS = 7 // MX+ off
 
     fun of(widthDp: Float, heightDp: Float, restricted: Boolean, fontScale: Float = 1f): DashLayout {
       val scale = if (fontScale > 0f) fontScale else 1f
@@ -298,16 +400,8 @@ data class DashLayout(
         SizeTier.MEDIUM -> 16
         SizeTier.LARGE -> 24
       }
-      var appTitle = true
-      var note = !restricted
-      // The session's figures alone while driving: "1:23 · 123.4 mi", never a sentence around them.
-      var long = !restricted
       var short = false
-      fun fits() = headerWidth(type, restricted, appTitle, note, long, short, scale, segmentPad, tabMin, headerGap, pagePadH) <= widthDp
-      // Least useful first: the note, the name of the app, the words around the summary, then labels.
-      if (!fits()) note = false
-      if (!fits()) appTitle = false
-      if (!fits()) long = false
+      fun fits() = headerWidth(type, restricted, short, scale, segmentPad, tabMin, headerGap, pagePadH, widthDp.toInt()) <= widthDp
       if (!fits()) short = true
       // A larger font on a narrow window: tighter segments, then chrome text no smaller than the
       // default font would have drawn it.
@@ -332,7 +426,6 @@ data class DashLayout(
           SizeTier.MEDIUM -> if (restricted) 84 else 64
           SizeTier.LARGE -> if (restricted) 92 else 72
         },
-        selectorDp = if (restricted) MIN_DRIVING_TARGET_DP else if (tier == SizeTier.COMPACT) 52 else 56,
         controlDp = if (tier == SizeTier.COMPACT) 52 else 56,
         segmentPadDp = segmentPad,
         tabMinWidthDp = tabMin,
@@ -363,11 +456,6 @@ data class DashLayout(
           SizeTier.MEDIUM -> 4
           SizeTier.LARGE -> 6
         },
-        barDp = when (tier) {
-          SizeTier.COMPACT -> 8
-          SizeTier.MEDIUM -> 12
-          SizeTier.LARGE -> 16
-        },
         noticeDp = when (tier) {
           SizeTier.COMPACT -> 44
           SizeTier.MEDIUM -> 56
@@ -378,7 +466,7 @@ data class DashLayout(
           SizeTier.MEDIUM -> 120
           SizeTier.LARGE -> 160
         },
-        // These hold text: they grow with the font, or "−100 kW" would lose its sign at the card's edge.
+        // These hold text: they grow with the font, or an axis label would be cut at the card's edge.
         axisLeftDp = ceil(scale * when (tier) {
           SizeTier.COMPACT -> 52
           SizeTier.MEDIUM -> 60
@@ -394,40 +482,42 @@ data class DashLayout(
           SizeTier.MEDIUM -> 36
           SizeTier.LARGE -> 44
         }).toInt(),
-        appTitle = appTitle,
-        readOnlyNote = note,
-        longSummary = long,
         shortChrome = short,
-        strip = !restricted && h >= 480f,
-        tileLines = if (restricted) 1 else 2,
-        plainTileLines = 0,
-        noticeTileLines = 0,
         liveTileLines = liveLines,
         liveTileCols = LIVE_TILES,
         liveValueSp = type.value,
         liveCards = true,
         liveShort = restricted || w < 1700f,
-      ).fitLive().fitSimple()
+      ).fitLive()
+    }
+
+    /**
+     * Simple's one layout, whatever the gear: Park's, with the tabs and the MX+ button as tall as Drive
+     * wants them, so that shifting moves nothing on the page. Its controls work in every gear.
+     */
+    fun ofSimple(widthDp: Float, heightDp: Float, fontScale: Float = 1f): DashLayout {
+      val l = of(widthDp, heightDp, false, fontScale)
+      return l.copy(headerDp = max(l.headerDp, MIN_DRIVING_TARGET_DP), drivingTargets = true)
     }
 
     private fun typeFor(tier: SizeTier, restricted: Boolean): TypeScale = when (tier) {
       SizeTier.COMPACT ->
         if (restricted) {
-          TypeScale(hero = 72, value = 48, stat = 36, unit = 20, cardTitle = 22, title = 20, body = 18, label = 16, tab = 24, axis = 14)
+          TypeScale(value = 48, unit = 20, cardTitle = 22, title = 20, body = 18, label = 16, tab = 24, axis = 14)
         } else {
-          TypeScale(hero = 60, value = 40, stat = 28, unit = 18, cardTitle = 20, title = 18, body = 16, label = 14, tab = 18, axis = 12)
+          TypeScale(value = 40, unit = 18, cardTitle = 20, title = 18, body = 16, label = 14, tab = 18, axis = 12)
         }
       SizeTier.MEDIUM ->
         if (restricted) {
-          TypeScale(hero = 104, value = 68, stat = 52, unit = 26, cardTitle = 26, title = 24, body = 22, label = 18, tab = 26, axis = 16)
+          TypeScale(value = 68, unit = 26, cardTitle = 26, title = 24, body = 22, label = 18, tab = 26, axis = 16)
         } else {
-          TypeScale(hero = 88, value = 56, stat = 38, unit = 22, cardTitle = 24, title = 20, body = 18, label = 16, tab = 22, axis = 14)
+          TypeScale(value = 56, unit = 22, cardTitle = 24, title = 20, body = 18, label = 16, tab = 22, axis = 14)
         }
       SizeTier.LARGE ->
         if (restricted) {
-          TypeScale(hero = 128, value = 80, stat = 60, unit = 32, cardTitle = 30, title = 28, body = 24, label = 20, tab = 28, axis = 18)
+          TypeScale(value = 80, unit = 32, cardTitle = 30, title = 28, body = 24, label = 20, tab = 28, axis = 18)
         } else {
-          TypeScale(hero = 112, value = 64, stat = 44, unit = 28, cardTitle = 28, title = 24, body = 20, label = 18, tab = 24, axis = 16)
+          TypeScale(value = 64, unit = 28, cardTitle = 28, title = 24, body = 20, label = 18, tab = 24, axis = 16)
         }
     }
 
@@ -436,27 +526,21 @@ data class DashLayout(
     private fun headerWidth(
       type: TypeScale,
       restricted: Boolean,
-      appTitle: Boolean,
-      note: Boolean,
-      long: Boolean,
       short: Boolean,
       scale: Float,
       segmentPad: Int,
       tabMin: Int,
       gap: Int,
       pagePad: Int,
+      windowDp: Int,
     ): Int {
       val segment = type.tab - 2
-      val tabs = TAB_CHARS.take(if (restricted) DRIVING_TABS else TAB_CHARS.size).sumOf { max(tabMin, textDp(it, type.tab, scale) + 2 * segmentPad) }
-      val selector = SELECTOR_CHARS.sumOf { textDp(it, segment, scale) + 2 * segmentPad }
-      val units = if (restricted) 0 else 2 * 2 * max(MIN_SEGMENT_DP, textDp(2, segment, scale) + 2 * segmentPad)
+      val tabs = TAB_CHARS.take(if (restricted) DRIVING_TABS else if (windowDp < TRENDS_MIN_WIDTH_DP) PARKED_TABS_NARROW else TAB_CHARS.size).sumOf { max(tabMin, textDp(it, type.tab, scale) + 2 * segmentPad) }
       val reset = if (restricted) 0 else textDp(if (short) RESET_SHORT_CHARS else RESET_CHARS, segment, scale) + 2 * segmentPad
-      val demo = textDp(if (short) DEMO_SHORT_CHARS else DEMO_CHARS, type.body, scale) + 2 * 10
-      val summary = ceil((if (long) LONG_SUMMARY_CHARS else SUMMARY_CHARS) * type.title * SUMMARY_EM * scale).toInt()
-      val title = if (appTitle) textDp(APP_TITLE_CHARS, type.tab, scale) + gap else 0
-      val readOnly = if (note) textDp(READ_ONLY_CHARS, type.body, scale) + gap else 0
-      val parts = if (restricted) 3 else 5 // tabs, demo, summary, selector and, parked, units and reset
-      return 2 * pagePad + tabs + selector + units + reset + demo + summary + title + readOnly + parts * gap
+      val mx = textDp(if (short) MX_SHORT_CHARS else MX_CHARS, segment, scale) + 2 * segmentPad
+      val status = ceil(STATUS_CHARS * type.title * SUMMARY_EM * scale).toInt()
+      val gaps = if (restricted) 2 else 3 // between the tabs, a status, the MX+ button and, parked, Reset
+      return 2 * pagePad + tabs + reset + mx + status + gaps * gap
     }
   }
 }

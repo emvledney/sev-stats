@@ -108,7 +108,7 @@ object Fmt {
 
   fun whToKwh(v: Any?): String = num(v)?.let { f("%.2f kWh", it / 1000.0) } ?: raw(v)
 
-  /** EV_BATTERY_INSTANTANEOUS_CHARGE_RATE: mW, + charging / - discharging (AOSP convention). */
+  /** EV_BATTERY_INSTANTANEOUS_CHARGE_RATE: mW, + charging / - discharging (AOSP; the session checks GM's sign). */
   fun kwFromMw(v: Any?): Double? = num(v)?.let { it / 1_000_000.0 }
 
   fun mwToKw(v: Any?): String {
@@ -120,17 +120,17 @@ object Fmt {
     }
   }
 
-  fun meters(v: Any?): String = num(v)?.let { f("%.1f km / %.1f mi", it / 1000.0, it / 1609.344) } ?: raw(v)
+  fun meters(v: Any?): String = num(v)?.let { f("%.1f mi", it / 1609.344) } ?: raw(v)
 
-  fun kilometers(v: Any?): String = num(v)?.let { f("%.1f km / %.1f mi", it, it / 1.609344) } ?: raw(v)
+  fun kilometers(v: Any?): String = num(v)?.let { f("%.1f mi", it / 1.609344) } ?: raw(v)
 
-  fun celsius(v: Any?): String = num(v)?.let { f("%.1f °C / %.1f °F", it, it * 9.0 / 5.0 + 32.0) } ?: raw(v)
+  fun celsius(v: Any?): String = num(v)?.let { f("%.1f °F", it * 9.0 / 5.0 + 32.0) } ?: raw(v)
 
   fun percent(v: Any?): String = num(v)?.let { f("%.1f %%", it) } ?: raw(v)
 
   fun amps(v: Any?): String = num(v)?.let { f("%.1f A", it) } ?: raw(v)
 
-  fun speedMs(v: Any?): String = num(v)?.let { f("%.1f km/h / %.1f mph", it * 3.6, it * 2.2369363) } ?: raw(v)
+  fun speedMs(v: Any?): String = num(v)?.let { f("%.1f mph", it * 2.2369363) } ?: raw(v)
 
   fun kpa(v: Any?): String = num(v)?.let { f("%.0f kPa / %.1f psi", it, it * 0.14503774) } ?: raw(v)
 

@@ -17,16 +17,20 @@ import kotlin.math.max
  *
  * Rules:
  *  - sampling runs while at least one UI is attached (the Simple / Live / Diagnostics screens'
- *    ViewModel, or Battery Glance) and for [graceMs] after the last one detaches; then it stops and
+ *    ViewModel) and for [graceMs] after the last one detaches; then it stops and
  *    the car connection is released. It also stops, after [idleStopMs], when no attached UI is
  *    visible and the truck is not moving (moving, it goes on behind another app until Android freezes
  *    the process: measured on API 34 from 10 s to about 6 min with no screen of the app visible). A
  *    frozen stretch simply arrives as a gap, which the tracker leaves out;
+ *  - with the background service watching ([setWatching]) Android does not freeze it, and instead of
+ *    stopping after [idleStopMs] it slows to [WATCH_TICK_MS], everything read each time, until a screen
+ *    or the truck moving brings the full rate back;
  *  - the session survives a short pause (with a recorded gap). A reset, a data-source switch, the
  *    end of the process, or no sample for over [restartAfterMs] ("the next time the truck is used",
- *    even if the process was only frozen or asleep) starts a new one: "since the app was opened";
- *  - it never touches the OBD link (LinkEngine): opening only the Simple tab samples the truck's
- *    built-in data and nothing else;
+ *    even if the process was only frozen or asleep) starts a new one, and so does the tracker at
+ *    each new drive;
+ *  - it never touches the OBD link (LinkEngine): it only takes the pack power LinkService passes on
+ *    while the MX+ is connected ([addPackPower]);
  *  - one coroutine samples: speed every [tickMs] (2 Hz), the rest every other tick (1 Hz).
  *
  * [scope] must be confined to one thread (Dispatchers.IO.limitedParallelism(1) in the app): every
@@ -102,9 +106,13 @@ class VehicleSession(
   private val clients = LinkedHashSet<Any>()
   private val visible = HashSet<Any>()
   private var idleSinceMs = 0L
+  private var watching = false
+
+  /** Nothing on screen and the truck not moving, for [idleStopMs], with the service watching. */
+  private var slow = false
   private var demo: Boolean? = null
   private var source: VehicleSource? = null
-  private var tracker = SessionTracker(clock)
+  private var tracker = SessionTracker(clock = clock)
   private var feed = Feed()
   private var loop: Job? = null
   private var stopTimer: Job? = null
@@ -137,10 +145,23 @@ class VehicleSession(
     scope.launch {
       if (on) {
         visible += token
+        // Up to date at once, not at the slow tick's next read.
+        if (slow) {
+          loop?.cancel()
+          loop = null
+        }
         startIfWanted()
       } else if (visible.remove(token) && visible.isEmpty()) {
         idleSinceMs = clock()
       }
+    }
+  }
+
+  /** The background service, attached like a UI: with nothing on screen and the truck not moving, slow down instead of stopping. */
+  fun setWatching(on: Boolean) {
+    scope.launch {
+      watching = on
+      startIfWanted()
     }
   }
 
@@ -167,6 +188,11 @@ class VehicleSession(
     scope.launch { source?.onPermissionsChanged() }
   }
 
+  /** A new pack power reading from the MX+, kW (+ discharge): the session's best energy signal. */
+  fun addPackPower(kw: Double) {
+    scope.launch { tracker.addPack(clock(), kw) }
+  }
+
   private val wanted: Boolean get() = clients.isNotEmpty() || stopTimer != null
 
   private fun replaceSource(next: VehicleSource, newSession: Boolean) {
@@ -175,7 +201,7 @@ class VehicleSession(
     loop = null
     if (source !== next) source?.release()
     source = next
-    if (newSession) tracker = SessionTracker(clock) else tracker.reset()
+    if (newSession) tracker = SessionTracker(clock = clock) else tracker.reset()
     feed = Feed()
     publish(sampling = false)
     if (running || wanted) startIfWanted()
@@ -185,6 +211,7 @@ class VehicleSession(
     if (!wanted || loop?.isActive == true || demo == null) return
     val src = source ?: sourceFor(demo!!, false).also { source = it }
     idleSinceMs = clock()
+    slow = false
     loop = scope.launch {
       try {
         for (s in src.backlog(clock())) tracker.add(s)
@@ -192,9 +219,9 @@ class VehicleSession(
         var next = clock()
         while (isActive) {
           val last = _state.value.lastSampleAtMs
-          if (demo == false && last != null && clock() - last > restartAfterMs) tracker = SessionTracker(clock)
+          if (demo == false && last != null && clock() - last > restartAfterMs) tracker = SessionTracker(clock = clock)
           val r = try {
-            src.read(clock(), full = n % FULL_EVERY == 0L)
+            src.read(clock(), full = slow || n % FULL_EVERY == 0L)
           } catch (e: CancellationException) {
             throw e
           } catch (e: Exception) {
@@ -206,12 +233,14 @@ class VehicleSession(
           publish(sampling = true)
           val now = clock()
           if (visible.isNotEmpty() || (_state.value.speedMps ?: 0.0) > SessionTracker.MOVING_MPS) idleSinceMs = now
-          if (now - idleSinceMs >= idleStopMs) {
+          slow = now - idleSinceMs >= idleStopMs
+          if (slow && !watching) {
             stopSampling()
             return@launch
           }
-          next += tickMs
-          if (next < now - tickMs) next = now // fell behind (a slow read): no burst to catch up
+          val tick = if (slow) WATCH_TICK_MS else tickMs
+          next += tick
+          if (next < now - tick) next = now // fell behind (a slow read): no burst to catch up
           delay(max(0L, next - now))
         }
       } catch (e: CancellationException) {
@@ -244,7 +273,7 @@ class VehicleSession(
 
   companion object {
     /**
-     * Sampling goes on this long after the last UI detached (glance <-> dashboard, P <-> D). Short
+     * Sampling goes on this long after the last UI detached (P <-> D). Short
      * enough to end before Android freezes a process with no screen (seen after 10 s), so that the
      * car connection really is released.
      */
@@ -252,6 +281,9 @@ class VehicleSession(
 
     /** With no visible screen and the truck not moving, sampling stops after this. */
     const val IDLE_STOP_MS = 2 * 60_000L
+
+    /** With the service watching, nothing on screen and the truck not moving. Under [SessionTracker.GAP_MS], so that it is no pause. */
+    const val WATCH_TICK_MS = 4_000L
 
     /** No sample for this long: the next one starts a new session, not a pause in the old one. */
     const val RESTART_AFTER_MS = 30 * 60_000L

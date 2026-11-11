@@ -14,6 +14,8 @@
 #   S5 OBDb Lyriq signalset / PR #14                   https://github.com/OBDb/Cadillac-LYRIQ/pull/14
 #   S6 hacs_gm_ultium (BrightDrop)                     https://github.com/Coldarn/hacs_gm_ultium
 #   S7 = this truck (2024 Silverado EV, 24 modules), session 1, 2026-11-03
+#   S8 WiCAN #606 attachment: the raw Car Scanner log behind S1 (20-module truck)  https://github.com/user-attachments/files/23725634/log.txt
+#   S9 this truck's Car Scanner screen, owner's screenshot, 2026-11-04: Battery Capability 208.44 kWh, Total Energy Storage 602.2 Ah
 
 [meta]
 name = "silverado-ev"
@@ -71,6 +73,32 @@ period = 30
 status = "confirmed"
 source = "S1, S2, S3; S7"
 note = "energy_remaining / (soc/100) differs per truck (175-216 kWh seen); label it 'BMS energy at 100%', not usable capacity"
+
+[[did]]
+module = "becm"
+id = 0x27AE
+name = "battery_capability"
+label = "Battery capability"
+unit = "kWh"
+type = "u16"
+scale = 0.01
+period = 30
+status = "unverified"
+source = "S8, S9"
+note = "S8: 173.86-175.62 kWh next to energy / SoC of about 175, read together with 27AF and 27C6; matches S9's Battery Capability in kind. Compare with Car Scanner on this truck, then mark confirmed"
+
+[[did]]
+module = "becm"
+id = 0x4676
+name = "pack_capacity_ah"
+label = "Pack capacity (candidate)"
+unit = "Ah"
+type = "u16"
+scale = 0.01
+period = 60
+status = "unverified"
+source = "S8 (E254 = 579.4 at this scale), guess for S9's 602.2 Ah"
+note = "the only near-600 value in S8. Derive shows it only if it fits the pack's voltage; if it does not match Car Scanner the real DID is still to be found"
 
 [[did]]
 module = "becm"
@@ -305,6 +333,61 @@ offset = -80
 period = 10
 status = "unverified"
 source = "S7 (24 bytes, all 0x61 = 17 C with x-80 while 2AF1 read 16-17 C)"
+
+[[did]]
+module = "becm"
+id = 0x27B9
+name = "unknown_27b9_raw"
+label = "27B9 (Car Scanner reads it; meaning unknown)"
+type = "hex"
+period = 60
+status = "unverified"
+source = "S8"
+note = "read with 27AE and 27AF by Car Scanner; 001566 in S8. In the report, to place S9's other figures"
+
+[[did]]
+module = "becm"
+id = 0x2984
+name = "unknown_2984_raw"
+label = "2984 (Car Scanner reads it; meaning unknown)"
+type = "hex"
+period = 60
+status = "unverified"
+source = "S8"
+note = "2041 in S8. In the report, to place S9's other figures"
+
+[[did]]
+module = "becm"
+id = 0x270D
+name = "unknown_270d_raw"
+label = "270D (Car Scanner reads it; meaning unknown)"
+type = "hex"
+period = 60
+status = "unverified"
+source = "S8"
+note = "0FA0 in S8. In the report, to place S9's other figures"
+
+[[did]]
+module = "becm"
+id = 0x28AF
+name = "unknown_28af_raw"
+label = "28AF (Car Scanner reads it; meaning unknown)"
+type = "hex"
+period = 60
+status = "unverified"
+source = "S8"
+note = "2710 in S8. In the report, to place S9's other figures"
+
+[[did]]
+module = "becm"
+id = 0x2770
+name = "unknown_2770_raw"
+label = "2770 (Car Scanner reads it; meaning unknown)"
+type = "hex"
+period = 60
+status = "unverified"
+source = "S8"
+note = "32 in S8. In the report: S9's capacity deviation (22 Ah) is an integer of 0-50 whose DID is still to be found"
 
 [[did]]
 module = "becm"

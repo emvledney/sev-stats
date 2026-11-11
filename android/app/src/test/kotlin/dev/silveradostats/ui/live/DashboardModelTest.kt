@@ -3,6 +3,7 @@ package dev.silveradostats.ui.live
 import dev.silveradostats.link.LinkStatus
 import dev.silveradostats.link.LiveState
 import dev.silveradostats.link.LiveValue
+import dev.silveradostats.link.SavedCapacity
 import dev.silveradostats.link.PowerPoint
 import dev.silveradostats.obd.Poller
 import dev.silveradostats.obd.Profile
@@ -48,8 +49,8 @@ class DashboardModelTest {
 
   /** Every text the dashboard would draw. */
   private fun texts(d: Dashboard): List<String> =
-    listOf(d.soc, d.power, d.capacity, d.spread).flatMap { listOf(it.title, it.value, it.unit) + it.lines + listOfNotNull(it.pill, it.marker) } +
-      d.temps.flatMap { listOfNotNull(it.label, it.value, it.marker) } + listOfNotNull(d.status.message, d.obdHint)
+    listOf(d.soc, d.capacity, d.capacityAh, d.capacityDeviation, d.spread).flatMap { listOf(it.title, it.value, it.unit) + it.lines + listOfNotNull(it.marker) } +
+      (d.pack + d.temps).flatMap { listOfNotNull(it.label, it.value, it.marker) } + listOfNotNull(d.status.message, d.obdHint)
 
   @Test
   fun simulatorStateMapsToAllTiles() {
@@ -59,18 +60,23 @@ class DashboardModelTest {
     assertEquals("%", d.soc.unit)
     assertNull("confirmed: no marker", d.soc.marker)
     assertEquals(listOf("147.9 kWh remaining", "Range 317 mi (BMS)"), d.soc.lines)
-    // Power: + = discharge, with V and A.
-    assertTrue(d.power.value, d.power.value.startsWith("+15."))
-    assertEquals("kW", d.power.unit)
-    assertEquals("Discharging", d.power.pill)
-    assertEquals(Tone.DISCHARGE, d.power.pillTone)
-    assertTrue(d.power.lines[0], d.power.lines[0].matches(Regex("""37\d\.\d V · \+40\.0 A""")))
-    // Capacity: BMS energy at 100 % and the nominal Ah estimate.
-    assertTrue(d.capacity.value.startsWith("205."))
-    assertEquals("est.", d.capacity.marker)
-    assertEquals("BMS energy at 100 % SoC", d.capacity.lines[0])
-    assertTrue(d.capacity.lines[1], d.capacity.lines[1].matches(Regex("""≈ 5\d\d Ah nominal est\.""")))
-    assertEquals("96 series groups · 24 modules", d.capacity.lines[2])
+    // Capacity: both read from the BECM (27AE, 4676), each next to what backs it up.
+    assertEquals("205.20", d.capacity.value)
+    assertEquals("kWh", d.capacity.unit)
+    assertEquals("unverified", d.capacity.marker)
+    assertEquals("Battery capability, from the BECM", d.capacity.lines[0])
+    assertTrue(d.capacity.lines[1], d.capacity.lines[1].startsWith("Energy ÷ SoC: 205."))
+    assertEquals("24 modules · 96 series groups", d.capacity.lines[2])
+    assertEquals("593.4", d.capacityAh.value)
+    assertEquals("Ah", d.capacityAh.unit)
+    assertEquals("unverified", d.capacityAh.marker)
+    // The deviation's DID is unknown: no figure rather than a guess.
+    assertFalse(d.capacityDeviation.hasValue)
+    assertEquals("PID not identified yet", d.capacityDeviation.lines[0])
+    // Pack: V and A, + = discharge, and the cell spread.
+    assertEquals(listOf("Pack voltage", "Pack current", "Cell spread"), d.pack.map { it.label })
+    assertEquals("+40.0 A", d.pack[1].value)
+    assertTrue(d.pack[2].value, d.pack[2].value.endsWith(" mV"))
     // The simulated truck draws 40 A: the array was read under load, so the spread is the larger
     // per-half spread from the BMS summaries (half A holds the low outlier, group 47 in module 6).
     val heat = d.heatmap!!
@@ -303,16 +309,29 @@ class DashboardModelTest {
   }
 
   @Test
+  fun theAppsOwnRangeComesFirstWithTheTrucksBesideIt() {
+    val vhal = VhalFigures(energyWh = 85_300.0, nominalWh = 205_000.0, rangeM = 300_000.0)
+    val off = DashboardModel.build(LiveState(status = LinkStatus.ADAPTER_UNREACHABLE), vhal, TempUnit.C, DistUnit.KM, NOW, ownRangeM = 320_000.0)
+    assertEquals(listOf("85.3 kWh remaining (VHAL)", "Range 320 km · truck 300 km"), off.soc.lines)
+    assertEquals(listOf("85.3 kWh", "Range 320 km · truck 300 km"), off.soc.drivingLines)
+    val obd = DashboardModel.build(simState(), VhalFigures(), TempUnit.C, DistUnit.KM, NOW, ownRangeM = 320_000.0)
+    assertEquals("Range 320 km · truck 510 km", obd.soc.lines[1])
+    val alone = DashboardModel.build(LiveState(status = LinkStatus.ADAPTER_UNREACHABLE), VhalFigures(energyWh = 85_300.0), TempUnit.C, DistUnit.KM, NOW, ownRangeM = 320_000.0)
+    assertEquals("Range 320 km", alone.soc.lines[1])
+  }
+
+  @Test
   fun vhalFallbackWhenObdIsUnavailable() {
     val vhal = VhalFigures(energyWh = 85_300.0, nominalWh = 205_000.0, rangeM = 300_000.0, outsideC = -3.5)
     val d = build(LiveState(status = LinkStatus.ADAPTER_UNREACHABLE), vhal, TempUnit.C, DistUnit.KM)
     assertEquals("41.6", d.soc.value)
     assertEquals("VHAL", d.soc.marker)
     assertEquals(listOf("85.3 kWh remaining (VHAL)", "Range 300 km (VHAL)"), d.soc.lines)
-    assertEquals("205.0", d.capacity.value)
-    assertEquals("VHAL", d.capacity.marker)
-    assertFalse(d.power.hasValue)
-    assertEquals("—", d.power.value)
+    // The API's figure is not passed off as the BECM's.
+    assertFalse(d.capacity.hasValue)
+    assertEquals(listOf("Needs the OBDLink MX+", "The car's API says 205.0 kWh"), d.capacity.lines)
+    assertFalse(d.capacityAh.hasValue)
+    assertEquals("—", d.pack[0].value)
     assertFalse(d.spread.hasValue)
     assertNull(d.heatmap)
     assertEquals("−3.5 °C", d.temps[3].value)
@@ -325,39 +344,6 @@ class DashboardModelTest {
     val empty = build(LiveState())
     assertFalse(empty.soc.hasValue)
     assertEquals("—", empty.soc.value)
-  }
-
-  @Test
-  fun powerDirectionAndFormatting() {
-    assertEquals("Discharging" to Tone.DISCHARGE, DashboardModel.direction(12.3))
-    assertEquals("Charging / regen" to Tone.CHARGE, DashboardModel.direction(-8.0))
-    assertEquals("Idle" to Tone.DIM, DashboardModel.direction(0.01))
-    assertEquals("Idle" to Tone.DIM, DashboardModel.direction(-0.04))
-    val v = mapOf("pack_voltage" to value("pack_voltage", 352.7), "pack_current" to value("pack_current", -23.4))
-    val k = DashboardModel.power(v, mapOf("power_kw" to -8.24), NOW)
-    assertEquals("−8.2", k.value)
-    assertEquals("Charging / regen", k.pill)
-    assertEquals("352.7 V · −23.4 A", k.lines[0])
-    // Voltage without current: no power yet.
-    val noCurrent = DashboardModel.power(mapOf("pack_voltage" to value("pack_voltage", 352.7)), emptyMap(), NOW)
-    assertFalse(noCurrent.hasValue)
-    assertEquals("352.7 V · current not read yet", noCurrent.lines[0])
-  }
-
-  @Test
-  fun powerChartScaleAndWindow() {
-    val pv = build(simState()).powerChart
-    assertEquals("the 400 s old point is outside the 5 min window", 2, pv.points.size)
-    assertEquals(20.0, pv.scaleKw, 0.0)
-    assertEquals(-20.0, pv.latestKw!!, 0.0)
-    assertEquals(10.0, DashboardModel.powerScale(0.0), 0.0)
-    assertEquals(20.0, DashboardModel.powerScale(12.0), 0.0)
-    assertEquals(200.0, DashboardModel.powerScale(180.0), 0.0)
-    assertEquals(1000.0, DashboardModel.powerScale(950.0), 0.0)
-    assertEquals(1.0, DashboardModel.colourScaleMv(0.3), 0.0)
-    assertEquals(2.5, DashboardModel.colourScaleMv(2.26), 0.0)
-    assertEquals(1.0, DashboardModel.colourPosition(5.0, 2.5), 0.0)
-    assertEquals(-0.5, DashboardModel.colourPosition(-1.25, 2.5), 0.0)
   }
 
   @Test
@@ -437,20 +423,26 @@ class DashboardModelTest {
     assertEquals("0 ms", Units.age(-5))
   }
 
-  @Test
-  fun defaultUnitsFollowTheLocale() {
-    assertEquals(TempUnit.F, Units.defaultTemp(Locale.US))
-    assertEquals(DistUnit.MI, Units.defaultDist(Locale.US))
-    assertEquals(TempUnit.C, Units.defaultTemp(Locale.UK))
-    assertEquals(DistUnit.MI, Units.defaultDist(Locale.UK))
-    assertEquals(TempUnit.C, Units.defaultTemp(Locale.GERMANY))
-    assertEquals(DistUnit.KM, Units.defaultDist(Locale.GERMANY))
-    assertEquals(DistUnit.KM, Units.defaultDist(Locale.CANADA))
-  }
-
   private companion object {
     const val NOW = 1_000_000L
     const val MAX_DRIVING_LINE = 24
+  }
+
+  @Test
+  fun capacityFallsBackToCalculatedThenToTheLastRead() {
+    val noRead = simState().let { it.copy(derived = it.derived - "capacity_kwh" - "capacity_ah") }
+    val calc = DashboardModel.build(noRead, VhalFigures(), TempUnit.C, DistUnit.MI, NOW)
+    assertEquals("est.", calc.capacity.marker)
+    assertEquals("Calculated: energy ÷ SoC", calc.capacity.lines[0])
+    assertEquals("est.", calc.capacityAh.marker)
+    assertEquals("Calculated: kWh ÷ (96 series × 3.6 V)", calc.capacityAh.lines[0])
+    val saved = SavedCapacity(208.44, 602.2, atWallMs = 1_000_000L)
+    val off = DashboardModel.build(LiveState(status = LinkStatus.DISCONNECTED), VhalFigures(), TempUnit.C, DistUnit.MI, NOW, saved, 1_000_000L + 7_200_000L)
+    assertEquals("208.44", off.capacity.value)
+    assertEquals("602.2", off.capacityAh.value)
+    assertEquals(DashboardModel.LAST_READ, off.capacity.marker)
+    assertEquals(listOf("Read 2 h ago"), off.capacityAh.drivingLines)
+    assertEquals("MX+ disconnected", off.status.chip)
   }
 
   @Test
@@ -458,29 +450,19 @@ class DashboardModelTest {
     val d = DashboardModel.build(simState(), VhalFigures(), TempUnit.C, DistUnit.MI, NOW)
     assertEquals("Charge", d.soc.shortTitle)
     assertEquals(2, d.soc.drivingLines.size)
-    assertEquals("Power", d.power.shortTitle)
-    assertEquals(d.power.lines, d.power.drivingLines)
     assertEquals("Capacity's lines only explain it", emptyList<String>(), d.capacity.drivingLines)
     // Cell min / max stays in its tile.
     assertEquals("Cell spread", d.spread.shortTitle)
     assertEquals(listOf(d.spread.shortLine), d.spread.drivingLines)
     assertTrue(d.spread.lines.first(), d.spread.lines.first().contains(" V"))
     assertTrue(d.spread.shortLine!!, Regex("""\d\.\d{4}–\d\.\d{4} V( · load)?""").matches(d.spread.shortLine!!))
-    assertEquals("Discharging", d.power.pillShort)
-    val charging = DashboardModel.power(
-      simState().values + ("pack_current" to LiveValue("pack_current", "", -40.0, "A", "confirmed", 1.0, NOW)),
-      mapOf("power_kw" to -15.0),
-      NOW,
-    )
-    assertEquals("Charging / regen", charging.pill)
-    assertEquals("Charging", charging.pillShort)
   }
 
   /** No adapter in Drive: the dash and its marker, or a bare figure. No sentence to read or cut off. */
   @Test
   fun whileDrivingATileHasNoSentences() {
     val noAdapter = DashboardModel.build(LiveState(), VhalFigures(), TempUnit.C, DistUnit.MI, NOW)
-    for (k in listOf(noAdapter.soc, noAdapter.power, noAdapter.capacity, noAdapter.spread)) {
+    for (k in listOf(noAdapter.soc, noAdapter.capacity, noAdapter.capacityAh, noAdapter.capacityDeviation, noAdapter.spread)) {
       assertEquals(Units.DASH, k.value)
       assertEquals(k.title, emptyList<String>(), k.drivingLines)
     }
@@ -489,7 +471,7 @@ class DashboardModelTest {
     assertEquals("the marker says where it is from", "VHAL", vhal.soc.marker)
     assertEquals(emptyList<String>(), vhal.capacity.drivingLines)
     for (d in listOf(noAdapter, vhal, DashboardModel.build(simState(), VhalFigures(), TempUnit.C, DistUnit.MI, NOW))) {
-      for (k in listOf(d.soc, d.power, d.capacity, d.spread)) {
+      for (k in listOf(d.soc, d.capacity, d.capacityAh, d.capacityDeviation, d.spread)) {
         for (line in k.drivingLines) {
           assertTrue(line, line.length <= MAX_DRIVING_LINE)
           assertTrue(line, line.any { it.isDigit() })

@@ -12,8 +12,8 @@ A="$ANDROID_HOME/cmdline-tools/latest/bin/android"
 "$A" sdk install \
   platform-tools \
   emulator \
-  "platforms/android-35" \
-  "build-tools/35.0.1" \
+  "platforms/android-36" \
+  "build-tools/36.0.0" \
   "system-images/android-34-ext9/android-automotive/x86_64" \
   "system-images/android-35-ext15/android-automotive/x86_64"
 

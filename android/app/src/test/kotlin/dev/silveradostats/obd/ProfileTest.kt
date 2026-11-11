@@ -24,8 +24,8 @@ class ProfileTest {
   @Test
   fun assetProfileLoads() {
     assertEquals("silverado-ev", prof.name)
-    assertEquals(57, prof.didFields.size)
-    assertEquals(43, prof.reads().size)
+    assertEquals(64, prof.didFields.size)
+    assertEquals(50, prof.reads().size)
     val soc = prof.didFields.single { it.name == "soc" }
     assertEquals(0x27C6, soc.did)
     assertEquals("confirmed", soc.status)
@@ -123,8 +123,6 @@ class ProfileTest {
     assertEquals(24, d["modules"])
     assertEquals(203.7, d["bms_energy_at_100_kwh"])
     assertEquals(589.4, d["ah_nominal_est"])
-    assertTrue(Derive.LABELS.getValue("ah_nominal_est").first.contains("nominal estimate"))
-    assertTrue(Derive.LABELS.keys.containsAll(d.keys))
   }
 
   @Test

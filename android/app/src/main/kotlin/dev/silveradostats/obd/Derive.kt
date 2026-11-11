@@ -1,33 +1,24 @@
 package dev.silveradostats.obd
 
+import kotlin.math.abs
+
 /**
  * Values computed from several DIDs (port of cli.derive; all estimates).
  *
  * Input: field name -> decoded value (what [DidField.decode] returns). Output keys, in order:
  * power_kw, cell_min_v, cell_max_v, cell_spread_mv, series_groups, modules, bms_energy_at_100_kwh,
  * cell_groups_read, array_min_v, array_min_group, array_max_v, array_max_group, and (added in the
- * app) ah_nominal_est. Ints are Long/Int, floats Double, exactly as the probe computes them.
+ * app) ah_nominal_est, capacity_kwh, capacity_ah. Ints are Long/Int, floats Double, exactly as the probe computes them.
  */
 object Derive {
   /** Nominal NMC cell-group voltage used only for the Ah estimate. */
   const val NOMINAL_CELL_V = 3.6
 
-  /** key -> (label, unit) for display. */
-  val LABELS: Map<String, Pair<String, String>> = linkedMapOf(
-    "power_kw" to ("Battery power (+ discharge, - charge)" to "kW"),
-    "cell_min_v" to ("Lowest cell group (half summaries)" to "V"),
-    "cell_max_v" to ("Highest cell group (half summaries)" to "V"),
-    "cell_spread_mv" to ("Cell group spread" to "mV"),
-    "series_groups" to ("Series groups (pack V / average group V)" to ""),
-    "modules" to ("Battery modules" to ""),
-    "bms_energy_at_100_kwh" to ("BMS energy at 100 % (not usable capacity)" to "kWh"),
-    "cell_groups_read" to ("Cell groups read" to ""),
-    "array_min_v" to ("Lowest cell group (full array)" to "V"),
-    "array_min_group" to ("Lowest cell group #" to ""),
-    "array_max_v" to ("Highest cell group (full array)" to "V"),
-    "array_max_group" to ("Highest cell group #" to ""),
-    "ah_nominal_est" to ("Capacity, nominal estimate (BMS energy at 100 % / (series groups x 3.6 V))" to "Ah"),
-  )
+  /** How far 27AE may be from energy / SoC and still be taken for the pack's capacity. */
+  const val CAPACITY_TOLERANCE = 0.15
+
+  /** kWh / Ah / series groups must land here (per group, or half of it with the halves in series for 800 V). */
+  val CELL_V_RANGE = 3.4..3.9
 
   fun derive(v: Map<String, Any?>): LinkedHashMap<String, Any> {
     val d = LinkedHashMap<String, Any>()
@@ -72,11 +63,21 @@ object Derive {
       d["array_max_v"] = hi.second
       d["array_max_group"] = hi.first
     }
-    // Added in the app: a nominal Ah figure, NOT a measured capacity (the coulomb counter comes later).
+    // Added in the app: a nominal Ah figure, NOT a measured capacity (the coulomb counter is not built).
     val bms = d["bms_energy_at_100_kwh"]
     val groups = d["series_groups"]
     if (Py.truthy(bms) && Py.truthy(groups) && bms is Number && groups is Number) {
       d["ah_nominal_est"] = Py.round(bms.toDouble() * 1000 / (groups.toDouble() * NOMINAL_CELL_V), 1)
+    }
+    // Added in the app: the capacities the BECM reports itself, only while they fit the rest of the pack.
+    val implied = (bms as? Number)?.toDouble()
+    val capability = (v["battery_capability"] as? Number)?.toDouble()?.takeIf { it > 0 }
+    if (capability != null && implied != null && abs(capability / implied - 1) <= CAPACITY_TOLERANCE) d["capacity_kwh"] = capability
+    val ah = (v["pack_capacity_ah"] as? Number)?.toDouble()?.takeIf { it > 0 }
+    val kwh = (d["capacity_kwh"] as? Number)?.toDouble() ?: implied
+    if (ah != null && kwh != null && groups is Number && groups.toDouble() > 0) {
+      val perGroup = kwh * 1000 / ah / groups.toDouble()
+      if (perGroup in CELL_V_RANGE || perGroup * 2 in CELL_V_RANGE) d["capacity_ah"] = ah
     }
     return d
   }

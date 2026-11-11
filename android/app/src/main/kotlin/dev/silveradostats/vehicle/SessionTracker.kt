@@ -1,35 +1,44 @@
 package dev.silveradostats.vehicle
 
-import dev.silveradostats.link.PowerHistory
-import dev.silveradostats.link.PowerPoint
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
 
 /*
- * Pure Kotlin (no android.* imports): the "since the app was opened" session built from the
- * truck's own vehicle data (no OBD adapter). Unit tested on the JVM with a virtual clock.
+ * Pure Kotlin (no android.* imports): the current drive, built from the truck's own vehicle data (no
+ * OBD adapter). Unit tested on the JVM with a virtual clock.
+ *
+ * A drive starts when the truck first leaves Park, and again when it leaves Park after DRIVE_BREAK_MS
+ * parked or switched off, or after a charge: everything below starts again from zero there. A long wait
+ * in gear is the same drive, and so is a stretch with no readings (another app in front) that no
+ * reading saw the truck parked in.
  *
  * Inputs are timestamped samples (VehicleSample) at about 1-2 Hz. Outputs (SessionState):
  *  - distance: trapezoidal integration of |speed|, never across a gap > GAP_MS between samples;
- *  - energy used: start level - current level (net: regen counts), in segments; a gap or a charge
- *    closes the segment and the next one starts from the level seen afterwards, so energy spent
- *    while nothing was sampled, and energy added while charging, is never counted;
- *  - measured efficiency: distance / energy, both taken at battery-level CHANGE points. The level
- *    property moves in steps (by value and/or by time: a held value that jumps every few seconds),
- *    so the distance driven since the last step has no energy against it yet. Measuring from the
- *    first step to the latest step (the "basis") holds the figure steady between steps instead of
- *    letting it climb and fall back at every step. Reported only after WARMUP_M and WARMUP_WH, marked
- *    "early" until EARLY_M and EARLY_WH; once reported it never goes back to warming up (a long
- *    descent reads NET_REGEN instead);
- *  - a cumulative efficiency series (one point per 0.1 mi) and per-mile / per-km segment figures,
- *    with the energy at each boundary interpolated between the change points around it;
- *  - power now: from EV_BATTERY_INSTANTANEOUS_CHARGE_RATE (AOSP: + charging, - discharging; shown
- *    here as + discharge), or estimated from d(level)/dt over ~30 s when that property is missing,
- *    stays exactly 0 while driving (seen on GM in Park; unknown while driving), is held with an old
- *    timestamp, or has the opposite sign to the energy the level says moved (RateCheck, in the
- *    diagnostics report: only 0.00 kW has been seen on the truck so far);
- *  - a 10-minute power history at 1 s resolution, peaks, range at the measured efficiency.
+ *  - energy used: from the power that actually flowed where there is a signal for it, else from the
+ *    battery level. In order: the MX+ (pack V x A, [addPack]), EV_BATTERY_INSTANTANEOUS_CHARGE_RATE,
+ *    the level. A power signal counts only once it agrees with the level over at least
+ *    [SessionTracker.TRUST_MIN_WH] of movement ([SignalCheck]), which also settles its sign and rules
+ *    out a stuck or wrongly scaled one: AOSP says + charging, and GM's has not been checked under load.
+ *    Regen comes back through the same signal, so the figure is net. Nothing is counted across a gap or
+ *    a charge;
+ *  - measured efficiency: distance / energy. With a power signal both advance at every reading. The
+ *    level property moves in steps (by value and/or by time: a held value that jumps every few
+ *    seconds), so on the level alone they are taken at level CHANGE points: the distance driven since
+ *    the last step has no energy against it yet, and measuring from the first step to the latest (the
+ *    "basis") holds the figure steady between steps. The first WARMUP_MS of each drive are left out of
+ *    it: the BMS is still settling and the level falls far faster than the energy used. Reported only
+ *    after that, WARMUP_M and WARMUP_WH, marked "early" until EARLY_M and EARLY_WH; once reported it
+ *    never goes back to warming up (a long descent reads NET_REGEN instead);
+ *  - the same figure over only the last RECENT_MS: the basis now against the basis then;
+ *  - plain efficiency, for the Simple tab: this drive's distance / this drive's energy used, and the
+ *    same over the last RECENT_MS. No warm-up, so not the measured efficiency above (the report keeps
+ *    that one);
+ *  - range: the energy left x that plain figure over the last RECENT_MS, by the owner's choice
+ *    (2026-11-06), which is the whole drive until it is that long. Standing still it keeps the figure
+ *    it took as it stopped: the window would otherwise slide down to the last moments of braking and
+ *    then to nothing, in a long wait and at a charger. A figure stands for RANGE_EVERY_MS, so that it
+ *    can be read.
  *
  * Readings are not taken on trust: a speed no truck reaches is dropped; a level jump neither driving
  * nor a charger can cause must repeat before it counts, and then it counts as a new start, not as
@@ -54,19 +63,8 @@ enum class ChargeState(val aosp: Int) {
 
 /** AOSP VehicleGear values the session cares about. */
 object Gear {
-  const val NEUTRAL = 1
-  const val REVERSE = 2
   const val PARK = 4
   const val DRIVE = 8
-
-  fun letter(g: Int?): String? = when (g) {
-    null -> null
-    PARK -> "P"
-    REVERSE -> "R"
-    NEUTRAL -> "N"
-    DRIVE -> "D"
-    else -> if (g in 16..4096) "D" else null
-  }
 }
 
 /** One reading of the truck's built-in data. Null = not read in this sample (or not offered). */
@@ -89,6 +87,8 @@ data class VehicleSample(
   val chargeState: ChargeState? = null,
   /** GEAR_SELECTION (AOSP VehicleGear). */
   val gear: Int? = null,
+  /** IGNITION_STATE (AOSP VehicleIgnitionState). */
+  val ignition: Int? = null,
   /** ENV_OUTSIDE_TEMPERATURE, °C. */
   val outsideC: Double? = null,
   /** RANGE_REMAINING, m (the truck's own estimate). */
@@ -124,60 +124,48 @@ data class Efficiency(
   val status: EffStatus,
   /** Metres per Wh (= km/kWh); null while warming up. */
   val mPerWh: Double?,
-  /** 0..1 progress towards the warm-up threshold (both distance and energy are needed). */
+  /** 0..1 progress through the warm-up (the drive's first minutes, then both distance and energy). */
   val progress: Double,
   /** Distance the figure is measured over (between battery-level steps), m. */
   val basisM: Double,
   /** Net energy the figure is measured over, Wh. */
   val basisWh: Double,
-  /** Energy the warm-up asks for: more than [SessionTracker.WARMUP_WH] when the level is coarse, Wh. */
-  val needWh: Double = SessionTracker.WARMUP_WH,
   /** A figure, but over too little distance or energy to say much yet. */
   val early: Boolean = false,
-  /** Session distance of the latest level step: where the figure was measured up to, m. */
-  val atM: Double = 0.0,
+  /** What is left of this drive's [SessionTracker.WARMUP_MS], all of it until the truck moves: nothing counts yet, ms. */
+  val warmupLeftMs: Long = 0,
 ) {
   companion object {
-    val NONE = Efficiency(EffStatus.WARMING_UP, null, 0.0, 0.0, 0.0)
+    val NONE = Efficiency(EffStatus.WARMING_UP, null, 0.0, 0.0, 0.0, warmupLeftMs = SessionTracker.WARMUP_MS)
   }
 }
 
-/** Cumulative efficiency at one distance (one point per 0.1 mi of session distance). */
-data class EffPoint(val distM: Double, val mPerWh: Double)
+/** The figure over only the last [SessionTracker.RECENT_MS]: what [Efficiency] leaves out stays out of this too. */
+data class RecentEfficiency(
+  /** Metres per Wh; null with too little distance, or too little net energy (a descent), to go by. */
+  val mPerWh: Double? = null,
+  val basisM: Double = 0.0,
+  val basisWh: Double = 0.0,
+)
 
-/**
- * One finished distance segment (mile or km number [index], 1-based): the distance inside it that
- * has energy data ([knownM], less than [lengthM] across a gap or a charge) and the net energy used.
- */
-data class EffSegment(val index: Int, val lengthM: Double, val knownM: Double, val usedWh: Double) {
-  /** Null when there is too little energy to divide by (mostly regen, or no data). */
-  val mPerWh: Double? get() = if (knownM > 0 && usedWh >= SessionTracker.MIN_SEGMENT_WH) knownM / usedWh else null
+/** What the session's energy figure is measured from at the moment. */
+enum class EnergySource {
+  /** Pack voltage x pack current from the MX+. */
+  MX_PACK,
 
-  /** Net energy came back over this segment (downhill / regen). */
-  val netRegen: Boolean get() = knownM > 0 && usedWh <= 0
+  /** The truck's EV_BATTERY_INSTANTANEOUS_CHARGE_RATE. */
+  CHARGE_RATE,
+
+  /** Changes of the truck's battery level: no power signal is live or trusted. */
+  BATTERY_LEVEL,
 }
 
-enum class PowerSource { CHARGE_RATE, ESTIMATED }
-
-enum class PowerDirection { DISCHARGING, REGEN, CHARGING, IDLE }
-
-/** Battery power now: + discharge, - charge / regen (as on the Live dashboard). */
-data class PowerNow(val kw: Double, val direction: PowerDirection, val source: PowerSource) {
-  val estimated: Boolean get() = source == PowerSource.ESTIMATED
-}
-
-/**
- * The charge rate against the battery level, over windows between level steps at least
- * [SessionTracker.RATE_CHECK_MS] long: the first real drive settles what sign and how live the
- * truck's charge rate is. Figures are in kW, + discharge. Goes into the diagnostics report.
- */
-data class RateCheck(
-  /** Windows where both moved at least 1 kW the same way. */
-  val agreed: Int = 0,
-  /** Windows where they moved opposite ways by more than [SessionTracker.RATE_DISAGREE_KW]. */
-  val disagreed: Int = 0,
-  val lastRateKw: Double? = null,
-  val lastLevelKw: Double? = null,
+/** A power signal against the battery level over the same time, net Wh, + discharge as the signal reads. */
+data class SignalVerdict(
+  val signalWh: Double = 0.0,
+  val levelWh: Double = 0.0,
+  /** 1: agrees with the level. -1: agrees, opposite sign. 0: not trusted (yet). */
+  val sign: Int = 0,
 )
 
 /** Where the session's data comes from right now. */
@@ -215,9 +203,20 @@ data class Feed(
   val missing: Set<Signal> = emptySet(),
   /** The capacity is the nominal one (INFO_EV_BATTERY_CAPACITY): no usable-capacity property. */
   val capacityNominal: Boolean = false,
+  /** INFO_EV_BATTERY_CAPACITY, Wh: what the car's API says the pack was when new. */
+  val ratedWh: Double? = null,
 )
 
-/** Everything the Simple tab and Battery Glance show about the session. */
+/** The energy left x the last 15 minutes' efficiency: [m] metres at [mPerWh]. */
+data class RangeEstimate(val m: Double, val mPerWh: Double)
+
+/**
+ * Distance / energy with no warm-up: from the drive's first reading, and over the last
+ * [SessionTracker.RECENT_MS] (the whole drive until it is that long). Null with nothing to divide.
+ */
+data class PlainEfficiency(val driveMPerWh: Double? = null, val recentMPerWh: Double? = null)
+
+/** Everything the Simple tab shows about the session. */
 data class SessionState(
   /** Tracker clock when the session started (app opened, or the last reset). */
   val startedAtMs: Long = 0,
@@ -228,39 +227,42 @@ data class SessionState(
   val distanceM: Double = 0.0,
   /** Net energy used (regen included), charging excluded, Wh. */
   val usedWh: Double = 0.0,
+  /** Out of the battery while a power signal measured it, Wh. */
+  val energyOutWh: Double = 0.0,
+  /** Back into the battery (regen) while a power signal measured it, Wh. */
+  val energyInWh: Double = 0.0,
+  /** What the battery level alone says was used over the same session, Wh: for comparison. */
+  val levelUsedWh: Double = 0.0,
+  val energySource: EnergySource = EnergySource.BATTERY_LEVEL,
+  val chargeRateCheck: SignalVerdict = SignalVerdict(),
+  val mxPackCheck: SignalVerdict = SignalVerdict(),
   /** Energy added while charging was detected, Wh. */
   val chargedWh: Double = 0.0,
   /** Charging detected: energy accounting is paused. */
   val charging: Boolean = false,
+  /** The plug or charge state says charging, as opposed to [charging] which a rising level can set too. */
+  val chargeSignal: Boolean = false,
   val gaps: Int = 0,
   val gapMs: Long = 0,
   val efficiency: Efficiency = Efficiency.NONE,
-  val series: List<EffPoint> = emptyList(),
-  val miSegments: List<EffSegment> = emptyList(),
-  val kmSegments: List<EffSegment> = emptyList(),
-  val power: PowerNow? = null,
-  /** Last 10 minutes, at most one point per second, + discharge. */
-  val powerHistory: List<PowerPoint> = emptyList(),
-  /** Largest discharge in [powerHistory], kW (> 0), or null. */
-  val peakDischargeKw: Double? = null,
-  /** Largest regen / charge in [powerHistory], kW (< 0), or null. */
-  val peakRegenKw: Double? = null,
-  /** Some of [powerHistory] comes from the estimate, so the peaks may too. */
-  val powerHistoryEstimated: Boolean = false,
+  val recentEfficiency: RecentEfficiency = RecentEfficiency(),
   val speedMps: Double? = null,
   val levelWh: Double? = null,
   val capacityWh: Double? = null,
   val rangeM: Double? = null,
   val outsideC: Double? = null,
   val gear: Int? = null,
+  val ignition: Int? = null,
   /** Smallest battery-level step seen, Wh (how coarse the level property is). */
   val levelStepWh: Double? = null,
   /** Distance driven since the battery level last changed, m. */
   val levelUnchangedM: Double = 0.0,
   /** The charge-rate property has reported a non-zero value in this session (it is live). */
   val chargeRateSeenNonZero: Boolean = false,
-  val rateCheck: RateCheck = RateCheck(),
   val feed: Feed = Feed(),
+  /** The app's own range, null with nothing to work it out from. See [SessionTracker.rangeFrom]. */
+  val rangeEstimate: RangeEstimate? = null,
+  val plainEfficiency: PlainEfficiency = PlainEfficiency(),
 ) {
   val socPct: Double?
     get() {
@@ -272,59 +274,54 @@ data class SessionState(
   /** Average speed over the sampled time (stops included), m/s. */
   val avgSpeedMps: Double? get() = if (activeMs >= 1_000) distanceM / (activeMs / 1000.0) else null
 
-  /**
-   * Remaining energy x the measured efficiency, m. Withheld while the figure is early, and above
-   * [SessionTracker.MAX_RANGE_M_PER_WH]: a descent's figure says nothing about the battery's range.
-   */
-  val rangeAtMeasuredM: Double?
-    get() {
-      if (efficiency.early) return null
-      val e = efficiency.mPerWh?.takeIf { it <= SessionTracker.MAX_RANGE_M_PER_WH } ?: return null
-      val l = levelWh?.takeIf { it >= 0 } ?: return null
-      return l * e
-    }
-
-  /** The efficiency the truck's own range implies (range / remaining energy), m/Wh. */
-  val truckImpliedMPerWh: Double?
-    get() {
-      val r = rangeM?.takeIf { it > 0 } ?: return null
-      val l = levelWh?.takeIf { it > 100 } ?: return null
-      return r / l
-    }
-
   val hasData: Boolean get() = samples > 0
 }
 
 /** Single-threaded: the owner (VehicleSession) feeds and reads it from one thread. */
-class SessionTracker(private val clock: () -> Long) {
-  /** A battery-level change point: session distance, basis distance, basis energy, level. */
-  private data class Point(val d: Double, val k: Double, val e: Double, val level: Double)
+class SessionTracker(
+  /** The start of each drive left out of the efficiency. */
+  private val warmupMs: Long = WARMUP_MS,
+  private val clock: () -> Long,
+) {
+  /** A battery-level change point: session distance, basis distance, basis energy, level, when. */
+  private data class Point(val d: Double, val k: Double, val e: Double, val level: Double, val at: Long = 0)
 
-  /** Fixed-step distance boundaries; the (basis distance, basis energy) at each finished one. */
-  private class Boundaries(val step: Double) {
-    /** Index of the next boundary (distance = next * step). */
-    var next = 1
+  /** This drive's distance and net energy so far, at [at]. */
+  private data class Totals(val at: Long, val d: Double, val e: Double)
 
-    /** k and e at boundary i (index 0 = distance 0, before any data). */
-    val k = ArrayList<Double>().apply { add(0.0) }
-    val e = ArrayList<Double>().apply { add(0.0) }
+  /** A power signal against the battery level: the signal counts only while its [sign] is not 0. */
+  private class SignalCheck {
+    var signalWh = 0.0
+    var levelWh = 0.0
+    var sign = 0
+    /** The first sign it settled on: a signal does not change direction later. */
+    private var settled = 0
 
-    /** Resolves every boundary in (from.d, to.d]; [onBoundary] gets (index, k, e). */
-    fun resolve(from: Point, to: Point, onBoundary: (Int, Double, Double) -> Unit = { _, _, _ -> }) {
-      while (next * step <= to.d + 1e-9) {
-        val b = next * step
-        val span = to.d - from.d
-        val f = if (span > 0) ((b - from.d) / span).coerceIn(0.0, 1.0) else 1.0
-        val kb = from.k + (to.k - from.k) * f
-        val eb = from.e + (to.e - from.e) * f
-        k += kb
-        e += eb
-        onBoundary(next, kb, eb)
-        next += 1
+    fun add(signal: Double, level: Double, minWh: Double) {
+      signalWh += signal
+      levelWh += level
+      // Judged on energy gone out. Too little has moved to say anything, or a descent has undone it, and
+      // a level that rose can be a wobble, which says nothing about which way a signal runs: the last
+      // verdict stands. Taking back a trust given takes more: each change of source keeps the level's
+      // wobble at that moment in the energy used.
+      if (levelWh < (if (sign == 0) minWh else minWh * DISTRUST_FACTOR)) return
+      val ratio = signalWh / levelWh
+      val verdict = when {
+        ratio in MIN_SIGNAL_RATIO..MAX_SIGNAL_RATIO -> 1
+        -ratio in MIN_SIGNAL_RATIO..MAX_SIGNAL_RATIO -> -1
+        else -> 0
       }
+      if (settled == 0) settled = verdict
+      sign = if (verdict == -settled) 0 else verdict
     }
 
-    fun segments(): List<EffSegment> = (1 until k.size).map { i -> EffSegment(i, step, k[i] - k[i - 1], e[i] - e[i - 1]) }
+    /** Judges from here on: the last verdict stands until enough has moved again. */
+    fun restart() {
+      signalWh = 0.0
+      levelWh = 0.0
+    }
+
+    fun verdict() = SignalVerdict(signalWh, levelWh, sign)
   }
 
   private var startedAtMs = clock()
@@ -344,6 +341,8 @@ class SessionTracker(private val clock: () -> Long) {
   private var gear: Int? = null
   private var plug: Boolean? = null
   private var chargeState: ChargeState? = null
+  private var ignition: Int? = null
+  private var chargeSignal = false
 
   /** Speed stopped arriving while the other readings go on (since then). */
   private var speedOutSinceMs: Long? = null
@@ -362,20 +361,51 @@ class SessionTracker(private val clock: () -> Long) {
   private var usedClosedWh = 0.0
   private var segStartLevel: Double? = null
   private var chargedWh = 0.0
+  /** Measured energy minus what the level says over the same readings: added to the level's total. */
+  private var measuredOverLevelWh = 0.0
+  private var energyOutWh = 0.0
+  private var energyInWh = 0.0
+  private var energySource = EnergySource.BATTERY_LEVEL
+  /** The reading the next energy step starts from (null: the next reading starts a new stretch). */
+  private var energyAtMs: Long? = null
 
-  // Basis (change points).
+  // Drive warm-up.
+  /** When the warm-up ends: [NOT_MOVED] until the truck moves, null once it is over. */
+  private var warmupEndsAtMs: Long? = NOT_MOVED
+
+  // Drives.
+  /** The latest reading with the truck being driven; null until it has been. */
+  private var drivenAtMs: Long? = null
+  /** A reading has seen the truck parked since then. */
+  private var parkedSeen = false
+  /** A charge ended since then: the next driving is a new drive, however soon. */
+  private var chargedSinceDriven = false
+  /** The gear as far as a reading since the last gap says: [DrivingPolicy.GEAR_UNKNOWN] is no answer. */
+  private var knownGear: Int? = null
+  /** The truck has given a gear at all. If not, standing still is all there is to go by. */
+  private var gearOffered = false
+
+  // The range on screen.
+  private var ownRange: RangeEstimate? = null
+  private var ownRangeAtMs: Long? = null
+  private var movedAtMs: Long? = null
+
+  // The plain efficiency on screen, and this drive's running totals every RANGE_EVERY_MS of the last RECENT_MS.
+  private var plain = PlainEfficiency()
+  private var plainAtMs: Long? = null
+  private val totals = ArrayDeque<Totals>()
+
+  // Basis (points).
   private var last = Point(0.0, 0.0, 0.0, Double.NaN)
   private var anchorPending = true
   /** A figure has been reported in this session. */
   private var warmed = false
+  /** The points of the last [RECENT_MS], from the newest one at least that old. */
+  private val recent = ArrayDeque<Point>()
   private var observedLevel: Double? = null
   private var levelStepWh: Double? = null
   /** Session distance when the level last changed (or a gap restarted the watch). */
   private var levelChangedAtM = 0.0
-  private val series = ArrayList<EffPoint>()
-  private val seriesB = Boundaries(SERIES_STEP_M)
-  private val miles = Boundaries(EffUnits.METERS_PER_MILE)
-  private val kms = Boundaries(1000.0)
 
   // Charging.
   private var charging = false
@@ -388,8 +418,9 @@ class SessionTracker(private val clock: () -> Long) {
   private var stopMinLevel: Double? = null
   private var stopMinPoint: Point? = null
 
-  // Power.
+  // Charge rate.
   private var rateKw: Double? = null
+  private var ratePrevKw: Double? = null
   private var rateAtMs: Long? = null
   private var zeroWhileMovingMs = 0L
   private var rateLooksDead = false
@@ -398,28 +429,14 @@ class SessionTracker(private val clock: () -> Long) {
   private var rateRaw: Double? = null
   private var rateChangedAtMs = 0L
   private var rateHeld = false
-  // Rate against level: a window from one level step to a later one, with the rate's energy over it.
-  private var checkFromMs: Long? = null
-  private var checkFromLevel = 0.0
-  private var checkRateWh = 0.0
-  private var checkRateMs = 0L
-  private var rateDisagrees = false
-  private var rateCheck = RateCheck()
-  /** Level changes (time, level) for the d(level)/dt estimate. */
-  private val levelLog = ArrayDeque<Pair<Long, Double>>()
-  private var levelLogLevel: Double? = null
-  private var levelSeenSinceMs: Long? = null
-  private var power: PowerNow? = null
-  private val history = PowerHistory(HISTORY_MS, HISTORY_CAPACITY)
-  private var historySecond = Long.MIN_VALUE
-  private var lastEstimatedAtMs: Long? = null
+  private var rateCheck = SignalCheck()
 
-  // Snapshot caches (rebuilt only when changed).
-  private var seriesCache: List<EffPoint> = emptyList()
-  private var seriesDirty = false
-  private var miCache: List<EffSegment> = emptyList()
-  private var kmCache: List<EffSegment> = emptyList()
-  private var segmentsDirty = false
+  // MX+ pack power.
+  private var packKw: Double? = null
+  private var packAtMs: Long? = null
+  /** Integrated since the last energy step. */
+  private var packStepWh = 0.0
+  private var packCheck = SignalCheck()
 
   /** Starts a new session now: everything is cleared. */
   fun reset() {
@@ -440,21 +457,28 @@ class SessionTracker(private val clock: () -> Long) {
     usedClosedWh = 0.0
     segStartLevel = null
     chargedWh = 0.0
+    measuredOverLevelWh = 0.0
+    energyOutWh = 0.0
+    energyInWh = 0.0
+    energySource = EnergySource.BATTERY_LEVEL
+    energyAtMs = null
+    warmupEndsAtMs = NOT_MOVED
+    drivenAtMs = null
+    parkedSeen = false
+    chargedSinceDriven = false
+    ownRange = null
+    ownRangeAtMs = null
+    movedAtMs = null
+    plain = PlainEfficiency()
+    plainAtMs = null
+    totals.clear()
     last = Point(0.0, 0.0, 0.0, Double.NaN)
     anchorPending = true
     warmed = false
+    recent.clear()
     observedLevel = null
     levelStepWh = null
     levelChangedAtM = 0.0
-    series.clear()
-    seriesB.next = 1
-    for (b in listOf(seriesB, miles, kms)) {
-      b.next = 1
-      b.k.clear()
-      b.e.clear()
-      b.k += 0.0
-      b.e += 0.0
-    }
     charging = false
     chargingByRise = false
     chargeStartLevel = null
@@ -462,32 +486,52 @@ class SessionTracker(private val clock: () -> Long) {
     stationary = false
     stopMinLevel = null
     stopMinPoint = null
+    rateKw = null
+    ratePrevKw = null
+    rateAtMs = null
     zeroWhileMovingMs = 0
     rateLooksDead = false
     rateSeenNonZero = false
     rateRaw = null
     rateHeld = false
-    resetRateCheck()
-    rateDisagrees = false
-    rateCheck = RateCheck()
-    levelLog.clear()
-    levelLogLevel = null
-    levelSeenSinceMs = null
-    power = null
-    history.clear()
-    historySecond = Long.MIN_VALUE
-    lastEstimatedAtMs = null
-    seriesCache = emptyList()
-    miCache = emptyList()
-    kmCache = emptyList()
-    seriesDirty = false
-    segmentsDirty = false
+    rateCheck = SignalCheck()
+    packKw = null
+    packAtMs = null
+    packStepWh = 0.0
+    packCheck = SignalCheck()
+  }
+
+  /**
+   * Starts a new drive at this reading if it is the first of one: see the top of this file. A stretch
+   * with no readings is not parked unless a reading says so, so a drive goes on behind Maps.
+   */
+  private fun noteDriving(s: VehicleSample, v: Double?) {
+    // The gear from before a gap says nothing about now, and a speed-only reading can't settle it.
+    if (lastAtMs?.let { s.atMs - it > GAP_MS } == true) knownGear = null
+    s.gear?.takeIf { it != DrivingPolicy.GEAR_UNKNOWN }?.let {
+      knownGear = it
+      gearOffered = true
+    }
+    val g = knownGear
+    val driven = (v != null && v > MOVING_MPS) || (g != null && g != Gear.PARK)
+    if (!driven) {
+      if (g == Gear.PARK || (!gearOffered && v != null)) parkedSeen = true
+      return
+    }
+    val since = drivenAtMs
+    val newDrive = since == null || chargedSinceDriven || (parkedSeen && s.atMs - since >= DRIVE_BREAK_MS)
+    if (newDrive && samples > 0) reset()
+    drivenAtMs = s.atMs
+    parkedSeen = false
+    chargedSinceDriven = false
   }
 
   /** Feeds one sample. Samples must come in time order; an older one is ignored. */
   fun add(s: VehicleSample) {
+    if (lastAtMs?.let { s.atMs < it } == true) return
+    val v = s.speedMps?.takeIf { it.isFinite() }?.let { abs(it) }?.takeIf { it <= MAX_SPEED_MPS }
+    noteDriving(s, v)
     val prevAt = lastAtMs
-    if (prevAt != null && s.atMs < prevAt) return
     val dt = if (prevAt != null) s.atMs - prevAt else null
     val gap = dt != null && dt > GAP_MS
     if (gap) {
@@ -506,9 +550,9 @@ class SessionTracker(private val clock: () -> Long) {
     s.gear?.let { gear = it }
     s.plugConnected?.let { plug = it }
     s.chargeState?.let { chargeState = it }
+    s.ignition?.let { ignition = it }
 
     // Distance: trapezoid between consecutive speed samples, never across a gap.
-    val v = s.speedMps?.takeIf { it.isFinite() }?.let { abs(it) }?.takeIf { it <= MAX_SPEED_MPS }
     val speedSeenAt = lastSpeedAtMs
     if (v == null && !gap && speedOutSinceMs == null && speedSeenAt != null && s.atMs - speedSeenAt > GAP_MS) {
       // Energy with no distance against it would ruin the figure: left out like a gap, until speed is back.
@@ -530,6 +574,10 @@ class SessionTracker(private val clock: () -> Long) {
       }
       speed = v
       lastSpeedAtMs = s.atMs
+      if (v > MOVING_MPS) {
+        noteMoving(s.atMs)
+        movedAtMs = s.atMs
+      }
       if (v <= STOPPED_MPS) {
         if (!stationary) {
           stationary = true
@@ -549,14 +597,15 @@ class SessionTracker(private val clock: () -> Long) {
     val claim = plug == true || chargeState == ChargeState.CHARGING
     if (!claim) chargeClaimStale = false else if (v != null && v > RATE_ZERO_MPS) chargeClaimStale = true
     val explicit = claim && !chargeClaimStale
+    chargeSignal = !chargeClaimStale && ChargeReading.saysCharging(plug, chargeState)
     if (explicit && !charging) startCharging(byRise = false)
 
+    readRate(s, gap)
     val lv = plausibleLevel(s.levelWh?.takeIf { it.isFinite() && it >= 0 }, s.atMs)
     if (lv != null) {
       level = lv
-      if (!charging && speedOutSinceMs == null) account(lv)
+      if (!charging && speedOutSinceMs == null) account(lv, s.atMs) else restartEnergy()
       if (charging && chargeStartLevel == null) chargeStartLevel = lv
-      logLevel(s.atMs, lv)
       // A stop that began before the first level reading (a session opened while parked).
       if (stationary && stopMinLevel == null) {
         stopMinLevel = lv
@@ -573,8 +622,30 @@ class SessionTracker(private val clock: () -> Long) {
       val ended = if (chargingByRise) !explicit && moving else !explicit
       if (ended) endCharging()
     }
+    noteTotals(s.atMs)
+  }
 
-    updatePower(s, gap)
+  /** Keeps what the rolling figure needs, whether or not anyone is reading it. */
+  private fun noteTotals(atMs: Long) {
+    if (totals.lastOrNull()?.let { atMs - it.at < RANGE_EVERY_MS } == true) return
+    totals.addLast(Totals(atMs, distanceM, usedNow()))
+    while (totals.size >= 2 && atMs - totals[1].at >= RECENT_MS) totals.removeFirst()
+  }
+
+  /**
+   * One pack power reading from the MX+, kW (+ discharge). Integrated between readings; the next
+   * [add] with a level decides whether it counts. Readings further apart than [PACK_GAP_MS] start
+   * again: a slow poll cycle is fine, an unread stretch is not energy.
+   */
+  fun addPack(atMs: Long, kw: Double) {
+    if (!kw.isFinite() || abs(kw) > MAX_RATE_KW) return
+    val prevAt = packAtMs
+    val prevKw = packKw
+    if (prevAt != null && prevKw != null && atMs > prevAt && atMs - prevAt <= PACK_GAP_MS) {
+      packStepWh += (prevKw + kw) / 2.0 * (atMs - prevAt) / 3600.0
+    }
+    packKw = kw
+    packAtMs = atMs
   }
 
   /**
@@ -602,20 +673,29 @@ class SessionTracker(private val clock: () -> Long) {
     return raw
   }
 
+  /** The truck is moving. The first time, the warm-up starts now; a pause changes nothing: the BMS's clock kept running. */
+  private fun noteMoving(atMs: Long) {
+    if (warmupEndsAtMs == NOT_MOVED) warmupEndsAtMs = atMs + warmupMs
+  }
+
   /** A gap: the energy segment closes; distance and energy restart from the next readings. */
   private fun rebase() {
     closeSegment()
     levelUnchecked = true
     levelChangedAtM = distanceM
-    resetRateCheck()
+    restartEnergy()
+    packAtMs = null
     observedLevel = null
     anchorPending = true
     stationary = false
     stopMinLevel = null
     stopMinPoint = null
-    levelLog.clear()
-    levelLogLevel = null
-    levelSeenSinceMs = null
+  }
+
+  /** Nothing since the last reading counts: a gap or a charge. */
+  private fun restartEnergy() {
+    energyAtMs = null
+    packStepWh = 0.0
   }
 
   private fun closeSegment() {
@@ -629,7 +709,10 @@ class SessionTracker(private val clock: () -> Long) {
     if (byRise) {
       // Undo what the rise added (negative use) since the lowest level of this stop.
       val minLevel = stopMinLevel ?: level ?: return
-      stopMinPoint?.let { last = it }
+      stopMinPoint?.let { stop ->
+        last = stop
+        while ((recent.lastOrNull()?.at ?: 0L) > stop.at) recent.removeLast()
+      }
       val start = segStartLevel
       if (start != null) usedClosedWh += start - minLevel
       segStartLevel = null
@@ -656,241 +739,225 @@ class SessionTracker(private val clock: () -> Long) {
     anchorPending = true
     stopMinLevel = if (stationary) cur else null
     stopMinPoint = if (stationary) last else null
+    // Whatever the length of the charge, the next movement is a new drive.
+    warmupEndsAtMs = NOT_MOVED
+    chargedSinceDriven = true
   }
 
   /** Energy accounting for one level reading (not while charging). */
-  private fun account(lv: Double) {
+  private fun account(lv: Double, atMs: Long) {
+    // In the warm-up the basis only moves along with the truck; the first reading after it starts the figure.
+    warmupEndsAtMs?.let { end ->
+      anchorPending = true
+      if (atMs >= end) {
+        warmupEndsAtMs = null
+        // The level was what is settling: it judges the power signals only from here on.
+        packCheck.restart()
+        rateCheck.restart()
+      }
+    }
     if (segStartLevel == null) segStartLevel = lv
     val obs = observedLevel
+    val levelWh = if (obs != null && abs(lv - obs) >= LEVEL_EPS_WH) obs - lv else 0.0
+    val wasOnLevel = energySource == EnergySource.BATTERY_LEVEL
+    val levelWasOut = energyAtMs?.let { atMs - it > RATE_FRESH_MS } == true
+    val measuredWh = measuredStep(atMs, levelWh)
     if (obs == null) {
       observedLevel = lv
       return
     }
-    val step = abs(lv - obs)
-    if (step < LEVEL_EPS_WH) return
-    levelStepWh = min(levelStepWh ?: step, step)
-    val d = distanceM
-    val p = if (anchorPending) {
-      Point(d, last.k, last.e, lv)
-    } else {
-      Point(d, last.k + max(0.0, d - last.d), last.e + (last.level - lv), lv)
+    if (levelWh != 0.0) {
+      levelStepWh = min(levelStepWh ?: abs(levelWh), abs(levelWh))
+      levelChangedAtM = distanceM
+      observedLevel = lv
     }
-    resolveBoundaries(last, p)
-    last = p
-    if (p.k >= WARMUP_M && p.e >= warmUpWh()) warmed = true
-    levelChangedAtM = d
-    anchorPending = false
-    observedLevel = lv
+    // Across a switch of source the basis must keep distance and energy over the same stretch: a level
+    // step reaches back to the last step, a signal's reading only to the last reading.
+    when {
+      measuredWh != null && !wasOnLevel -> {
+        addPoint(lv, measuredWh)
+        measuredOverLevelWh += measuredWh - levelWh
+      }
+      measuredWh != null && levelWh != 0.0 -> addPoint(lv, last.level - lv)
+      measuredWh != null -> {
+        anchorPending = true
+        addPoint(lv, 0.0)
+      }
+      !wasOnLevel -> {
+        // The signal has already counted what this step of the level covers, unless the level was out:
+        // then the step is all there is for that stretch.
+        if (!levelWasOut) measuredOverLevelWh -= levelWh
+        anchorPending = true
+        addPoint(lv, 0.0)
+      }
+      levelWh != 0.0 -> addPoint(lv, last.level - lv)
+    }
     val m = stopMinLevel
-    if (stationary && m != null && lv < m) {
+    if (levelWh != 0.0 && stationary && m != null && lv < m) {
       stopMinLevel = lv
-      stopMinPoint = p
+      stopMinPoint = last
     }
   }
 
-  private fun resolveBoundaries(from: Point, to: Point) {
-    val needWh = warmUpWh()
-    seriesB.resolve(from, to) { i, k, e ->
-      if (k >= WARMUP_M && e >= needWh) {
-        series += EffPoint(i * SERIES_STEP_M, k / e)
-        if (series.size > MAX_SERIES) {
-          // Keep the chart light on very long sessions: drop every other point, keep the newest.
-          val kept = series.filterIndexed { idx, _ -> idx % 2 == 1 || idx == series.lastIndex }
-          series.clear()
-          series.addAll(kept)
-        }
-        seriesDirty = true
-      }
-    }
-    miles.resolve(from, to) { _, _, _ -> segmentsDirty = true }
-    kms.resolve(from, to) { _, _, _ -> segmentsDirty = true }
-  }
-
-  // --- Power ------------------------------------------------------------------------------------
-
-  private fun logLevel(atMs: Long, lv: Double) {
-    if (levelSeenSinceMs == null) levelSeenSinceMs = atMs
-    val prev = levelLogLevel
-    if (prev == null) {
-      levelLogLevel = lv
-      return
-    }
-    if (abs(lv - prev) >= LEVEL_EPS_WH) {
-      levelLog.addLast(atMs to lv)
-      levelLogLevel = lv
-      checkRateAgainstLevel(atMs, lv)
-      while (levelLog.size > 2 && atMs - levelLog.first().first > LEVEL_LOG_MS) levelLog.removeFirst()
-      while (levelLog.size > LEVEL_LOG_MAX) levelLog.removeFirst()
-    }
-  }
-
-  /** d(level)/dt between level change points about [EST_WINDOW_MS] apart; + = discharge, kW. */
-  private fun estimateKw(nowMs: Long): Double? {
-    if (levelLog.size < 2) {
-      // No two change points yet: a level that has not moved for a minute means about 0 kW.
-      val since = levelSeenSinceMs ?: return null
-      val lastChange = levelLog.lastOrNull()?.first ?: since
-      return if (nowMs - lastChange >= IDLE_AFTER_MS) 0.0 else null
-    }
-    val newest = levelLog.last()
-    var old = levelLog.first()
-    for (p in levelLog) {
-      if (p.first <= newest.first - EST_WINDOW_MS) old = p else break
-    }
-    if (old === newest) old = levelLog[levelLog.size - 2]
-    val span = (newest.first - old.first).toDouble()
-    if (span <= 0) return null
-    val drop = old.second - newest.second
-    val changes = levelLog.count { it.first >= old.first } - 1
-    val interval = span / max(1, changes)
-    val since = nowMs - newest.first
-    // Standing still with no step for much longer than usual: nothing is flowing.
-    if (stationary && since > max(2 * interval, IDLE_AFTER_MS.toDouble())) return 0.0
-    // No step for much longer than usual: power has dropped; let the estimate decay towards 0.
-    val kw = if (since > max(2 * interval, STALE_STEP_MS.toDouble())) {
-      drop / (nowMs - old.first).toDouble() * 3600.0
-    } else {
-      drop / span * 3600.0
-    }
-    return kw.takeIf { it.isFinite() }
+  /** Advances the basis to here, with [wh] of energy since the last point. */
+  private fun addPoint(lv: Double, wh: Double) {
+    val d = distanceM
+    val at = lastAtMs ?: 0L
+    val p = if (anchorPending) Point(d, last.k, last.e, lv, at) else Point(d, last.k + max(0.0, d - last.d), last.e + wh, lv, at)
+    last = p
+    recent.addLast(p)
+    if (p.k >= WARMUP_M && p.e >= warmUpWh()) warmed = true
+    anchorPending = false
   }
 
   /**
-   * At a level step: does the charge rate's energy since an earlier step (at least [RATE_CHECK_MS]
-   * ago) go the same way as the level's? Both ends are level steps, so the level's lag cancels out.
+   * The energy since the last reading from the best power signal that is trusted, or null when there
+   * is none and the level has to do. Every signal with data is checked against the level, used or not.
    */
-  private fun checkRateAgainstLevel(atMs: Long, lv: Double) {
-    val from = checkFromMs
-    if (from != null) {
-      val span = atMs - from
-      if (span < RATE_CHECK_MS) return
-      if (checkRateMs >= span * 8 / 10) {
-        val rateKwMean = checkRateWh / span * 3600.0
-        val levelKwMean = (checkFromLevel - lv) / span * 3600.0
-        val opposite = rateKwMean * levelKwMean < 0 && abs(rateKwMean - levelKwMean) > RATE_DISAGREE_KW
-        val same = rateKwMean * levelKwMean > 0 && min(abs(rateKwMean), abs(levelKwMean)) >= RATE_AGREE_KW
-        if (opposite) rateDisagrees = true
-        if (same) rateDisagrees = false
-        rateCheck = rateCheck.copy(
-          agreed = rateCheck.agreed + if (same) 1 else 0,
-          disagreed = rateCheck.disagreed + if (opposite) 1 else 0,
-          lastRateKw = rateKwMean,
-          lastLevelKw = levelKwMean,
-        )
+  private fun measuredStep(atMs: Long, levelWh: Double): Double? {
+    val stepMs = energyAtMs?.let { atMs - it }
+    energyAtMs = atMs
+    val minWh = trustMinWh()
+    val pack = packStepWh.takeIf { packAtMs?.let { at -> atMs - at <= PACK_GAP_MS } == true }
+    packStepWh = 0.0
+    if (pack != null && stepMs != null) packCheck.add(pack, levelWh, minWh)
+    val rate = rateStepWh(stepMs, atMs)
+    if (rate != null) rateCheck.add(rate, levelWh, minWh)
+    val wh: Double
+    when {
+      pack != null && packCheck.sign != 0 -> {
+        energySource = EnergySource.MX_PACK
+        wh = pack * packCheck.sign
+      }
+      rate != null && rateCheck.sign != 0 && !rateLooksDead && !rateHeld -> {
+        energySource = EnergySource.CHARGE_RATE
+        wh = rate * rateCheck.sign
+      }
+      else -> {
+        energySource = EnergySource.BATTERY_LEVEL
+        return null
       }
     }
-    checkFromMs = atMs
-    checkFromLevel = lv
-    checkRateWh = 0.0
-    checkRateMs = 0
+    if (wh >= 0) energyOutWh += wh else energyInWh -= wh
+    return wh
   }
 
-  private fun resetRateCheck() {
-    checkFromMs = null
-    checkRateWh = 0.0
-    checkRateMs = 0
+  /** The charge rate's energy over this step, as the signal reads (+ discharge by the AOSP sign). */
+  private fun rateStepWh(stepMs: Long?, atMs: Long): Double? {
+    // Longer than this and the level was out: one reading of power can't speak for the whole stretch.
+    if (stepMs == null || stepMs > RATE_FRESH_MS) return null
+    val now = rateKw ?: return null
+    if (rateAtMs?.let { atMs - it <= RATE_FRESH_MS } != true) return null
+    return ((ratePrevKw ?: now) + now) / 2.0 * stepMs / 3600.0
   }
 
-  private fun updatePower(s: VehicleSample, gap: Boolean) {
-    val rate = s.chargeRateMw?.takeIf { it.isFinite() && abs(it) <= MAX_RATE_MW }
-    if (rate != null) {
-      val prevAt = rateAtMs
-      val sincePrev = if (prevAt != null && !gap) s.atMs - prevAt else null
-      if (sincePrev != null && sincePrev <= GAP_MS) {
-        checkRateWh += (rateKw ?: 0.0) * sincePrev / 3600.0
-        checkRateMs += sincePrev
+  /** The level's own uncertainty sets how much it must move before it can judge a signal. */
+  private fun trustMinWh(): Double = max(TRUST_MIN_WH, WARMUP_STEPS * (levelStepWh ?: 0.0))
+
+  // --- Charge rate ------------------------------------------------------------------------------
+
+  private fun readRate(s: VehicleSample, gap: Boolean) {
+    val rate = s.chargeRateMw?.takeIf { it.isFinite() && abs(it) <= MAX_RATE_MW } ?: return
+    val prevAt = rateAtMs
+    val sincePrev = if (prevAt != null && !gap) s.atMs - prevAt else null
+    if (rate != rateRaw) {
+      rateRaw = rate
+      rateChangedAtMs = s.atMs
+    }
+    ratePrevKw = if (gap) null else rateKw
+    rateKw = -rate / 1_000_000.0
+    rateAtMs = s.atMs
+    // Both, so that a timestamp on another clock cannot retire a value that is plainly changing.
+    val age = s.chargeRateAgeMs
+    rateHeld = rate != 0.0 && age != null && age > RATE_HELD_MS && s.atMs - rateChangedAtMs > RATE_HELD_MS
+    if (rate != 0.0) {
+      if (!rateHeld) {
+        // Recovered (or never stuck): the property is live.
+        rateSeenNonZero = true
+        zeroWhileMovingMs = 0
+        rateLooksDead = false
       }
-      if (rate != rateRaw) {
-        rateRaw = rate
-        rateChangedAtMs = s.atMs
-      }
-      rateKw = -rate / 1_000_000.0
-      rateAtMs = s.atMs
-      // Both, so that a timestamp on another clock cannot retire a value that is plainly changing.
-      val age = s.chargeRateAgeMs
-      rateHeld = rate != 0.0 && age != null && age > RATE_HELD_MS && s.atMs - rateChangedAtMs > RATE_HELD_MS
-      if (rate != 0.0) {
-        if (!rateHeld) {
-          // Recovered (or never stuck): the property is live.
-          rateSeenNonZero = true
-          zeroWhileMovingMs = 0
-          rateLooksDead = false
-        }
-      } else if ((speed ?: 0.0) > RATE_ZERO_MPS && sincePrev != null) {
-        zeroWhileMovingMs += sincePrev
-        if (zeroWhileMovingMs > RATE_ZERO_MS) rateLooksDead = true
-      }
-    }
-    val rateFresh = rateAtMs?.let { s.atMs - it <= RATE_FRESH_MS } == true
-    val (kw, src) = if (rateFresh && !rateLooksDead && !rateHeld && !rateDisagrees) {
-      rateKw to PowerSource.CHARGE_RATE
-    } else {
-      estimateKw(s.atMs) to PowerSource.ESTIMATED
-    }
-    if (kw == null) {
-      power = null
-      return
-    }
-    val dir = when {
-      kw > IDLE_KW -> PowerDirection.DISCHARGING
-      // Charging only when a charge was detected; a held regen figure after stopping is just that.
-      kw < -IDLE_KW -> if (charging) PowerDirection.CHARGING else PowerDirection.REGEN
-      else -> PowerDirection.IDLE
-    }
-    power = PowerNow(kw, dir, src)
-    val sec = Math.floorDiv(s.atMs, 1000L)
-    if (sec != historySecond) {
-      historySecond = sec
-      history.add(s.atMs, kw)
-      if (src == PowerSource.ESTIMATED) lastEstimatedAtMs = s.atMs
+    } else if ((speed ?: 0.0) > RATE_ZERO_MPS && sincePrev != null) {
+      zeroWhileMovingMs += sincePrev
+      if (zeroWhileMovingMs > RATE_ZERO_MS) rateLooksDead = true
     }
   }
 
   /**
-   * Energy needed before an efficiency is shown: [WARMUP_WH], or [WARMUP_STEPS] level steps when the
-   * level property is coarser than 0.1 kWh (each end of the basis can be off by up to one step).
+   * Energy needed before an efficiency is shown: [WARMUP_WH], or on the level alone [WARMUP_STEPS]
+   * level steps when it is coarser than 0.1 kWh (each end of the basis can be off by up to one step).
    */
-  private fun warmUpWh(): Double = max(WARMUP_WH, WARMUP_STEPS * (levelStepWh ?: 0.0))
-
-  /** Whether the charge-rate property is being bypassed for the estimate (for tests and hints). */
-  val usingEstimate: Boolean get() = power?.estimated == true
+  private fun warmUpWh(): Double =
+    if (energySource == EnergySource.BATTERY_LEVEL) max(WARMUP_WH, WARMUP_STEPS * (levelStepWh ?: 0.0)) else WARMUP_WH
 
   // --- Snapshot ---------------------------------------------------------------------------------
+
+  /** The basis now against the basis [RECENT_MS] ago, or as long ago as it goes. */
+  private fun recentEfficiency(needWh: Double): RecentEfficiency {
+    val now = lastAtMs ?: return RecentEfficiency()
+    while (recent.size >= 2 && now - recent[1].at >= RECENT_MS) recent.removeFirst()
+    val start = recent.firstOrNull() ?: return RecentEfficiency()
+    val k = last.k - start.k
+    val e = last.e - start.e
+    return RecentEfficiency(if (k >= WARMUP_M && e >= needWh) k / e else null, k, e)
+  }
+
+  /**
+   * A figure stands for [RANGE_EVERY_MS]; with none on screen, the first there is shows at once. On the
+   * move and for [RANGE_STOPPING_MS] after it goes by [recentMPerWh], then by the efficiency it took then.
+   */
+  private fun ownRangeNow(recentMPerWh: Double?): RangeEstimate? {
+    val now = lastAtMs ?: return null
+    if (ownRange != null && ownRangeAtMs?.let { now - it < RANGE_EVERY_MS } == true) return ownRange
+    val moving = movedAtMs?.let { now - it <= RANGE_STOPPING_MS } == true
+    ownRange = rangeFrom(level, if (moving) recentMPerWh else ownRange?.mPerWh)
+    ownRangeAtMs = now
+    return ownRange
+  }
+
+  /** A figure stands for [RANGE_EVERY_MS], like the range; with none on screen, the first there is shows at once. */
+  private fun plainNow(usedWh: Double): PlainEfficiency {
+    val now = lastAtMs ?: return PlainEfficiency()
+    if (plain.driveMPerWh != null && plainAtMs?.let { now - it < RANGE_EVERY_MS } == true) return plain
+    val start = totals.firstOrNull()
+    plain = PlainEfficiency(plainFrom(distanceM, usedWh), start?.let { plainFrom(distanceM - it.d, usedWh - it.e) })
+    plainAtMs = now
+    return plain
+  }
+
+  /** What the level says was used, closed segments and the open one. */
+  private fun levelUsedNow(): Double {
+    val open = segStartLevel
+    val cur = level
+    return usedClosedWh + if (!charging && open != null && cur != null) open - cur else 0.0
+  }
+
+  /** This drive's net energy: the level's total, corrected by what the power signals measured. */
+  private fun usedNow(): Double = levelUsedNow() + measuredOverLevelWh
 
   fun snapshot(): SessionState {
     val k = last.k
     val e = last.e
     val needWh = warmUpWh()
     val ok = k >= WARMUP_M && e >= needWh
-    val progress = if (ok || warmed) 1.0 else min(1.0, min(k / WARMUP_M, max(0.0, e) / needWh)).coerceAtLeast(0.0)
+    val warmupLeft = warmupEndsAtMs?.let { (it - (lastAtMs ?: 0L)).coerceIn(0L, warmupMs) } ?: 0L
+    val basisProgress = min(1.0, min(k / WARMUP_M, max(0.0, e) / needWh)).coerceAtLeast(0.0)
+    val progress = if (ok || warmed) 1.0 else (warmupMs - warmupLeft + WARMUP_BASIS_MS * basisProgress) / (warmupMs + WARMUP_BASIS_MS)
     val eff = Efficiency(
       status = if (ok) EffStatus.OK else if (warmed) EffStatus.NET_REGEN else EffStatus.WARMING_UP,
       mPerWh = if (ok) k / e else null,
       progress = progress,
       basisM = k,
       basisWh = e,
-      needWh = needWh,
       early = ok && (k < EARLY_M || e < EARLY_WH),
-      atM = last.d,
+      warmupLeftMs = warmupLeft,
     )
-    if (seriesDirty) {
-      seriesCache = series.toList()
-      seriesDirty = false
-    }
-    if (segmentsDirty) {
-      miCache = miles.segments()
-      kmCache = kms.segments()
-      segmentsDirty = false
-    }
-    val now = lastAtMs ?: clock()
-    val hist = history.snapshot(now)
-    val peakD = hist.maxOfOrNull { it.kw }?.takeIf { it > IDLE_KW }
-    val peakR = hist.minOfOrNull { it.kw }?.takeIf { it < -IDLE_KW }
-    val open = segStartLevel
     val cur = level
-    val used = usedClosedWh + if (!charging && open != null && cur != null) open - cur else 0.0
+    val levelUsed = levelUsedNow()
     val chargeStart = chargeStartLevel
     val charged = chargedWh + if (charging && cur != null && chargeStart != null) max(0.0, cur - chargeStart) else 0.0
+    val used = usedNow()
+    val plainFigures = plainNow(used)
     return SessionState(
       startedAtMs = startedAtMs,
       activeMs = activeMs,
@@ -898,29 +965,31 @@ class SessionTracker(private val clock: () -> Long) {
       lastSampleAtMs = lastAtMs,
       distanceM = distanceM,
       usedWh = used,
+      energyOutWh = energyOutWh,
+      energyInWh = energyInWh,
+      levelUsedWh = levelUsed,
+      energySource = energySource,
+      chargeRateCheck = rateCheck.verdict(),
+      mxPackCheck = packCheck.verdict(),
       chargedWh = charged,
       charging = charging,
       gaps = gaps,
       gapMs = gapMs,
       efficiency = eff,
-      series = seriesCache,
-      miSegments = miCache,
-      kmSegments = kmCache,
-      power = power,
-      powerHistory = hist,
-      peakDischargeKw = peakD,
-      peakRegenKw = peakR,
-      powerHistoryEstimated = lastEstimatedAtMs?.let { now - it <= HISTORY_MS } == true,
+      recentEfficiency = recentEfficiency(needWh),
+      rangeEstimate = ownRangeNow(plainFigures.recentMPerWh),
+      plainEfficiency = plainFigures,
       speedMps = speed,
       levelWh = level,
       capacityWh = capacity,
       rangeM = range,
       outsideC = outside,
       gear = gear,
+      ignition = ignition,
+      chargeSignal = chargeSignal,
       levelStepWh = levelStepWh,
       levelUnchangedM = max(0.0, distanceM - levelChangedAtM),
       chargeRateSeenNonZero = rateSeenNonZero,
-      rateCheck = rateCheck,
     )
   }
 
@@ -939,24 +1008,57 @@ class SessionTracker(private val clock: () -> Long) {
     /** Readings in a row it takes for a suspect level jump to count. */
     const val LEVEL_CONFIRM = 3
 
-    /** Warm-up: at least 1.0 mi and 0.3 kWh measured before an efficiency is shown. */
+    /** The start of a drive left out of the efficiency: the BMS takes about this long to settle (seen on the truck). */
+    const val WARMUP_MS = 5 * 60_000L
+
+    /** Parked or switched off for this long: leaving Park is a new drive. */
+    const val DRIVE_BREAK_MS = 5 * 60_000L
+
+    /** The range moves this often: every reading is too often to read. */
+    const val RANGE_EVERY_MS = 10_000L
+
+    /**
+     * Stopped for this long, the range holds: time for one more figure after the wheels stop, with what the
+     * level has still to say about the stop, which lands after it, and before the window has slid at all.
+     */
+    const val RANGE_STOPPING_MS = 15_000L
+
+    /** [warmupEndsAtMs] until the truck moves: the warm-up has not started. */
+    private const val NOT_MOVED = Long.MAX_VALUE
+
+    /** Then at least 1.0 mi and 0.3 kWh measured before an efficiency is shown. */
     const val WARMUP_M = EffUnits.METERS_PER_MILE
     const val WARMUP_WH = 300.0
     const val WARMUP_STEPS = 3.0
 
-    /** Below these a figure is shown but marked early, and no range is projected from it. */
+    /** About how long that distance and energy take: their share of the warm-up's progress. */
+    const val WARMUP_BASIS_MS = 75_000L
+
+    /** The rolling figure beside the overall one. */
+    const val RECENT_MS = 15 * 60_000L
+
+    /** Below these a figure is shown but marked early. */
     const val EARLY_M = 5 * EffUnits.METERS_PER_MILE
     const val EARLY_WH = 2_000.0
 
     /** No range is projected from a figure above this (6 mi/kWh): only a descent gets there, m/Wh. */
     const val MAX_RANGE_M_PER_WH = 6 * EffUnits.METERS_PER_MILE / 1000.0
 
-    /** One cumulative-efficiency point per 0.1 mi. */
-    const val SERIES_STEP_M = EffUnits.METERS_PER_MILE / 10.0
-    const val MAX_SERIES = 4_000
+    /** The energy left x [mPerWh]. Null with either unknown and above [MAX_RANGE_M_PER_WH]. */
+    fun rangeFrom(levelWh: Double?, mPerWh: Double?): RangeEstimate? {
+      val level = levelWh?.takeIf { it >= 0 } ?: return null
+      val e = mPerWh?.takeIf { it > 0 && it <= MAX_RANGE_M_PER_WH } ?: return null
+      return RangeEstimate(level * e, e)
+    }
 
-    /** A segment needs this much net energy for an efficiency figure. */
-    const val MIN_SEGMENT_WH = 20.0
+    /** No figure above this (20 mi/kWh): the first moments of a drive or a descent, not an efficiency to read, m/Wh. */
+    const val MAX_PLAIN_M_PER_WH = 20 * EffUnits.METERS_PER_MILE / 1000.0
+
+    /** Null with nothing to divide (no distance yet, or regen has put back all that was used) and above [MAX_PLAIN_M_PER_WH]. */
+    fun plainFrom(distanceM: Double, usedWh: Double): Double? {
+      if (distanceM <= 0 || usedWh <= 0) return null
+      return (distanceM / usedWh).takeIf { it <= MAX_PLAIN_M_PER_WH }
+    }
 
     /** "Speed == 0" for charge detection (m/s). */
     const val STOPPED_MPS = 0.05
@@ -983,30 +1085,23 @@ class SessionTracker(private val clock: () -> Long) {
     /** A non-zero rate unchanged for this long, with a property timestamp as old, is a held value. */
     const val RATE_HELD_MS = 60_000L
 
-    /** Windows of the rate-against-level check, and how far apart counts as disagreeing, kW. */
-    const val RATE_CHECK_MS = 60_000L
-    const val RATE_DISAGREE_KW = 5.0
-    const val RATE_AGREE_KW = 1.0
+    /** A power signal is judged once the level has moved this far: enough to outweigh its steps and wobble. */
+    const val TRUST_MIN_WH = 500.0
+
+    /** How many times [TRUST_MIN_WH] the level must have moved before a trusted signal can lose its trust. */
+    const val DISTRUST_FACTOR = 4.0
+
+    /** How far a signal's energy may be from the level's and still count as the same energy. */
+    const val MIN_SIGNAL_RATIO = 0.5
+    const val MAX_SIGNAL_RATIO = 2.0
+
+    /** MX+ pack readings further apart than this are not integrated: a poll cycle takes a few seconds. */
+    const val PACK_GAP_MS = 10_000L
 
     /** A charge-rate reading beyond this (2 MW) is junk, mW. */
     const val MAX_RATE_MW = 2.0e9
 
-    /** Smoothing window of the d(level)/dt estimate. */
-    const val EST_WINDOW_MS = 30_000L
-
-    /** Level changes kept for the estimate. */
-    const val LEVEL_LOG_MS = 15 * 60_000L
-    const val LEVEL_LOG_MAX = 2_000
-
-    /** No level step for this long (and much longer than usual): the estimate decays. */
-    const val STALE_STEP_MS = 10_000L
-
-    /** A level that has not moved for this long reads as ~0 kW (estimate). */
-    const val IDLE_AFTER_MS = 60_000L
-
-    const val IDLE_KW = 0.1
-
-    const val HISTORY_MS = 10 * 60_000L
-    const val HISTORY_CAPACITY = 660
+    /** A pack power reading beyond this (2 MW) is junk, kW. */
+    const val MAX_RATE_KW = 2_000.0
   }
 }

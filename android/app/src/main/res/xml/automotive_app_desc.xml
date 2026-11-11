@@ -1,5 +1,0 @@
-<?xml version="1.0" encoding="utf-8"?>
-<!-- Android Automotive: this app uses the Car App Library templates (Battery Glance). -->
-<automotiveApp>
-    <uses name="template" />
-</automotiveApp>

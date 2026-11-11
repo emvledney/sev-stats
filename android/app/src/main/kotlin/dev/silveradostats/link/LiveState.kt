@@ -15,6 +15,9 @@ enum class LinkStatus {
   /** No adapter chosen yet (and demo mode off). */
   NO_ADAPTER,
 
+  /** The user disconnected the MX+: nothing connects to it until they tap Connect. */
+  DISCONNECTED,
+
   /** Bluetooth discovery or pairing in progress (Diagnostics › Pair new). */
   PAIRING,
 
@@ -37,6 +40,34 @@ enum class LinkStatus {
   DEMO,
 }
 
+/**
+ * What the MX+ button says and does. It follows the link, not just the last tap, so it never offers to
+ * disconnect an MX+ that is not connected: a link that dropped or never came up offers Connect.
+ */
+enum class MxAction(val label: String, val shortLabel: String) {
+  /** The link is down: connects now, whether the user turned it off or it failed by itself. */
+  CONNECT("Connect MX+", "MX+ on"),
+
+  /**
+   * A connection is being tried, after a tap or at app start: stops it and leaves the MX+ alone until
+   * Connect. An automatic retry keeps showing Connect, so the button doesn't change under a finger.
+   */
+  CANCEL("Cancel connect", "Cancel"),
+
+  /** The app holds the MX+ (the truck may be asleep): closes the link and leaves it alone until Connect. */
+  DISCONNECT("Disconnect MX+", "MX+ off"),
+  ;
+
+  companion object {
+    fun of(mxOff: Boolean, live: LiveState): MxAction = when {
+      mxOff || live.canRetry -> CONNECT
+      live.status == LinkStatus.CONNECTED || live.status == LinkStatus.TRUCK_ASLEEP -> DISCONNECT
+      live.status == LinkStatus.CONNECTING -> CANCEL
+      else -> CONNECT
+    }
+  }
+}
+
 /** One decoded OBD value and when it was read ([atMs] on [MonoClock]). */
 data class LiveValue(
   val name: String,
@@ -54,6 +85,9 @@ data class LiveValue(
 
 /** One point of the power history: kW, + discharge / - charge or regen. */
 data class PowerPoint(val atMs: Long, val kw: Double)
+
+/** The last capacity the MX+ delivered, kept for when it is not connected. */
+data class SavedCapacity(val kwh: Double?, val ah: Double?, val atWallMs: Long)
 
 /** Everything the LinkService publishes. Times are [MonoClock] milliseconds. */
 data class LiveState(
@@ -74,7 +108,7 @@ data class LiveState(
   val power: List<PowerPoint> = emptyList(),
   /** Per-DID errors of the last cycle that had any (NRC / no answer). */
   val errors: Map<String, String> = emptyMap(),
-  /** A Retry action is offered (re-runs the full connect / setup). */
+  /** A Retry action is offered (re-runs the full connect / setup), also during an automatic attempt. */
   val canRetry: Boolean = false,
   /** When the next automatic reconnect attempt is due, if one is scheduled. */
   val nextAutoRetryAtMs: Long? = null,
@@ -83,9 +117,6 @@ data class LiveState(
   /** Number of visible UI clients (polling runs only while > 0). */
   val clients: Int = 0,
 ) {
-  /** Age of one value, or null when it was never read. */
-  fun ageMs(name: String, nowMs: Long): Long? = values[name]?.let { nowMs - it.atMs }
-
   /** Age of the newest data, or null before the first sample. */
   fun dataAgeMs(nowMs: Long): Long? = lastDataAtMs?.let { nowMs - it }
 }

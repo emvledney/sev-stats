@@ -1,9 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  The "Send to laptop" report goes by plain HTTP to a laptop on the truck's hotspot,
-  whose private IP address is typed in by the user (it is not known in advance and
-  domain-config cannot express IP ranges). Cleartext is therefore allowed. The adapter
-  link uses a raw TCP socket and is not affected by this file.
+  The "Send to laptop" report goes by plain HTTP to a laptop on a hotspot both the head
+  unit and the laptop are on, whose private IP address is typed in by the user (it is not
+  known in advance and domain-config cannot express IP ranges). Cleartext is therefore
+  allowed. The MX+ link goes over Bluetooth and is not affected by this file.
 -->
 <network-security-config xmlns:tools="http://schemas.android.com/tools">
     <base-config cleartextTrafficPermitted="true" tools:ignore="InsecureBaseConfiguration">

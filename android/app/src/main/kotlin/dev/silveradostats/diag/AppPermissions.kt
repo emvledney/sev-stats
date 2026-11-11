@@ -25,15 +25,13 @@ object AppPermissions {
     Def(CarPerm.CAR_POWERTRAIN, false, "gear, ignition, parking brake, regen"),
     Def(CarPerm.CAR_SPEED, true, "vehicle speed"),
     Def(CarPerm.READ_CAR_DISPLAY_UNITS, false, "display units"),
-    Def(Manifest.permission.BLUETOOTH_SCAN, true, "find the OBDLink MX+ (Classic discovery); BLE scan"),
+    Def(Manifest.permission.BLUETOOTH_SCAN, true, "find the OBDLink MX+ (Classic discovery)"),
     Def(Manifest.permission.BLUETOOTH_CONNECT, true, "pair with and connect to the OBDLink MX+ only"),
     Def(Manifest.permission.ACCESS_FINE_LOCATION, true, "the truck's position on the Map tab"),
     Def(Manifest.permission.ACCESS_COARSE_LOCATION, true, "asked together with the precise one, as Android requires"),
-    Def(Manifest.permission.INTERNET, false, "chargers, place search and road distances (Map); Wi-Fi adapter link test (TCP), report upload"),
+    Def(Manifest.permission.INTERNET, false, "chargers, place search and road distances (Map); Send to laptop report"),
     Def(Manifest.permission.ACCESS_NETWORK_STATE, false, "network diagnostics"),
-    Def(Manifest.permission.ACCESS_WIFI_STATE, false, "Wi-Fi diagnostics"),
-    Def(Manifest.permission.CHANGE_WIFI_STATE, false, "reserved for the Wi-Fi transport test"),
-    Def(Manifest.permission.CHANGE_NETWORK_STATE, false, "reserved for the Wi-Fi transport test"),
+    Def(Manifest.permission.ACCESS_WIFI_STATE, false, "the Wi-Fi enabled row under Network"),
   )
 
   /** The runtime permissions the Request button asks for. */

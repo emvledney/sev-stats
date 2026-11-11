@@ -5,8 +5,6 @@ import android.content.Context
 import androidx.core.content.edit
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import dev.silveradostats.adapter.AdapterLinkTest
-import dev.silveradostats.ble.BleScan
 import dev.silveradostats.diag.AppPermissions
 import dev.silveradostats.diag.CrashLog
 import dev.silveradostats.diag.KV
@@ -17,7 +15,6 @@ import dev.silveradostats.report.ReportSender
 import dev.silveradostats.vehicle.CarPerm
 import dev.silveradostats.vehicle.VehicleReader
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -25,18 +22,13 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import javax.net.SocketFactory
 
 class DiagnosticsViewModel(app: Application) : AndroidViewModel(app) {
   private val prefs = app.getSharedPreferences("settings", Context.MODE_PRIVATE)
   private val reader = VehicleReader(app) { refreshVhal() }
-  private val ble = BleScan(app)
 
   private val _state = MutableStateFlow(
     DiagState(
-      adapterHost = prefs.getString(KEY_HOST, null) ?: AdapterLinkTest.DEFAULT_HOST,
-      adapterPort = prefs.getString(KEY_PORT, null) ?: AdapterLinkTest.DEFAULT_PORT.toString(),
-      adapterBindWifi = prefs.getBoolean(KEY_BIND_WIFI, false),
       reportUrl = prefs.getString(KEY_URL, null) ?: DiagState.DEFAULT_REPORT_URL,
     ),
   )
@@ -141,92 +133,21 @@ class DiagnosticsViewModel(app: Application) : AndroidViewModel(app) {
     if (anyNewlyGranted || newCarGrant) reader.reconnect() else refreshVhal()
   }
 
-  private var adapterTest: AdapterLinkTest? = null
-  private var bleJob: Job? = null
-
   /** The main screen's driving state, once [followRestriction] has it. */
   private var restriction: StateFlow<Boolean> = MutableStateFlow(false)
   private val restricted: Boolean get() = restriction.value
 
   /**
-   * Whatever runs here ends when [state] turns on, and nothing new starts under it, even from a tap
-   * handled before the screen has redrawn without its button. Once per view model; an activity
-   * recreated for a configuration change passes the same state.
+   * Nothing starts here while [state] is on, even from a tap handled before the screen has redrawn
+   * without its button. An activity recreated for a configuration change passes the same state.
    */
   fun followRestriction(state: StateFlow<Boolean>) {
-    if (restriction === state) return
     restriction = state
-    viewModelScope.launch { state.collect { if (it) stopRunningWork() } }
-  }
-
-  /** The screen that shows them is gone (restricted, or another app in front). */
-  fun stopRunningWork() {
-    adapterTest?.cancel()
-    bleJob?.cancel()
-    if (_state.value.bleRunning) _state.update { it.copy(bleRunning = false, bleLive = emptyList()) }
   }
 
   fun clearLastCrash() {
     CrashLog.clear(ctx)
     _state.update { it.copy(lastCrash = null) }
-  }
-
-  // Adapter link test ------------------------------------------------------------------------
-
-  fun setAdapterHost(v: String) {
-    _state.update { it.copy(adapterHost = v.trim()) }
-    prefs.edit { putString(KEY_HOST, v.trim()) }
-  }
-
-  fun setAdapterPort(v: String) {
-    val digits = v.filter { it.isDigit() }.take(5)
-    _state.update { it.copy(adapterPort = digits) }
-    prefs.edit { putString(KEY_PORT, digits) }
-  }
-
-  fun setAdapterBindWifi(v: Boolean) {
-    _state.update { it.copy(adapterBindWifi = v) }
-    prefs.edit { putBoolean(KEY_BIND_WIFI, v) }
-  }
-
-  fun runAdapterTest() {
-    if (restricted) return
-    val s = _state.value
-    if (s.adapterRunning) return
-    val port = s.adapterPort.toIntOrNull()
-    if (s.adapterHost.isBlank() || port == null || port !in 1..65535) {
-      _state.update { it.copy(adapterError = "Enter a host and a port between 1 and 65535") }
-      return
-    }
-    val factory: SocketFactory = if (s.adapterBindWifi) {
-      val net = SystemInfo.wifiNetwork(ctx)
-      if (net == null) {
-        _state.update { it.copy(adapterError = "No Wi-Fi network to bind to (turn off \"Bind to Wi-Fi\" to use default routing)") }
-        return
-      }
-      net.socketFactory
-    } else {
-      SocketFactory.getDefault()
-    }
-    _state.update { it.copy(adapterRunning = true, adapterError = null, adapterResult = null) }
-    val test = AdapterLinkTest(s.adapterHost, port, factory)
-    adapterTest = test
-    viewModelScope.launch {
-      val result = withContext(Dispatchers.IO) { test.run() }
-      _state.update { it.copy(adapterRunning = false, adapterResult = result) }
-    }
-  }
-
-  // BLE --------------------------------------------------------------------------------------
-
-  fun runBleScan() {
-    if (restricted) return
-    if (_state.value.bleRunning) return
-    _state.update { it.copy(bleRunning = true, bleLive = emptyList(), bleResult = null) }
-    bleJob = viewModelScope.launch {
-      val result = ble.scan(10_000) { live -> _state.update { it.copy(bleLive = live) } }
-      _state.update { it.copy(bleRunning = false, bleResult = result, permissions = AppPermissions.snapshot(ctx)) }
-    }
   }
 
   // Report -----------------------------------------------------------------------------------
@@ -259,9 +180,6 @@ class DiagnosticsViewModel(app: Application) : AndroidViewModel(app) {
   }
 
   private companion object {
-    const val KEY_HOST = "adapter_host"
-    const val KEY_PORT = "adapter_port"
-    const val KEY_BIND_WIFI = "adapter_bind_wifi"
     const val KEY_URL = "report_url"
   }
 }

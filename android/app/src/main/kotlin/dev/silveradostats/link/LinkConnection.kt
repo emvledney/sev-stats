@@ -22,15 +22,14 @@ import java.io.Closeable
  * The app's only service binding: this app's own, non-exported [LinkService], by explicit class.
  * (SourceSafetyTest allows binding in this file only, and only in this exact form.)
  *
- * Binds for its whole lifetime (a ViewModel's, or Battery Glance's screen) so the engine keeps its
+ * Binds for its whole lifetime (a ViewModel's) so the engine keeps its
  * history while the app is in the background. Two attachments, independent of each other:
- *  - the OBD engine: only while [setVisible] is true AND the screen needs OBD ([setObdWanted]; the
- *    Simple tab does not), so the MX+ is polled only while a screen that shows its data is on;
- *  - the built-in vehicle session (LinkService.vehicle): for the whole binding, visible or not, so
- *    sampling goes on behind another app for as long as Android lets the process run (it froze an
- *    app with no visible screen after 10 s to about 6 min on API 34: the main screen or Battery Glance
- *    on screen keeps it measuring). With no visible screen and the truck not moving, VehicleSession
- *    stops sampling by itself.
+ *  - the OBD engine: only while [setVisible] is true AND the screen wants OBD ([setObdWanted]), so the
+ *    MX+ is polled only while a screen that uses its data is on (UiSettings.wantsObd);
+ *  - the built-in vehicle session (LinkService.vehicle): for the whole binding, visible or not.
+ *    VehicleWatchService keeps it sampling behind another app; without that one Android freezes an app
+ *    with no visible screen after 10 s to about 6 min on API 34, and with no visible screen and the
+ *    truck not moving VehicleSession stops sampling by itself.
  * Main thread only.
  */
 class LinkConnection(context: Context, scope: CoroutineScope, obdWanted: Boolean = true) : Closeable {
@@ -84,7 +83,7 @@ class LinkConnection(context: Context, scope: CoroutineScope, obdWanted: Boolean
     syncEngine()
   }
 
-  /** Whether the visible screen shows OBD data (Live, Diagnostics, Battery Glance) or not (Simple). */
+  /** Whether the visible screen uses OBD data (UiSettings.wantsObd). */
   fun setObdWanted(w: Boolean) {
     obd = w
     syncEngine()

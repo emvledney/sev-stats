@@ -1,3 +1,5 @@
+> **Superseded in part, see [README](README.md):** the dedicated Automotive OS track named in the opening was overtaken: it stayed Inactive on this account, and the regular internal-testing track works. This review checked web sources, not this truck.
+
 Overall: The researcher's main conclusions hold up against primary sources. The supported route onto a GM Ultium head unit is the owner's own Play Console app on the dedicated AAOS Internal testing track. ADB and sideloading are not available on production units. Distraction-optimized screens work only for Play-installed apps (confirmed in AOSP source). VHAL gives SoC, energy, range and charge-port data but nothing at cell level. GM's developer program is B2B only, and its public emulator images are Lyriq and Celestiq API 34 x86_64 user builds. Internal testing has no form-factor review, and new or updated AAOS apps must target API 35.
 
 There are three material corrections.

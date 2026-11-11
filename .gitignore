@@ -17,3 +17,5 @@ local.properties
 *.iml
 .kotlin/
 release/
+# Upload-key passwords
+*-upload.properties

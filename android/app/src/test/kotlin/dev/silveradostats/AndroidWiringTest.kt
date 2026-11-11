@@ -1,6 +1,10 @@
 package dev.silveradostats
 
+import dev.silveradostats.ui.live.DistUnit
+import dev.silveradostats.ui.live.TempUnit
+import dev.silveradostats.ui.live.Units
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
@@ -44,13 +48,13 @@ class AndroidWiringTest {
   }
 
   /**
-   * The Simple tab never opens the MX+ link: LinkConnection attaches the OBD engine only while a
-   * screen is visible AND wants OBD, the ViewModel decides that from the remembered tab before the
-   * first onStart, and only the Live and Diagnostics tabs want it. The built-in session is attached
+   * LinkConnection attaches the OBD engine only while a screen is visible AND wants OBD, and the
+   * ViewModel decides that from the remembered tab before the first onStart. Simple and Trends want it
+   * only with an MX+ chosen and not disconnected (UiSettings.wantsObd). The built-in session is attached
    * for the whole binding instead (so it keeps sampling with another app in front).
    */
   @Test
-  fun simpleTabNeverAttachesTheObdEngine() {
+  fun theObdEngineAttachesOnlyWhenWanted() {
     val conn = src("link/LinkConnection.kt")
     assertTrue(Regex("""val want = visible && obd && !closed""").containsMatchIn(conn))
     assertEquals(1, Regex("""\.engine\.attach\(""").findAll(conn).count())
@@ -58,10 +62,10 @@ class AndroidWiringTest {
     assertTrue(Regex("""s\.vehicle\.attach\(token\)""").containsMatchIn(conn))
     assertTrue(Regex("""it\.vehicle\.detach\(token\)""").containsMatchIn(conn))
     val vm = src("LiveViewModel.kt")
-    assertTrue(vm.contains("LinkConnection(app, viewModelScope, obdWanted = store.state.value.tab.wantsObd(driving.restricted.value))"))
-    assertTrue(Regex("""fun selectTab\(t: AppTab\) \{\s*if \(t == AppTab\.DIAGNOSTICS && restricted\.value\) return\s*store\.setTab\(t\)""").containsMatchIn(vm))
+    assertTrue(vm.contains("LinkConnection(app, viewModelScope, obdWanted = store.state.value.wantsObd(driving.restricted.value))"))
+    assertTrue(Regex("""fun selectTab\(t: AppTab\) \{\s*store\.setTab\(t\)""").containsMatchIn(vm))
     // One place decides it, from the tab and the restriction: the Diagnostics panel polls nothing.
-    assertTrue(Regex("""combine\(store\.state, restricted\) \{ s, r -> s\.tab\.wantsObd\(r\) \}\.distinctUntilChanged\(\)\.collect \{ conn\.setObdWanted\(it\) \}""").containsMatchIn(vm))
+    assertTrue(Regex("""combine\(store\.state, restricted\) \{ s, r -> s\.wantsObd\(r\) \}\.distinctUntilChanged\(\)\.collect \{ conn\.setObdWanted\(it\) \}""").containsMatchIn(vm))
     assertEquals(1, Regex("""conn\.setObdWanted\(""").findAll(vm).count())
     val settings = src("link/AppSettings.kt")
     assertTrue(settings.contains("SIMPLE(\"Simple\", false)"))
@@ -135,7 +139,95 @@ class AndroidWiringTest {
     val shell = src("ui/AppShell.kt")
     assertTrue(Regex("""BoxWithConstraints\(Modifier\.fillMaxSize\(\)\.windowInsetsPadding\(WindowInsets\.safeDrawing\)\)""").containsMatchIn(shell))
     assertTrue(Regex("""DashLayout\.of\(maxWidth\.value, maxHeight\.value, restricted, fontScale\)""").containsMatchIn(shell))
-    assertEquals("one layout decision", 1, Regex("""DashLayout\.of\(""").findAll(shell).count())
+    assertEquals("one layout decision, and Simple's", 1, Regex("""DashLayout\.of\(""").findAll(shell).count())
+    assertTrue(Regex("""DashLayout\.ofSimple\(maxWidth\.value, maxHeight\.value, fontScale\)""").containsMatchIn(shell))
+  }
+
+  /**
+   * Simple is one page whatever the gear and its controls work in every gear, by the owner's choice
+   * (2026-11-06). Everything else the lockdown covers stays locked: the pages behind the Trends and
+   * Diagnostics tabs (diagnosticsAndPairingAreReachableOnlyInPark), system dialogs, Live's controls.
+   */
+  @Test
+  fun simpleDoesNotChangeWithTheGearAndItsControlsWorkInDrive() {
+    val simple = src("ui/simple/SimpleScreen.kt")
+    val shell = src("ui/AppShell.kt")
+    assertEquals("the page takes nothing from the layout's gear", emptyList<String>(), Regex("""layout\.(restricted|controls)""").findAll(simple).map { it.value }.toList())
+    assertTrue(shell.contains("layout = simpleLayout,"))
+    assertTrue(shell.contains("driving = restricted,"))
+    assertTrue(shell.contains("ShellHeader(simpleLayout, tab, liveVm::selectTab, summary, controls)"))
+    // Nothing on the page depends on the gear but a notice's button.
+    assertEquals(listOf("driving"), Regex("""\bif \((driving)\)""").findAll(simple).map { it.groupValues[1] }.toList())
+    assertFalse(simple.contains("!driving"))
+    // The view model does not refuse them either.
+    val vm = src("LiveViewModel.kt")
+    assertFalse("Reset works in Drive", Regex("""fun resetSession\([^)]*\) = parkedOnly""").containsMatchIn(vm))
+    // A reset still asks first, in every gear.
+    assertTrue(simple.contains("if (confirmReset) {"))
+    assertTrue(simple.contains("onClick = { confirmReset = true }"))
+    assertTrue(Regex("""confirmReset = false\s*onReset\(\)""").containsMatchIn(simple))
+    // Live's are still behind the driving state.
+    assertTrue(Regex("""if \(layout\.controls\) \{\s*if \(dash\.status\.canRetry && settings\.demo\)""").containsMatchIn(src("ui/live/LiveScreen.kt")))
+    // And the pages behind the two tabs are the panel out of Park.
+    assertTrue(Regex("""AppTab\.TRENDS -> if \(layout\.restricted\) \{""").containsMatchIn(shell))
+  }
+
+  /** Started from a visible screen and at boot, where Android allows it; demo data has nothing to measure. */
+  @Test
+  fun theBackgroundServiceStartsFromAScreenOrAtBoot() {
+    val activity = src("MainActivity.kt")
+    assertTrue(Regex("""repeatOnLifecycle\(Lifecycle\.State\.STARTED\) \{\s*AppSettings\.get\(this@MainActivity\)\.state\.map \{ it\.demo \}\.distinctUntilChanged\(\)\.collect \{ VehicleWatch\.start\(this@MainActivity\) \}""").containsMatchIn(activity))
+    val watch = src("vehicle/VehicleWatchService.kt")
+    assertTrue(watch.contains("!app.packageManager.hasSystemFeature(PackageManager.FEATURE_AUTOMOTIVE) || AppSettings.get(app).state.value.demo) return"))
+    assertTrue(watch.contains("collect { demo -> if (demo) stopSelf() }"))
+    // A refusal is no crash, on either side.
+    assertEquals(2, Regex("""catch \(_: IllegalStateException\)""").findAll(watch).count())
+    assertTrue(watch.contains("intent.action == Intent.ACTION_BOOT_COMPLETED || intent.action == Intent.ACTION_MY_PACKAGE_REPLACED) VehicleWatch.start(context)"))
+    // Nothing else starts it.
+    val main = listOf(File("src/main/kotlin"), File("app/src/main/kotlin")).first { it.isDirectory }
+    val callers = main.walkTopDown().filter { it.isFile && it.extension == "kt" && it.readText().contains("VehicleWatch.start(") }.map { it.name }.toSet()
+    assertEquals(setOf("MainActivity.kt", "VehicleWatchService.kt"), callers)
+  }
+
+  /** The owner's choice (2026-11-06): the tabs and the buttons, no words. A tab's own status goes in its summary slot; Simple has none. */
+  @Test
+  fun theHeaderIsOnlyTheTabsAndTheButtons() {
+    val header = funBody(src("ui/AppShell.kt"), "ShellHeader")
+    for (word in listOf("Silverado Stats", "Read-only", "Demo", "demo")) assertFalse(word, header.contains(word))
+    val simple = src("ui/simple/SimpleScreen.kt")
+    assertTrue(Regex("""chrome\(\s*\{\},\s*\{\s*MxButton\(""").containsMatchIn(simple))
+    // Nothing between the header and the page but a notice about the data feed.
+    assertTrue(Regex("""\n\s*\)\n\s*if \(layout\.tooSmall\(view\.notice != null\)\)""").containsMatchIn(simple))
+  }
+
+  /** °F and miles, the owner's choice (2026-11-06): nothing on screen or saved can change them. */
+  @Test
+  fun theUnitsCannotChange() {
+    assertEquals(TempUnit.F, Units.TEMP)
+    assertEquals(DistUnit.MI, Units.DIST)
+    val choice = Regex("""Segmented\((Temp|Dist)Unit|set(Temp|Dist)Unit|tempUnit|distUnit|temp_unit|distance_unit""")
+    for (f in listOf("ui/AppShell.kt", "ui/simple/SimpleScreen.kt", "ui/live/LiveScreen.kt", "ui/trends/TrendsScreen.kt", "LiveViewModel.kt", "link/AppSettings.kt")) {
+      assertFalse(f, choice.containsMatchIn(src(f)))
+    }
+  }
+
+  /** The last charge is fed by every reading of the truck, the hourly job's too, never by a demo, and kept. */
+  @Test
+  fun theLastChargeIsFedByTheTrucksReadingsOnly() {
+    val hub = src("log/LogHub.kt")
+    // From the one session itself, so that whichever service asked for a reading, it counts, once.
+    assertTrue(src("vehicle/CarVehicleSource.kt").contains("session.state.collect { LogHub.get(app).onSession(it) }"))
+    assertFalse(src("link/LinkService.kt").contains("onSession"))
+    assertFalse(src("vehicle/VehicleWatchService.kt").contains("onSession"))
+    assertTrue(funBody(hub, "onSession"), funBody(hub, "onSession").contains("s.feed.kind == FeedKind.VEHICLE"))
+    assertTrue(funBody(hub, "logCar"), funBody(hub, "logCar").contains("noteCharge(ChargeReading.fromCar("))
+    assertTrue(hub.contains("store.rows(0L, LogSource.CAR, LogRows.CHARGE_COLS)"))
+    assertTrue(funBody(hub, "publishCharge").contains("ChargeWatch.saveDue(chargeSaved, now)"))
+    val vm = src("LiveViewModel.kt")
+    assertTrue(vm.contains("if (s.demo) DemoDrive.lastCharge(session.distanceM) else c"))
+    assertTrue(src("ui/AppShell.kt").contains("liveVm.lastCharge.collectAsStateWithLifecycle()"))
+    // A reset of the session leaves it alone.
+    assertFalse(funBody(vm, "resetSession").contains("lastCharge"))
   }
 
   /** While restricted the Diagnostics tab is one text panel, and nothing else can reach its parts. */
@@ -153,10 +245,9 @@ class AndroidWiringTest {
     assertEquals(setOf("DiagnosticsScreen.kt", "MxLinkSection.kt"), callers(Regex("""\bOutlinedTextField\(|\bSwitch\(""")))
     // And the view models refuse it even if something stale called them.
     val vm = src("LiveViewModel.kt")
-    for (action in listOf("resetSession", "retry", "setTempUnit", "setDistUnit", "setDemo", "choose", "forgetAdapter", "startPairing", "pair", "useUnpaired", "testLink")) {
+    for (action in listOf("retry", "setDemo", "choose", "forgetAdapter", "startPairing", "pair", "useUnpaired", "testLink")) {
       assertTrue("$action is parked-only", Regex("""fun $action\([^)]*\) = parkedOnly \{""").containsMatchIn(vm))
     }
-    assertTrue(vm.contains("if (t == AppTab.DIAGNOSTICS && restricted.value) return"))
   }
 
   /** Discovery and link tests in progress end when the restriction begins; nothing new starts. */
@@ -174,12 +265,9 @@ class AndroidWiringTest {
     }
     val vm = src("LiveViewModel.kt")
     assertTrue(vm.contains("s?.bt?.setRestricted(r)"))
-    // The Diagnostics tab's own BLE scan and TCP test.
+    // Send to laptop refuses by reading what followRestriction stores: emptied, it would never refuse.
     val diag = src("DiagnosticsViewModel.kt")
-    val off = funBody(diag, "stopRunningWork")
-    assertTrue(off.contains("adapterTest?.cancel()"))
-    assertTrue(off.contains("bleJob?.cancel()"))
-    assertTrue(funBody(diag, "followRestriction").contains("state.collect { if (it) stopRunningWork() }"))
+    assertTrue(funBody(diag, "followRestriction").contains("restriction = state"))
     assertTrue(src("MainActivity.kt").contains("vm.followRestriction(liveVm.restricted)"))
   }
 
@@ -188,7 +276,7 @@ class AndroidWiringTest {
   fun leavingTheScreenEndsWhatItHadRunning() {
     val a = src("MainActivity.kt")
     val stop = funBody(a, "onStop")
-    assertTrue(stop, Regex("""if \(!isChangingConfigurations\) \{[^}]*liveVm\.setVisible\(false\)[^}]*vm\.stopRunningWork\(\)[^}]*liveVm\.onLeftScreen\(\)[^}]*\}""").containsMatchIn(stop))
+    assertTrue(stop, Regex("""if \(!isChangingConfigurations\) \{[^}]*liveVm\.setVisible\(false\)[^}]*liveVm\.onLeftScreen\(\)[^}]*\}""").containsMatchIn(stop))
     assertTrue(funBody(src("LiveViewModel.kt"), "onLeftScreen").contains("bt?.onLeftScreen()"))
   }
 
@@ -196,7 +284,7 @@ class AndroidWiringTest {
   @Test
   fun diagnosticsStartersRefuseWhileRestricted() {
     val diag = src("DiagnosticsViewModel.kt")
-    for (start in listOf("runAdapterTest", "runBleScan", "sendReport")) {
+    for (start in listOf("sendReport")) {
       assertTrue("$start refuses", Regex("""fun $start\([^)]*\) \{\s*if \(restricted\) return""").containsMatchIn(diag))
     }
     assertTrue(diag.contains("private val restricted: Boolean get() = restriction.value"))
@@ -215,7 +303,7 @@ class AndroidWiringTest {
     assertTrue("nothing of this kept inside the screen", !screen.contains("rememberLazyListState") && !screen.contains("rememberSaveable"))
   }
 
-  /** No system dialog or Settings screen opens while restricted, and no in-app dialog stays up. */
+  /** No system dialog or Settings screen opens while restricted. Simple's reset question is the dashboards' one dialog. */
   @Test
   fun noDialogOpensWhileRestricted() {
     val a = src("MainActivity.kt")
@@ -233,26 +321,26 @@ class AndroidWiringTest {
     val simple = src("ui/simple/SimpleScreen.kt")
     assertEquals("one dialog on the dashboards", 1, Regex("""\bAlertDialog\(""").findAll(simple).count())
     assertEquals(0, Regex("""\bAlertDialog\(""").findAll(src("ui/live/LiveScreen.kt")).count())
-    assertTrue(simple.contains("if (confirmReset && layout.controls) {"))
-    assertTrue(simple.contains("LaunchedEffect(layout.restricted) { if (layout.restricted) confirmReset = false }"))
   }
 
-  /** Every control but the tabs and the layout selector is behind `layout.controls`. */
+  /** On Live every control but the tabs and the MX+ button is behind `layout.controls`. Simple: simpleDoesNotChangeWithTheGearAndItsControlsWorkInDrive. */
   @Test
   fun controlsAreParkedOnly() {
     val simple = src("ui/simple/SimpleScreen.kt")
     val live = src("ui/live/LiveScreen.kt")
-    // The unit toggles and Reset.
-    assertTrue(Regex("""if \(layout\.controls\) \{\s*Segmented\(TempUnit""").containsMatchIn(simple))
-    assertTrue(Regex("""if \(layout\.controls\) \{\s*if \(dash\.status\.canRetry\)""").containsMatchIn(live))
-    assertEquals("one unit toggle per screen", 1, Regex("""Segmented\(TempUnit""").findAll(simple).count())
-    assertEquals(1, Regex("""Segmented\(TempUnit""").findAll(live).count())
+    // Live's Retry.
+    assertTrue(Regex("""if \(layout\.controls\) \{\s*if \(dash\.status\.canRetry && settings\.demo\)""").containsMatchIn(live))
     // Allow access and Open Diagnostics: the notice's driving branch has no button.
     val notice = funBody(simple, "NoticeCard")
-    val drivingBranch = notice.substring(notice.indexOf("if (layout.restricted) {"), notice.indexOf("} else {"))
+    val drivingBranch = notice.substring(notice.indexOf("if (driving) {"), notice.indexOf("} else {"))
     assertEquals(0, Regex("""Button""").findAll(drivingBranch).count())
-    // The selector stays, as tall as the policy says: 76 dp or more while driving (DashLayoutTest).
-    assertTrue(simple.contains("settings.simpleLayout.ordinal, layout.selectorDp"))
+    // The MX+ button stays, as tall as the policy says: 76 dp or more while driving (DashLayoutTest).
+    assertTrue(funBody(live, "MxButton").contains("layout.mxButtonDp"))
+    // And it works while driving, Connect included, doing what the label it drew said.
+    assertTrue(funBody(live, "MxButton").contains("onMxAction(action)"))
+    val vm = src("LiveViewModel.kt")
+    assertTrue(vm.contains("fun onMxAction(action: MxAction) {"))
+    assertTrue(funBody(vm, "onMxAction"), !funBody(vm, "onMxAction").contains("parkedOnly"))
     assertTrue(funBody(src("ui/AppShell.kt"), "HeaderTab").contains(".fillMaxHeight()"))
   }
 
@@ -261,10 +349,10 @@ class AndroidWiringTest {
   fun tapToInspectAndTheGridsAreParkedOnly() {
     val live = src("ui/live/LiveScreen.kt")
     val driving = funBody(live, "LiveDriving")
-    for (absent in listOf("HeatmapCard", "Heatmap(", "ModuleTempStrip", "NoCellDataCard", "selectedGroup", "selectedPowerAt")) {
+    for (absent in listOf("HeatmapCard", "Heatmap(", "ModuleTempStrip", "NoCellDataCard", "selectedGroup")) {
       assertTrue("$absent in LiveDriving", !driving.contains(absent))
     }
-    assertTrue("no gesture on its chart", driving.contains("PowerCard(dash.powerChart, null, null, layout"))
+    assertTrue("nothing to tap", !driving.contains("onSelect"))
     assertTrue(Regex("""if \(layout\.restricted\) \{\s*LiveDriving\(""").containsMatchIn(live))
     assertEquals("one caller", 1, Regex("""(?<!fun )\bHeatmapCard\(""").findAll(live).count())
     assertTrue(funBody(live, "LiveParked").contains("HeatmapCard("))
@@ -277,11 +365,9 @@ class AndroidWiringTest {
     for ((name, text) in dashboards()) {
       assertEquals("$name: raw gesture", 0, Regex("""\bdetectTapGestures\b|\bpointerInput\b""").findAll(text).count())
     }
-    val simple = src("ui/simple/SimpleScreen.kt")
-    assertEquals(2, Regex("""\.inspectTap\(interactive, Unit\)""").findAll(simple).count())
-    assertEquals("no tooltip while driving", 2, Regex("""val sel = if \(interactive\)""").findAll(simple).count())
-    assertEquals(1, Regex("""\.inspectTap\(onSelect != null, """).findAll(live).count())
-    assertEquals(2, Regex("""val interactive = layout\.tapToInspect""").findAll(simple).count())
+    // Only Trends takes it, and that tab is not offered while driving.
+    assertEquals(0, Regex("""\.inspectTap\(""").findAll(src("ui/simple/SimpleScreen.kt")).count())
+    assertEquals(0, Regex("""\.inspectTap\(""").findAll(live).count())
   }
 
   /** Driving-state wiring: its own connection, read-only, following onStart / onStop; fail safe. */
@@ -310,6 +396,15 @@ class AndroidWiringTest {
     assertTrue(Regex("""_ux\.value = info""").containsMatchIn(funBody(reader, "refreshUx")))
   }
 
+  /** Each drive starts fresh: nothing of an earlier one is kept, Live shows the same range, and Simple gets the MX+'s capacity. */
+  @Test
+  fun liveShowsTheOwnRangeAndSimpleTheMxCapacity() {
+    assertFalse(src("vehicle/CarVehicleSource.kt").contains("lastEfficiency"))
+    val shell = src("ui/AppShell.kt")
+    assertTrue(shell.contains("ownRangeM = session.rangeEstimate?.m"))
+    assertTrue(shell.contains("mxCapacityKwh = SimpleModel.mxCapacityKwh(live)"))
+  }
+
   /** The screens draw the held flows, so values change at most once a second while driving. */
   @Test
   fun theScreensDrawTheHeldFlows() {
@@ -321,7 +416,7 @@ class AndroidWiringTest {
     assertTrue(shell.contains("liveVm.shownLive.collectAsStateWithLifecycle()"))
     assertTrue(!Regex("""liveVm\.(session|live)\.""").containsMatchIn(shell))
     // Live has two sources: while driving only the clock's one-second tick rebuilds what it draws.
-    assertTrue(src("ui/live/LiveScreen.kt").contains("remember(now, settings.tempUnit, settings.distUnit, if (layout.restricted) Unit else live, if (layout.restricted) Unit else vhal)"))
+    assertTrue(src("ui/live/LiveScreen.kt").contains("remember(now, if (layout.restricted) Unit else live, if (layout.restricted) Unit else vhal)"))
     // No animation on the dashboards: nothing to catch the eye while driving.
     val animated = Regex("""\banimate\w*\(|\brememberInfiniteTransition\b|\bCircularProgressIndicator\b|\bAnimatedVisibility\b|\bCrossfade\b""")
     for ((name, text) in dashboards()) assertEquals("$name animates", emptyList<String>(), animated.findAll(text).map { it.value }.toList())
@@ -331,7 +426,7 @@ class AndroidWiringTest {
   @Test
   fun nothingStillSaysParkedOnly() {
     val main = listOf(File("src/main"), File("app/src/main")).first { it.isDirectory }
-    val claim = Regex("""parked[- ]only|parked use|Parked use only|Park-only|keep Battery Glance|Android blocks|blocked in Drive""", RegexOption.IGNORE_CASE)
+    val claim = Regex("""parked[- ]only|parked use|Parked use only|Park-only|Android blocks|blocked in Drive""", RegexOption.IGNORE_CASE)
     val hits = main.walkTopDown()
       .filter { it.isFile && it.extension in setOf("kt", "xml") }
       .flatMap { f -> claim.findAll(f.readText()).map { "${f.name}: ${it.value}" } }

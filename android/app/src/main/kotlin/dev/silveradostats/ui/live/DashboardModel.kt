@@ -3,8 +3,8 @@ package dev.silveradostats.ui.live
 import dev.silveradostats.link.LinkStatus
 import dev.silveradostats.link.LiveState
 import dev.silveradostats.link.LiveValue
-import dev.silveradostats.link.PowerHistory
 import dev.silveradostats.link.PowerPoint
+import dev.silveradostats.link.SavedCapacity
 import dev.silveradostats.obd.Profile
 import kotlin.math.abs
 import kotlin.math.ceil
@@ -26,7 +26,7 @@ import kotlin.math.max
  */
 
 /** Colour role of a text or mark. */
-enum class Tone { NORMAL, GOOD, WARN, ERROR, DIM, DISCHARGE, CHARGE }
+enum class Tone { NORMAL, GOOD, WARN, ERROR, DIM }
 
 /** Values from Android's vehicle API (no adapter needed). Wh, metres, °C. */
 data class VhalFigures(
@@ -62,8 +62,6 @@ data class Kpi(
   val value: String,
   val unit: String,
   val lines: List<String>,
-  val pill: String? = null,
-  val pillTone: Tone = Tone.NORMAL,
   /** "unverified", "likely", "VHAL", "est." … shown as a small marker beside the title. */
   val marker: String? = null,
   val age: String? = null,
@@ -71,8 +69,6 @@ data class Kpi(
   val hasValue: Boolean = true,
   /** The title on a narrow tile and while driving. */
   val shortTitle: String = title,
-  /** The direction on a narrow tile and while driving. */
-  val pillShort: String? = pill,
   /** All of [lines] that stays while driving: figures only, in the fewest words; never a sentence. */
   val drivingLines: List<String> = emptyList(),
   /** The first line where the tile is narrow. */
@@ -124,15 +120,16 @@ data class HeatmapView(
 
 data class ModuleTemps(val celsius: List<Double?>, val marker: String?, val stale: Boolean)
 
-data class PowerView(val points: List<PowerPoint>, val scaleKw: Double, val nowMs: Long, val windowMs: Long, val latestKw: Double?)
-
 data class Dashboard(
   val status: StatusView,
   val soc: Kpi,
-  val power: Kpi,
+  /** Capacity in kWh and in Ah, and its deviation: on the Live tab whenever it is on screen, parked or driving. */
   val capacity: Kpi,
+  val capacityAh: Kpi,
+  val capacityDeviation: Kpi,
   val spread: Kpi,
-  val powerChart: PowerView,
+  /** Pack voltage, pack current, cell-group spread. */
+  val pack: List<TempLine>,
   val temps: List<TempLine>,
   /** Fewer, shorter lines: what the Live tab shows of [temps] while driving. */
   val tempSummary: List<TempLine>,
@@ -151,23 +148,23 @@ object DashboardModel {
   /** Cell-group array entries at or below this are padding (as in Derive). */
   const val MIN_VALID_CELL_V = 0.5
 
-  const val MIN_POWER_SCALE_KW = 10.0
-  private val POWER_STEPS = listOf(10.0, 20.0, 50.0, 100.0, 150.0, 200.0, 300.0, 400.0, 500.0, 600.0, 800.0)
-
   const val OBD_HINT = "Pack voltage and current, cell groups and module temperatures come from the OBDLink MX+ " +
     "(Diagnostics › OBDLink MX+ link). SoC, energy, range and outside temperature below are from the car's own API."
 
-  fun build(live: LiveState, vhal: VhalFigures, temp: TempUnit, dist: DistUnit, nowMs: Long): Dashboard {
+  /** [saved]: the last capacity read, shown while the MX+ is not delivering; [wallNowMs]: for its age. */
+  fun build(live: LiveState, vhal: VhalFigures, temp: TempUnit, dist: DistUnit, nowMs: Long, saved: SavedCapacity? = null, wallNowMs: Long = 0L, ownRangeM: Double? = null): Dashboard {
     val v = live.values.filterKeys { it !in Profile.NOT_DISPLAYED }
     val heat = heatmap(v, nowMs, live.power)
     val hasObd = v.isNotEmpty()
+    val spread = spread(v, live.derived, heat, nowMs, live.power)
     return Dashboard(
       status = status(live, nowMs),
-      soc = soc(v, vhal, dist, nowMs),
-      power = power(v, live.derived, nowMs),
-      capacity = capacity(v, live.derived, vhal, nowMs),
-      spread = spread(v, live.derived, heat, nowMs, live.power),
-      powerChart = powerView(live.power, nowMs),
+      soc = soc(v, vhal, dist, nowMs, ownRangeM),
+      capacity = capacity(v, live.derived, vhal, nowMs, saved, wallNowMs),
+      capacityAh = capacityAh(v, live.derived, nowMs, saved, wallNowMs),
+      capacityDeviation = capacityDeviation(v, nowMs),
+      spread = spread,
+      pack = pack(v, nowMs) + TempLine("Cell spread", if (spread.hasValue) "${spread.value} ${spread.unit}" else Units.DASH, spread.marker, spread.stale),
       temps = temps(v, vhal, live, temp, nowMs),
       tempSummary = tempSummary(temps(v, vhal, live, temp, nowMs)),
       heatmap = heat,
@@ -180,6 +177,7 @@ object DashboardModel {
 
   fun chip(status: LinkStatus, demo: Boolean): Pair<String, Tone> = when (status) {
     LinkStatus.NO_ADAPTER -> "No adapter" to Tone.DIM
+    LinkStatus.DISCONNECTED -> "MX+ disconnected" to Tone.DIM
     LinkStatus.PAIRING -> "Pairing…" to Tone.WARN
     LinkStatus.CONNECTING -> (if (demo) "Starting demo…" else "Connecting to MX+…") to Tone.WARN
     LinkStatus.CONNECTED -> "MX+ connected" to Tone.GOOD
@@ -231,7 +229,8 @@ object DashboardModel {
 
   // --- KPI tiles --------------------------------------------------------------------------------
 
-  fun soc(v: Map<String, LiveValue>, vhal: VhalFigures, dist: DistUnit, nowMs: Long): Kpi {
+  /** [ownRangeM]: the session's range, ahead of the truck's on one line because a tile has few lines. */
+  fun soc(v: Map<String, LiveValue>, vhal: VhalFigures, dist: DistUnit, nowMs: Long, ownRangeM: Double? = null): Kpi {
     val soc = num(v, "soc")
     val energy = num(v, "energy_remaining")
     val range = num(v, "range_estimate")
@@ -248,6 +247,13 @@ object DashboardModel {
       }
     }
     when {
+      ownRangeM != null -> {
+        val own = "Range ${Units.distText(ownRangeM / Units.METERS_PER_MILE, dist)}"
+        val truck = range ?: vhal.rangeM?.let { it / Units.METERS_PER_MILE }
+        val both = if (truck != null) "$own · truck ${Units.distText(truck, dist)}" else own
+        lines += both
+        driving += both
+      }
       range != null -> {
         lines += "Range ${Units.distText(range, dist)} (BMS)"
         driving += "Range ${Units.distText(range, dist)}"
@@ -266,67 +272,84 @@ object DashboardModel {
     return Kpi("State of charge", Units.DASH, "%", lines.ifEmpty { listOf("Waiting for the MX+ or the car service") }, hasValue = false, shortTitle = SOC_SHORT, drivingLines = driving)
   }
 
-  /** Power tile: + discharge / − charge or regen; colour by direction, with V and A. */
-  fun power(v: Map<String, LiveValue>, derived: Map<String, Any>, nowMs: Long): Kpi {
-    val kw = dnum(derived, "power_kw")
-    val volts = num(v, "pack_voltage")
-    val amps = num(v, "pack_current")
-    val cur = v["pack_current"]
-    if (kw == null || amps == null) {
-      val lines = if (volts != null) listOf("${Units.num(volts, 1)} V · current not read yet") else listOf("Needs the OBDLink MX+")
-      return Kpi("Battery power", Units.DASH, "kW", lines, hasValue = false, shortTitle = POWER_SHORT, drivingLines = listOfNotNull(volts?.let { "${Units.num(it, 1)} V" }))
-    }
-    val (pill, tone) = direction(kw)
-    val vText = volts?.let { "${Units.num(it, 1)} V" } ?: "${Units.DASH} V"
-    val markers = listOfNotNull(marker(cur), marker(v["pack_voltage"])).distinct()
-    return Kpi(
-      title = "Battery power",
-      value = Units.signed(kw, 1),
-      unit = "kW",
-      lines = listOf("$vText · ${Units.signed(amps, 1)} A"),
-      pill = pill,
-      pillTone = tone,
-      marker = markers.firstOrNull(),
-      age = ageOf(cur, nowMs),
-      stale = isStale(cur, nowMs),
-      shortTitle = POWER_SHORT,
-      pillShort = pill.substringBefore(" /"),
-      drivingLines = listOf("$vText · ${Units.signed(amps, 1)} A"),
-    )
-  }
-
-  /** Direction label and colour: + = discharge (pack current + = discharge, as on the truck). */
-  fun direction(kw: Double): Pair<String, Tone> = when {
-    kw > IDLE_KW -> "Discharging" to Tone.DISCHARGE
-    kw < -IDLE_KW -> "Charging / regen" to Tone.CHARGE
-    else -> "Idle" to Tone.DIM
-  }
-
-  const val IDLE_KW = 0.05
-
   private const val SOC_SHORT = "Charge"
-  private const val POWER_SHORT = "Power"
   private const val SPREAD_SHORT = "Cell spread"
 
-  fun capacity(v: Map<String, LiveValue>, derived: Map<String, Any>, vhal: VhalFigures, nowMs: Long): Kpi {
-    val bms = dnum(derived, "bms_energy_at_100_kwh")
-    if (bms != null) {
-      val lines = mutableListOf("BMS energy at 100 % SoC")
-      dnum(derived, "ah_nominal_est")?.let { lines += "≈ ${Units.num(it, 0)} Ah nominal est." }
+  /**
+   * The pack's capacity in kWh: read from the BECM (27AE), else energy / SoC. With no MX+ data, the
+   * last one read and how long ago; never the car API's figure as if it were this one.
+   */
+  fun capacity(v: Map<String, LiveValue>, derived: Map<String, Any>, vhal: VhalFigures, nowMs: Long, saved: SavedCapacity? = null, wallNowMs: Long = 0L): Kpi {
+    val read = dnum(derived, "capacity_kwh")
+    val implied = dnum(derived, "bms_energy_at_100_kwh")
+    val kwh = read ?: implied
+    if (kwh != null) {
+      val src = if (read != null) v["battery_capability"] else v["energy_remaining"]
+      val lines = mutableListOf(if (read != null) "Battery capability, from the BECM" else "Calculated: energy ÷ SoC")
+      if (read != null && implied != null) lines += "Energy ÷ SoC: ${Units.num(implied, 1)} kWh"
       val groups = dnum(derived, "series_groups")
       val modules = dnum(derived, "modules")
       listOfNotNull(
-        groups?.let { "${Units.num(it, 0)} series groups" },
         modules?.let { "${Units.num(it, 0)} modules" },
+        groups?.let { "${Units.num(it, 0)} series groups" },
       ).takeIf { it.isNotEmpty() }?.let { lines += it.joinToString(" · ") }
+      return Kpi(CAPACITY_TITLE, Units.num(kwh, if (read != null) 2 else 1), "kWh", lines, marker = if (read != null) marker(src) else EST, age = ageOf(src, nowMs), stale = isStale(src, nowMs), shortTitle = CAPACITY_SHORT)
+    }
+    saved?.kwh?.let { return lastRead(CAPACITY_TITLE, CAPACITY_SHORT, Units.num(it, 2), "kWh", saved, wallNowMs) }
+    val api = (vhal.usableWh ?: vhal.nominalWh)?.let { "The car's API says ${Units.num(it / 1000.0, 1)} kWh" }
+    return Kpi(CAPACITY_TITLE, Units.DASH, "kWh", listOfNotNull(NEEDS_MX, api), hasValue = false, shortTitle = CAPACITY_SHORT)
+  }
+
+  /** The pack's capacity in Ah: read from the BECM, else worked out from the kWh figure and said so. */
+  fun capacityAh(v: Map<String, LiveValue>, derived: Map<String, Any>, nowMs: Long, saved: SavedCapacity? = null, wallNowMs: Long = 0L): Kpi {
+    val read = dnum(derived, "capacity_ah")
+    if (read != null) {
+      val src = v["pack_capacity_ah"]
+      return Kpi(AH_TITLE, Units.num(read, 1), "Ah", listOf("Total energy storage, from the BECM"), marker = marker(src), age = ageOf(src, nowMs), stale = isStale(src, nowMs), shortTitle = AH_SHORT)
+    }
+    val est = dnum(derived, "ah_nominal_est")
+    if (est != null) {
+      val groups = dnum(derived, "series_groups")?.let { Units.num(it, 0) } ?: Units.DASH
       val src = v["energy_remaining"]
-      return Kpi("Capacity", Units.num(bms, 1), "kWh", lines, marker = "est.", age = ageOf(src, nowMs), stale = isStale(src, nowMs))
+      return Kpi(AH_TITLE, Units.num(est, 0), "Ah", listOf("Calculated: kWh ÷ ($groups series × 3.6 V)"), marker = EST, age = ageOf(src, nowMs), stale = isStale(src, nowMs), shortTitle = AH_SHORT)
     }
-    val nominal = vhal.nominalWh
-    if (nominal != null) {
-      return Kpi("Capacity (nominal)", Units.num(nominal / 1000.0, 1), "kWh", listOf("From the car's API: nominal, not measured"), marker = "VHAL", shortTitle = "Capacity")
-    }
-    return Kpi("Capacity", Units.DASH, "kWh", listOf("Needs SoC and energy from the MX+"), hasValue = false)
+    saved?.ah?.let { return lastRead(AH_TITLE, AH_SHORT, Units.num(it, 1), "Ah", saved, wallNowMs) }
+    return Kpi(AH_TITLE, Units.DASH, "Ah", listOf(NEEDS_MX), hasValue = false, shortTitle = AH_SHORT)
+  }
+
+  /**
+   * "Battery total energy storage capacity deviation", an integer Ah. Its DID has not been identified:
+   * a field named capacity_deviation in the profile lights this up. No guess: any 0-50 would look right.
+   */
+  fun capacityDeviation(v: Map<String, LiveValue>, nowMs: Long): Kpi {
+    val src = v["capacity_deviation"]
+    val ah = num(v, "capacity_deviation") ?: return Kpi(DEVIATION_TITLE, Units.DASH, "Ah", listOf("PID not identified yet"), hasValue = false, shortTitle = DEVIATION_SHORT)
+    return Kpi(DEVIATION_TITLE, Units.num(ah, 0), "Ah", listOf("Total energy storage capacity deviation"), marker = marker(src), age = ageOf(src, nowMs), stale = isStale(src, nowMs), shortTitle = DEVIATION_SHORT)
+  }
+
+  private fun lastRead(title: String, short: String, value: String, unit: String, saved: SavedCapacity, wallNowMs: Long): Kpi {
+    val line = "Read ${Units.age(max(0L, wallNowMs - saved.atWallMs))} ago"
+    return Kpi(title, value, unit, listOf(line), marker = LAST_READ, shortTitle = short, drivingLines = listOf(line))
+  }
+
+  const val LAST_READ = "last read"
+  private const val EST = "est."
+  private const val NEEDS_MX = "Needs the OBDLink MX+"
+  private const val CAPACITY_TITLE = "Capacity"
+  private const val CAPACITY_SHORT = "Capacity"
+  private const val AH_TITLE = "Capacity (Ah)"
+  private const val AH_SHORT = "Capacity"
+  private const val DEVIATION_TITLE = "Capacity deviation"
+  private const val DEVIATION_SHORT = "Deviation"
+
+  /** Pack voltage and current, + discharge, each with its own age and marker. */
+  fun pack(v: Map<String, LiveValue>, nowMs: Long): List<TempLine> {
+    val volts = v["pack_voltage"]
+    val amps = v["pack_current"]
+    return listOf(
+      TempLine("Pack voltage", num(v, "pack_voltage")?.let { "${Units.num(it, 1)} V" } ?: Units.DASH, marker(volts), isStale(volts, nowMs), shortLabel = "Voltage"),
+      TempLine("Pack current", num(v, "pack_current")?.let { "${Units.signed(it, 1)} A" } ?: Units.DASH, marker(amps), isStale(amps, nowMs), shortLabel = "Current"),
+    )
   }
 
   // --- Cell groups under load -------------------------------------------------------------------
@@ -602,15 +625,4 @@ object DashboardModel {
   private const val MODULES_SHORT = "Modules"
   private const val COOLANT_SHORT = "Coolant"
   private const val OUTSIDE_SHORT = "Outside"
-
-  // --- Power history ----------------------------------------------------------------------------
-
-  fun powerView(points: List<PowerPoint>, nowMs: Long, windowMs: Long = PowerHistory.WINDOW_MS): PowerView {
-    val shown = points.filter { nowMs - it.atMs <= windowMs }
-    val peak = shown.maxOfOrNull { abs(it.kw) } ?: 0.0
-    return PowerView(shown, powerScale(peak), nowMs, windowMs, shown.lastOrNull()?.kw)
-  }
-
-  /** Symmetric y scale for the power chart: the next step at or above the peak (at least 10 kW). */
-  fun powerScale(peakKw: Double): Double = POWER_STEPS.firstOrNull { it >= peakKw } ?: (ceil(peakKw / 100.0) * 100.0)
 }

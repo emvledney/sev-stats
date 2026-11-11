@@ -14,6 +14,7 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Test
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 
@@ -162,7 +163,7 @@ class LinkEngineLifecycleTest {
     val token = Any()
     e.attach(token)
     await(e, "first reads") { fake.busReads > 0 && it.polling }
-    // Glance <-> dashboard, P <-> R: the screen flips every 0.3-0.4 s.
+    // P <-> R: the screen flips every 0.3-0.4 s.
     repeat(8) {
       e.detach(token)
       Thread.sleep(300)
@@ -285,7 +286,6 @@ class LinkEngineLifecycleTest {
     assertTrue(s.canRetry)
     val next = s.nextAutoRetryAtMs!!
     assertTrue("next attempt ${next - clock()} ms away", next - clock() >= RetryPolicy.MIN_AUTO_RETRY_MS - 1_000)
-    assertEquals("Link lost · Retry", dev.silveradostats.glance.GlanceModel.status(s))
     Thread.sleep(1_000)
     assertEquals("no reconnect before 15 s", 1, fake.accepts.get())
     offset.addAndGet(16_000)
@@ -327,7 +327,7 @@ class LinkEngineLifecycleTest {
     val n = LinkEngine.MAX_AUTO_RECOVERIES + 1
     val last = await(e, "blocked") { fake.accepts.get() == n && it.status == LinkStatus.STOPPED_ERROR && it.nextAutoRetryAtMs == null }
     assertTrue(last.canRetry)
-    assertTrue(last.message, last.message.contains("tap Retry"))
+    assertTrue(last.message, last.message.contains("tap Connect"))
     offset.addAndGet(70_000)
     e.attach(token)
     Thread.sleep(500)
@@ -343,7 +343,7 @@ class LinkEngineLifecycleTest {
     assertTrue(LinkMessages.recovering(LinkLostError("adapter closed the connection")).contains("Reconnecting automatically"))
     assertTrue(LinkMessages.recovering(AdapterTimeoutError("adapter timed out on '2227C6'")).startsWith("The MX+ did not answer in time"))
     assertTrue(LinkMessages.stopped(LinkLostError("adapter closed the connection")).startsWith("Connection to the MX+ was lost"))
-    assertTrue(LinkMessages.stopped(FatalTransportError("adapter reported 'LV RESET' on 'ATRV'; stopping")).contains("tap Retry"))
+    assertTrue(LinkMessages.stopped(FatalTransportError("adapter reported 'LV RESET' on 'ATRV'; stopping")).contains("tap Connect"))
   }
 
   // --- Permission grant -------------------------------------------------------------------------
@@ -364,5 +364,131 @@ class LinkEngineLifecycleTest {
     assertEquals("other reasons are left alone", 1, opens.get())
     e.retryIfStoppedBy(BtErrors.NO_CONNECT_PERMISSION)
     await(e, "retried") { opens.get() == 2 && it.status == LinkStatus.ADAPTER_UNREACHABLE }
+  }
+
+  @Test
+  fun disconnectClosesTheLinkAndNothingReconnectsUntilConnect() {
+    val fake = fake(MultiFakeElm())
+    val opens = AtomicInteger()
+    val links = ArrayList<Recording>()
+    val e = engine()
+    e.setSource(source {
+      opens.incrementAndGet()
+      Recording(fake.connect()).also { links += it }
+    })
+    val token = Any()
+    e.attach(token)
+    await(e, "polling") { it.polling && it.status == LinkStatus.CONNECTED }
+
+    e.setDisconnected(true)
+    val off = await(e, "disconnected") { it.status == LinkStatus.DISCONNECTED }
+    assertEquals(LinkMessages.DISCONNECTED, off.message)
+    assertEquals(false, off.canRetry)
+    assertTrue("the socket is closed", links.single().closedAtNanos > 0)
+
+    // Nothing brings it back: not time, not Retry, not another screen coming and going.
+    offset.addAndGet(120_000)
+    e.retry()
+    e.detach(token)
+    e.attach(token)
+    Thread.sleep(400)
+    assertEquals(1, opens.get())
+    assertEquals(LinkStatus.DISCONNECTED, e.state.value.status)
+
+    e.setDisconnected(false)
+    await(e, "connected again") { it.polling && it.status == LinkStatus.CONNECTED }
+    assertEquals(2, opens.get())
+  }
+
+  /** The button through a real link's life: never Disconnect unless the app holds the MX+. */
+  @Test
+  fun theMxButtonFollowsTheLink() {
+    val fake = fake(MultiFakeElm())
+    val opens = AtomicInteger()
+    val gate = CountDownLatch(1)
+    val e = engine()
+    e.setSource(source {
+      if (opens.incrementAndGet() == 1) throw ConnectFailure("MX+ asleep", retryable = true)
+      gate.await()
+      fake.connect()
+    })
+    val token = Any()
+    e.attach(token)
+
+    // The first attempt fails by itself: Connect, though nobody tapped Disconnect.
+    val down = await(e, "unreachable") { it.status == LinkStatus.ADAPTER_UNREACHABLE }
+    assertEquals(MxAction.CONNECT, MxAction.of(mxOff = false, down))
+
+    // An automatic attempt starts: the button does not change, so a tap can't land on Cancel by surprise.
+    offset.addAndGet(70_000)
+    e.attach(token)
+    val auto = await(e, "automatic attempt") { opens.get() == 2 && it.status == LinkStatus.CONNECTING }
+    assertEquals(MxAction.CONNECT, MxAction.of(mxOff = false, auto))
+
+    // Connect tapped during it (mxOff was already false, so LiveViewModel asks for a retry): Cancel at once.
+    e.retry()
+    assertEquals(MxAction.CANCEL, MxAction.of(mxOff = false, e.state.value))
+
+    gate.countDown()
+    val up = await(e, "connected") { it.polling && it.status == LinkStatus.CONNECTED }
+    assertEquals(MxAction.DISCONNECT, MxAction.of(mxOff = false, up))
+
+    // Disconnect tapped: Connect at once, before the worker has even closed the link.
+    assertEquals(MxAction.CONNECT, MxAction.of(mxOff = true, up))
+    e.setDisconnected(true)
+    val off = await(e, "disconnected") { it.status == LinkStatus.DISCONNECTED }
+    assertEquals(MxAction.CONNECT, MxAction.of(mxOff = true, off))
+
+    // Connect tapped: no longer offered while it comes back, then Disconnect.
+    e.setDisconnected(false)
+    assertNotEquals(MxAction.CONNECT, MxAction.of(mxOff = false, e.state.value))
+    val back = await(e, "connected again") { it.polling && it.status == LinkStatus.CONNECTED }
+    assertEquals(MxAction.DISCONNECT, MxAction.of(mxOff = false, back))
+  }
+
+  /** Connect tapped on a failed link: Cancel while it is tried, Connect again if that fails too. */
+  @Test
+  fun aTappedConnectThatFailsOffersConnectAgain() {
+    val opens = AtomicInteger()
+    val gate = CountDownLatch(1)
+    val e = engine()
+    e.setSource(source {
+      if (opens.incrementAndGet() == 2) gate.await()
+      throw ConnectFailure("MX+ asleep", retryable = true)
+    })
+    e.attach(Any())
+    await(e, "unreachable") { it.status == LinkStatus.ADAPTER_UNREACHABLE }
+
+    e.retry()
+    val trying = await(e, "connecting") { opens.get() == 2 && it.status == LinkStatus.CONNECTING }
+    assertEquals(MxAction.CANCEL, MxAction.of(mxOff = false, trying))
+
+    gate.countDown()
+    val failed = await(e, "unreachable again") { it.status == LinkStatus.ADAPTER_UNREACHABLE }
+    assertEquals(MxAction.CONNECT, MxAction.of(mxOff = false, failed))
+  }
+
+  @Test
+  fun disconnectedFromTheStartNeverOpensTheLink() {
+    val opens = AtomicInteger()
+    val e = engine()
+    e.setDisconnected(true)
+    e.setSource(source {
+      opens.incrementAndGet()
+      throw ConnectFailure("not reached", retryable = true)
+    })
+    e.attach(Any())
+    await(e, "disconnected") { it.status == LinkStatus.DISCONNECTED }
+    Thread.sleep(200)
+    assertEquals(0, opens.get())
+  }
+
+  @Test
+  fun disconnectDoesNotStopTheSimulator() {
+    val e = engine()
+    e.setDisconnected(true)
+    e.setSource(LinkSource.Demo)
+    e.attach(Any())
+    await(e, "demo") { it.status == LinkStatus.DEMO && it.polling }
   }
 }

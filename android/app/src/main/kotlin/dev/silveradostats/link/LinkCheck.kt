@@ -8,7 +8,7 @@ import dev.silveradostats.obd.UnsafeRequestError
 import java.io.IOException
 
 /**
- * The adapter could not be reached (Bluetooth connect / TCP connect failed). Nothing was written.
+ * The adapter could not be reached (Bluetooth connect failed). Nothing was written.
  *
  * @param retryable an automatic reconnect may help (adapter asleep, out of range, held by a phone);
  *   false when the user must act first (pairing needed, permission missing, no Bluetooth).
@@ -17,7 +17,7 @@ class ConnectFailure(message: String, val retryable: Boolean, cause: Throwable? 
 
 /** Result of the init-only adapter check (Diagnostics › Test link). */
 data class LinkCheckResult(
-  /** What was tested, e.g. "OBDLink MX+ 00:04:3E:12:34:56" or "tcp 192.168.0.10:35000". */
+  /** What was tested, e.g. "OBDLink MX+ 00:04:3E:12:34:56". */
   val target: String,
   val ok: Boolean,
   /** "connect", "setup" or "done": how far the check got. */

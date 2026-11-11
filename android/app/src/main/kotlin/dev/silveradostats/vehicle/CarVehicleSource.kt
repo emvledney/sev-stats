@@ -7,10 +7,12 @@ import dev.silveradostats.BuildConfig
 import dev.silveradostats.diag.AppPermissions
 import dev.silveradostats.diag.CrashLog
 import dev.silveradostats.link.AppSettings
+import dev.silveradostats.log.LogHub
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.MainScope
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
@@ -36,6 +38,7 @@ class CarVehicleSource(context: Context) : VehicleSource {
   private var fullReads = 0L
   private var capacityWh: Double? = null
   private var capacityNominal = false
+  private var ratedWh: Double? = null
   private var outsideC: Double? = null
 
   override fun read(atMs: Long, full: Boolean): SourceRead {
@@ -65,6 +68,7 @@ class CarVehicleSource(context: Context) : VehicleSource {
         chargeRateAgeMs = rate?.ageMs,
         rangeM = get(KnownProperties.RANGE_REMAINING, Signal.RANGE, CarPerm.CAR_ENERGY)?.number,
         gear = get(KnownProperties.GEAR_SELECTION, Signal.GEAR, CarPerm.CAR_POWERTRAIN)?.number?.toInt(),
+        ignition = get(KnownProperties.IGNITION_STATE, null, CarPerm.CAR_POWERTRAIN)?.number?.toInt(),
         plugConnected = get(KnownProperties.EV_CHARGE_PORT_CONNECTED, Signal.PLUG, CarPerm.CAR_ENERGY_PORTS)?.value as? Boolean,
         chargeState = ChargeState.fromAosp(get(KnownProperties.EV_CHARGE_STATE, Signal.CHARGE_STATE, CarPerm.CAR_ENERGY)?.number?.toInt()),
         capacityWh = capacityWh,
@@ -80,6 +84,7 @@ class CarVehicleSource(context: Context) : VehicleSource {
         missingPermissions = RUNTIME_NEEDED.filterNot { it in granted },
         missing = missing,
         capacityNominal = capacityNominal,
+        ratedWh = ratedWh,
       ),
     )
   }
@@ -87,16 +92,15 @@ class CarVehicleSource(context: Context) : VehicleSource {
   /** Capacity (usable now if offered, else nominal) and outside temperature: they change slowly. */
   private fun readSlow() {
     val usable = get(KnownProperties.EV_CURRENT_BATTERY_CAPACITY, null, CarPerm.CAR_ENERGY)?.number?.takeIf { it > 0 }
+    val nominal = get(KnownProperties.INFO_EV_BATTERY_CAPACITY, if (usable == null) Signal.CAPACITY else null, CarPerm.CAR_INFO)?.number?.takeIf { it > 0 }
+    ratedWh = nominal ?: ratedWh
     if (usable != null) {
       capacityWh = usable
       capacityNominal = false
       problems[Signal.CAPACITY] = null
-    } else {
-      val nominal = get(KnownProperties.INFO_EV_BATTERY_CAPACITY, Signal.CAPACITY, CarPerm.CAR_INFO)?.number?.takeIf { it > 0 }
-      if (nominal != null) {
-        capacityWh = nominal
-        capacityNominal = true
-      }
+    } else if (nominal != null) {
+      capacityWh = nominal
+      capacityNominal = true
     }
     outsideC = get(KnownProperties.ENV_OUTSIDE_TEMPERATURE, Signal.OUTSIDE_TEMP, CarPerm.CAR_EXTERIOR_ENVIRONMENT)?.number
   }
@@ -149,7 +153,8 @@ class CarVehicleSource(context: Context) : VehicleSource {
 /**
  * The process's one VehicleSession: it outlives LinkService (which is destroyed when the last
  * screen unbinds), so a session survives the dashboard closing and reopening, and only ends with
- * a reset, a demo switch or the process. LinkService hands it to the screens.
+ * a reset, a demo switch or the process. LinkService hands it to the screens, and VehicleWatchService
+ * keeps it running without them.
  */
 object SessionHub {
   @Volatile private var instance: VehicleSession? = null
@@ -166,6 +171,7 @@ object SessionHub {
     // One thread: the session, its tracker and the car source are only touched from it.
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO.limitedParallelism(1) + CoroutineExceptionHandler { _, e -> record(e) })
     val automotive = app.packageManager.hasSystemFeature(PackageManager.FEATURE_AUTOMOTIVE)
+    val settings = AppSettings.get(app)
     // elapsedRealtime, not System.nanoTime: nanoTime stops while the device sleeps, and a sleep must be a gap.
     val session = VehicleSession(scope, SystemClock::elapsedRealtime, { demo, fresh ->
       when {
@@ -174,8 +180,9 @@ object SessionHub {
         else -> UnavailableSource(Feed(FeedKind.NOT_AUTOMOTIVE, CarVehicleSource.NOT_A_CAR))
       }
     }, onFailure = record)
-    val settings = AppSettings.get(app)
     scope.launch { settings.state.map { it.demo }.distinctUntilChanged().collect { session.setDemo(it) } }
+    // Here, not in a service: a reading counts whichever service asked for it.
+    MainScope().launch { session.state.collect { LogHub.get(app).onSession(it) } }
     return session
   }
 }

@@ -14,9 +14,8 @@ import javax.xml.parsers.DocumentBuilderFactory
  * Static guard for the "never alter the vehicle" rule: fails if any non-test source set of the
  * app contains a vehicle-write, content-provider, private-service, process or reflection call,
  * names a car API class outside the read-only allowlist, or declares a permission outside the
- * spec's exact list. It also pins the driver-distraction setup: exactly MainActivity and Battery
- * Glance's CarAppActivity are distraction-optimized (in the source and in the merged manifest), and
- * the glance accepts any template host only in debug builds.
+ * spec's exact list. It also pins the driver-distraction setup: MainActivity alone is
+ * distraction-optimized (in the source and in the merged manifest), and it is the one launcher entry.
  *
  * Rules are regexes over the raw file text (comments and strings included, on purpose), so call
  * forms such as `setProperty<Int>(`, `setProperty (`, `` `setProperty`( `` and `::setProperty`
@@ -63,16 +62,17 @@ class SourceSafetyTest {
     Rule("process exec", """\bRuntime\b|\bProcessBuilder\b"""),
     Rule("GM package", """\bcom\.gm\b"""),
     Rule("explicit component", """\bComponentName\b|\bsetClassName\b|\bsetComponent\b|\bsetPackage\b"""),
-    // Car App Library (Battery Glance): templates only. Its car-hardware API (CarHardwareManager:
-    // climate, sensors, car info through CarPropertyManager) and app launching stay unused; the app
+    // Car App Library: not used since Battery Glance went. Its car-hardware API (CarHardwareManager:
+    // climate, sensors, car info through CarPropertyManager) and app launching stay forbidden; the app
     // reads the car only through the read-only VehicleReader. getCarService is not needed at all.
     Rule(
       "Car App Library hardware / app-launch API",
       """[cC]arHardware|[cC]arClimate|\bAutomotiveCar\w+|\bHARDWARE_SERVICE\b|""" +
         """\bandroidx\.car\.app\.hardware\b|\bgetCarService\b|\bstartCarApp\b""",
     ),
-    // BLE: scan only, everywhere.
+    // BLE: no use at all, everywhere (the MX+ is Bluetooth Classic).
     Rule("BLE connect", """\bconnectGatt\b"""),
+    Rule("BLE scan / advertise", """\b[bB]luetoothLeScanner\b|\bstartScan\b|\bstartLeScan\b|\b[bB]luetoothLeAdvertiser\b"""),
     // Bluetooth Classic to the OBDLink MX+: pairing, discovery and the RFCOMM serial socket, only
     // inside the bt/ package (which wraps the socket in the OBD core's stream link).
     Rule(
@@ -95,13 +95,23 @@ class SourceSafetyTest {
   /**
    * The only exceptions to the rules above, each tied to one file and one exact form: binding this
    * app's own, non-exported LinkService by explicit class (a ServiceConnection's callbacks name
-   * ComponentName). The matched text is blanked before the rules run.
+   * ComponentName), and starting its own, non-exported VehicleWatchService the same way, which the owner
+   * asked for on 2026-11-06. The matched text is blanked before the rules run.
    */
   private val allowances: Map<String, List<Regex>> = mapOf(
     "link/LinkConnection.kt" to listOf(
       Regex("""import android\.content\.ComponentName\n"""),
       Regex("""override fun onService(Connected|Disconnected)\(name: ComponentName\?"""),
       Regex("""\bapp\.bindService\(Intent\(app, LinkService::class\.java\), connection, Context\.BIND_AUTO_CREATE\)"""),
+    ),
+    "vehicle/VehicleWatchService.kt" to listOf(
+      Regex("""\bapp\.startForegroundService\(Intent\(app, VehicleWatchService::class\.java\)\)"""),
+    ),
+    // The hourly job names its own service for JobScheduler; the CSV export writes only the file the user picked.
+    "log/LogScheduler.kt" to listOf(
+      Regex("""import android\.content\.ComponentName\n"""),
+      Regex("""\bJobInfo\.Builder\(JOB_ID, ComponentName\(app, LogJobService::class\.java\)\)"""),
+      Regex("""\bapp\.contentResolver\.openOutputStream\(uri, "wt"\)"""),
     ),
   )
 
@@ -131,10 +141,12 @@ class SourceSafetyTest {
     "android.permission.INTERNET",
     "android.permission.ACCESS_NETWORK_STATE",
     "android.permission.ACCESS_WIFI_STATE",
-    "android.permission.CHANGE_WIFI_STATE",
-    "android.permission.CHANGE_NETWORK_STATE",
     "android.permission.BLUETOOTH_SCAN",
     "android.permission.BLUETOOTH_CONNECT",
+    "android.permission.RECEIVE_BOOT_COMPLETED",
+    // The background service: the right to run one, and no vehicle access (theBackgroundServiceOnlyReadsTheSession).
+    "android.permission.FOREGROUND_SERVICE",
+    "android.permission.FOREGROUND_SERVICE_SPECIAL_USE",
   )
 
   /**
@@ -144,14 +156,12 @@ class SourceSafetyTest {
    */
   private val strippedLibraryPermissions = setOf(
     "android.permission.ACCESS_BACKGROUND_LOCATION",
-    "android.permission.FOREGROUND_SERVICE",
     "android.permission.FOREGROUND_SERVICE_LOCATION",
     "android.permission.POST_NOTIFICATIONS",
     "android.permission.WRITE_EXTERNAL_STORAGE",
     "android.permission.BLUETOOTH",
     "android.permission.BLUETOOTH_ADMIN",
     "android.permission.VIBRATE",
-    "android.permission.RECEIVE_BOOT_COMPLETED",
     "android.permission.WAKE_LOCK",
     "com.google.android.providers.gsf.permission.READ_GSERVICES",
   )
@@ -240,6 +250,11 @@ class SourceSafetyTest {
       "car.getCarManager<Any>(CarHvacManager::class.java)",
       "val m = car::getCarManager",
       "device.connectGatt(ctx, false, cb)",
+      "adapter.bluetoothLeScanner.startScan(cb)",
+      "val s: BluetoothLeScanner? = null",
+      "scanner.startScan(null, settings, cb)",
+      "adapter.startLeScan(cb)",
+      "adapter.bluetoothLeAdvertiser.startAdvertising(s, d, cb)",
       // Bluetooth Classic outside bt/:
       "device.createBond()",
       "device.createRfcommSocketToServiceRecord(uuid)",
@@ -262,6 +277,9 @@ class SourceSafetyTest {
     // Forbidden in bt/ too:
     val mustFailInBt = listOf(
       "device.connectGatt(ctx, false, cb)",
+      "adapter.bluetoothLeScanner.startScan(cb)",
+      "adapter.startLeScan(cb)",
+      "adapter.bluetoothLeAdvertiser.startAdvertising(s, d, cb)",
       "device.javaClass.getMethod(\"createRfcommSocket\", Int::class.java)",
       "device.createRfcommSocket(1)",
       "adapter.listenUsingRfcommWithServiceRecord(\"x\", uuid)",
@@ -301,6 +319,13 @@ class SourceSafetyTest {
       emptyList<String>(),
       violations("override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {", rel = "link/LinkConnection.kt"),
     )
+    // The background service: this one call, in this one file.
+    val watchStart = "app.startForegroundService(Intent(app, VehicleWatchService::class.java))"
+    assertEquals(emptyList<String>(), violations(watchStart, rel = "vehicle/VehicleWatchService.kt"))
+    assertTrue(violations(watchStart, rel = "vehicle/CarVehicleSource.kt").isNotEmpty())
+    assertTrue(violations(watchStart.replace("VehicleWatchService", "OtherService"), rel = "vehicle/VehicleWatchService.kt").isNotEmpty())
+    assertTrue(violations("app.startForegroundService(intent)", rel = "vehicle/VehicleWatchService.kt").isNotEmpty())
+    assertTrue(violations("app.bindService(Intent(app, VehicleWatchService::class.java), c, 0)", rel = "vehicle/VehicleWatchService.kt").isNotEmpty())
     assertTrue(violations("String s = \"x\"; c.\\u0073etFoo();", java = true).isNotEmpty())
 
     // Lines the app legitimately contains.
@@ -318,12 +343,6 @@ class SourceSafetyTest {
       "} catch (e: RuntimeException) {",
       "val cm = context.getSystemService(ConnectivityManager::class.java)",
       "startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, uri))",
-      // Battery Glance (Car App Library templates):
-      "class GlanceCarAppService : CarAppService() {",
-      "override fun onCreateSession(sessionInfo: SessionInfo): Session = GlanceSession()",
-      "return PaneTemplate.Builder(pane.build()).setHeader(header).build()",
-      "CarToast.makeText(carContext, \"Reconnecting…\", CarToast.LENGTH_SHORT).show()",
-      "conn = LinkConnection(carContext, lifecycleScope)",
       // Built-in session sampler:
       "val r = reader.readRaw(id)",
       "private val conn = LinkConnection(app, viewModelScope, obdWanted = store.state.value.tab.needsObd)",
@@ -355,7 +374,7 @@ class SourceSafetyTest {
 
   /**
    * Single write path to the adapter, app-wide: outside the OBD core nothing writes to an adapter
-   * link or stream. Adapter sockets (Bluetooth in bt/, TCP in adapter/) only hand their streams to
+   * link or stream. The adapter socket (Bluetooth, in bt/) only hands its streams to
    * the core's StreamByteLink constructor, so ElmLink.command (reached only through
    * ElmTransport / ElmChannel) stays the one writer. The only other writes in the app are the report
    * upload (an HTTP body to the laptop), the Map tab's web lookups (an HTTP body to Google) and the
@@ -375,6 +394,8 @@ class SourceSafetyTest {
       "map/MapApi.kt" to Regex("""\bconn\.outputStream\.use \{ it\.write\(body\) \}"""),
       // filesDir/last_crash.txt.
       "diag/CrashLog.kt" to Regex("""\bfile\.writeText\("""),
+      // The CSV export, to the file the user picked: not an adapter.
+      "log/LogScheduler.kt" to Regex("""\bout\.bufferedWriter\(\)\.use \{ LogCsv\.appendTo\(rows, it\) \}"""),
     )
     val forbidden = listOf(
       "adapter command" to Regex("""\.command\s*\("""),
@@ -390,10 +411,10 @@ class SourceSafetyTest {
       val rel = relPath(f)
       var text = f.readText()
       val handOffs = streamHandOff.findAll(text).count()
-      if (rel.startsWith("bt/") || rel.startsWith("adapter/")) {
+      if (rel.startsWith("bt/")) {
         text = streamHandOff.replace(text, "")
       } else if (handOffs > 0) {
-        problems += "$rel: only bt/ and adapter/ may wrap a socket in StreamByteLink"
+        problems += "$rel: only bt/ may wrap a socket in StreamByteLink"
       }
       otherWrites[rel]?.let { r ->
         val n = r.findAll(text).count()
@@ -457,7 +478,7 @@ class SourceSafetyTest {
   }
 
   /**
-   * The built-in session (Simple tab, Battery Glance without an adapter) is computed by pure JVM
+   * The built-in session (the Simple tab) is computed by pure JVM
    * code, so its unit tests exercise exactly what ships; only CarVehicleSource touches Android, and
    * it reads the car exclusively through VehicleReader.readRaw (getCarPropertyConfig / getProperty):
    * no CarPropertyManager of its own, no car API class at all.
@@ -467,6 +488,7 @@ class SourceSafetyTest {
     val base = File(srcDir(), "main/kotlin/dev/silveradostats")
     val pure = listOf(
       "vehicle/SessionTracker.kt",
+      "vehicle/ChargeWatch.kt",
       "vehicle/DemoDrive.kt",
       "vehicle/VehicleSession.kt",
       "vehicle/DrivingState.kt",
@@ -548,68 +570,80 @@ class SourceSafetyTest {
       Triple(p.tagName, p.attr("name"), m.attr("value"))
     }
 
-  /**
-   * Two services: the private LinkService (not exported, no intent filter, bound only) and Battery
-   * Glance's CarAppService (exported because the Templates Host binds to it, with exactly the
-   * CarAppService action and the IOT category; createHostValidator decides which hosts may connect).
-   */
+  /** Three services, all private to the app: the log's job, the LinkService and the background service. */
   @Test
-  fun manifestDeclaresOnlyTheLinkServiceAndTheGlanceService() {
+  fun manifestDeclaresOnlyTheAppsOwnPrivateServices() {
     val doc = parse(File(srcDir(), "main/AndroidManifest.xml"))
     val services = elements(doc, "service").associateBy { it.attr("name") }
-    assertEquals(setOf(".link.LinkService", ".glance.GlanceCarAppService"), services.keys)
+    assertEquals(setOf(".link.LinkService", ".log.LogJobService", ".vehicle.VehicleWatchService"), services.keys)
+    for (s in services.values) assertEquals("false", s.attr("exported"))
+    // The log's job: only the system may run it, and nothing outside the app can reach it.
+    val job = services.getValue(".log.LogJobService")
+    assertEquals("false", job.attr("exported"))
+    assertEquals("android.permission.BIND_JOB_SERVICE", job.attr("permission"))
+    assertEquals(0, job.getElementsByTagName("intent-filter").length)
     val link = services.getValue(".link.LinkService")
     assertEquals("false", link.attr("exported"))
     assertEquals("no intent filter on LinkService", 0, link.getElementsByTagName("intent-filter").length)
-    val glance = services.getValue(".glance.GlanceCarAppService")
-    assertEquals("true", glance.attr("exported"))
-    val filters = children(glance, "intent-filter")
-    assertEquals(1, filters.size)
-    assertEquals(listOf("androidx.car.app.CarAppService"), children(filters[0], "action").map { it.attr("name") })
-    assertEquals(listOf("androidx.car.app.category.IOT"), children(filters[0], "category").map { it.attr("name") })
-    assertEquals(0, children(filters[0], "data").size)
-    for (tag in listOf("receiver", "provider")) assertEquals("no <$tag> declared", 0, doc.getElementsByTagName(tag).length)
-    // Bound only: nothing in the app starts a service (the rules forbid start*Service everywhere).
+    assertEquals("no <provider> declared", 0, doc.getElementsByTagName("provider").length)
+    // The rules forbid start*Service everywhere but in this one file and form.
     val start = Regex("""\bstart\w*Service\b""")
-    assertTrue(sources().none { start.containsMatchIn(it.readText()) })
+    assertEquals(listOf("vehicle/VehicleWatchService.kt" to "startForegroundService"), sources().flatMap { f -> start.findAll(f.readText()).map { relPath(f) to it.value }.toList() })
   }
 
   /**
-   * Driver distraction: the distraction-optimized activities are EXACTLY MainActivity (which locks
-   * itself down while restricted; see AndroidWiringTest) and the Car App Library's CarAppActivity
-   * (which shows nothing but the Templates Host's rendering of Battery Glance). No other source set
-   * adds the tag, and no alias could carry it.
+   * The background service, the owner's choice (2026-11-06): private to the app, started only by the app or
+   * the system, and all it does is keep the session of the truck's API sampling. Not a way to the MX+.
+   */
+  @Test
+  fun theBackgroundServiceOnlyReadsTheSession() {
+    val doc = parse(File(srcDir(), "main/AndroidManifest.xml"))
+    val service = elements(doc, "service").single { it.attr("name") == ".vehicle.VehicleWatchService" }
+    assertEquals("false", service.attr("exported"))
+    assertEquals("specialUse", service.attr("foregroundServiceType"))
+    assertEquals(0, service.getElementsByTagName("intent-filter").length)
+    // The one receiver: private, and only what the system itself sends.
+    val receiver = elements(doc, "receiver").single()
+    assertEquals(".vehicle.VehicleWatchStarter", receiver.attr("name"))
+    assertEquals("false", receiver.attr("exported"))
+    val actions = children(receiver, "intent-filter").flatMap { children(it, "action") }.map { it.attr("name") }.toSet()
+    assertEquals(setOf("android.intent.action.BOOT_COMPLETED", "android.intent.action.MY_PACKAGE_REPLACED"), actions)
+    val text = File(srcDir(), "main/kotlin/dev/silveradostats/vehicle/VehicleWatchService.kt").readText()
+    assertEquals(1, allowances.getValue("vehicle/VehicleWatchService.kt")[0].findAll(text).count())
+    // Attached to the session, the one thing it uses of the app's data.
+    assertTrue(text.contains("s.attach(token)"))
+    assertTrue(text.contains("s.setWatching(true)"))
+    val notIn = Regex("""LinkEngine|LinkService|LinkConnection|\bengine\b|\bbt\b|Bluetooth|BtController|\bobd\b|LogHub|\bvisit\b|WakeLock|PowerManager|setProperty""")
+    assertEquals(emptyList<String>(), notIn.findAll(text.substringAfter("class VehicleWatchService")).map { it.value }.toList())
+  }
+
+  /**
+   * Driver distraction: the one distraction-optimized activity is MainActivity, which locks itself down
+   * while restricted (see AndroidWiringTest). No other source set adds the tag, and no alias could carry
+   * it. It is also the one activity, so the app has one entry in the truck's launcher.
    */
   @Test
   fun distractionOptimizedActivitiesAreExactlyTheAllowlist() {
-    val allowed = listOf(Triple("activity", ".MainActivity", "true"), Triple("activity", CAR_APP_ACTIVITY, "true"))
+    val allowed = listOf(Triple("activity", ".MainActivity", "true"))
     for (f in manifests()) {
       val expected = if (f.parentFile?.name == "main") allowed else emptyList()
       assertEquals("distraction-optimized components in $f", expected, distractionOptimized(parse(f)))
     }
     val main = File(srcDir(), "main/AndroidManifest.xml")
-    assertEquals("two distractionOptimized tags in the main manifest", 2, Regex("\"distractionOptimized\"").findAll(main.readText()).count())
+    assertEquals("one distractionOptimized tag in the main manifest", 1, Regex("\"distractionOptimized\"").findAll(main.readText()).count())
     val doc = parse(main)
     assertEquals("no <activity-alias>", 0, doc.getElementsByTagName("activity-alias").length)
     val activities = elements(doc, "activity").associateBy { it.attr("name") }
-    assertEquals(setOf(".MainActivity", CAR_APP_ACTIVITY), activities.keys)
+    assertEquals(setOf(".MainActivity"), activities.keys)
     // The trade-off stays written down next to the flag it explains.
     val text = main.readText()
     val note = text.substring(text.lastIndexOf("<!--", text.indexOf("android:name=\".MainActivity\"")), text.indexOf("android:name=\".MainActivity\""))
     assertTrue("MainActivity's flag explains that it is for internal testing only", note.contains("INTERNAL TESTING ONLY"))
-    assertEquals("the flag is its only meta-data", 1, children(activities.getValue(".MainActivity"), "meta-data").size)
-    // CarAppActivity as Google's Android Automotive guide declares it, with its own launcher label.
-    val car = activities.getValue(CAR_APP_ACTIVITY)
-    assertEquals("true", car.attr("exported"))
-    assertEquals("singleTask", car.attr("launchMode"))
-    assertEquals("@android:style/Theme.DeviceDefault.NoActionBar", car.attr("theme"))
-    assertEquals("@string/glance_name", car.attr("label"))
-    for (a in activities.values) {
-      val filter = children(a, "intent-filter").single()
-      assertEquals(listOf("android.intent.action.MAIN"), children(filter, "action").map { it.attr("name") })
-      assertEquals(listOf("android.intent.category.LAUNCHER"), children(filter, "category").map { it.attr("name") })
-    }
-    assertEquals("Battery Glance", Regex("""<string name="glance_name">([^<]*)</string>""").find(File(srcDir(), "main/res/values/strings.xml").readText())?.groupValues?.get(1))
+    val activity = activities.getValue(".MainActivity")
+    assertEquals("the flag is its only meta-data", 1, children(activity, "meta-data").size)
+    val filter = children(activity, "intent-filter").single()
+    assertEquals(listOf("android.intent.action.MAIN"), children(filter, "action").map { it.attr("name") })
+    assertEquals(listOf("android.intent.category.LAUNCHER"), children(filter, "category").map { it.attr("name") })
   }
 
   @Test
@@ -619,18 +653,13 @@ class SourceSafetyTest {
     assertTrue(manifest.contains("android.hardware.type.automotive\" android:required=\"false\""))
     assertTrue(manifest.contains("<uses-library android:name=\"android.car\" android:required=\"false\""))
     assertTrue(manifest.contains("neverForLocation"))
-    // Templated app (Car App Library): Templates Host declared (not required: regular Play track), automotive_app_desc, min Car API level.
+    // Not a templated app any more: no Templates Host, no automotive_app_desc.
     val doc = parse(f)
     val features = elements(doc, "uses-feature").associate { it.attr("name") to it.attr("required") }
     assertEquals("false", features["android.hardware.type.automotive"])
-    assertEquals("false", features["android.software.car.templates_host"])
-    val meta = children(application(doc), "meta-data").associate { it.attr("name") to it.attr("resource").ifEmpty { it.attr("value") } }
-    assertEquals("@xml/automotive_app_desc", meta["com.android.automotive"])
-    val minApi = meta["androidx.car.app.minCarApiLevel"]?.toIntOrNull()
-    assertTrue("androidx.car.app.minCarApiLevel declared", minApi != null && minApi >= 1)
-    val desc = parse(File(srcDir(), "main/res/xml/automotive_app_desc.xml"))
-    assertEquals("automotiveApp", desc.documentElement.tagName)
-    assertEquals(listOf("template"), elements(desc, "uses").map { it.getAttribute("name") })
+    assertFalse(features.containsKey("android.software.car.templates_host"))
+    // The only application meta-data: the Map tab's key for the bundled Google map.
+    assertEquals(listOf("com.google.android.geo.API_KEY"), children(application(doc), "meta-data").map { it.attr("name") })
   }
 
   /**
@@ -660,13 +689,12 @@ class SourceSafetyTest {
       assertEquals(own, p.attr("name"))
       assertEquals("signature", p.attr("protectionLevel"))
     }
-    // Distraction optimized: these two only (the library's CarAppPermissionActivity is not).
-    assertEquals(
-      listOf(Triple("activity", "dev.silveradostats.MainActivity", "true"), Triple("activity", CAR_APP_ACTIVITY, "true")),
-      distractionOptimized(doc),
-    )
-    // Exported components: the two launcher entries, the glance service, and the profile installer
-    // receiver (only callable with android.permission.DUMP, i.e. by the shell / system).
+    // Distraction optimized: this one only.
+    assertEquals(listOf(Triple("activity", "dev.silveradostats.MainActivity", "true")), distractionOptimized(doc))
+    // One entry in the truck's launcher, whatever a library brings along.
+    assertEquals(1, elements(doc, "category").count { it.attr("name") == "android.intent.category.LAUNCHER" })
+    // Exported components: the launcher entry and the profile installer receiver (only callable with
+    // android.permission.DUMP, i.e. by the shell / system).
     val exported = listOf("activity", "activity-alias", "service", "receiver", "provider").flatMap { tag ->
       elements(doc, tag)
         .filter { it.attr("exported") == "true" || (it.attr("exported").isEmpty() && children(it, "intent-filter").isNotEmpty()) }
@@ -675,71 +703,20 @@ class SourceSafetyTest {
     assertEquals(
       setOf(
         "activity dev.silveradostats.MainActivity",
-        "activity $CAR_APP_ACTIVITY",
-        "service dev.silveradostats.glance.GlanceCarAppService",
         "receiver androidx.profileinstaller.ProfileInstallReceiver (android.permission.DUMP)",
       ),
       exported,
     )
     val features = elements(doc, "uses-feature").associate { it.attr("name") to it.attr("required") }
     assertEquals("false", features["android.hardware.type.automotive"])
-    assertEquals("false", features["android.software.car.templates_host"])
+    assertFalse(features.containsKey("android.software.car.templates_host"))
     for (optional in listOf("android.hardware.wifi", "android.hardware.screen.portrait", "android.hardware.screen.landscape")) {
       assertEquals("$optional must not be required (Play AAOS rule)", "false", features[optional])
     }
   }
 
-  /** Any host only in debug builds; release builds accept the library's allowlisted hosts only. */
-  @Test
-  fun glanceAcceptsAnyHostOnlyInDebugBuilds() {
-    val hits = sources().filter { it.readText().contains("ALLOW_ALL_HOSTS_VALIDATOR") }.map { relPath(it) }
-    assertEquals(listOf("glance/GlanceCarAppService.kt"), hits)
-    val text = File(srcDir(), "main/kotlin/dev/silveradostats/glance/GlanceCarAppService.kt").readText()
-    assertEquals(1, Regex("ALLOW_ALL_HOSTS_VALIDATOR").findAll(text).count())
-    val validator = Regex(
-      """override fun createHostValidator\(\): HostValidator =\s*if \(BuildConfig\.DEBUG\) \{\s*HostValidator\.ALLOW_ALL_HOSTS_VALIDATOR\s*\}""" +
-        """\s*else \{\s*HostValidator\.Builder\(applicationContext\)\s*\.addAllowedHosts\(R\.array\.car_app_hosts_allowlist\)""" +
-        """\s*\.build\(\)\s*\}""",
-    )
-    assertTrue("createHostValidator must allow every host only when BuildConfig.DEBUG", validator.containsMatchIn(text))
-    val all = sources().joinToString("\n") { it.readText() }
-    assertEquals(1, Regex("""\bfun createHostValidator\b""").findAll(all).count())
-    assertEquals(1, Regex("""\baddAllowedHost""").findAll(all).count())
-    // The release allowlist: only the Android Automotive Templates Host, each "SHA-256 digest,package".
-    val res = parse(File(srcDir(), "main/res/values/car_app_hosts.xml"))
-    val arrays = elements(res, "string-array").filter { it.getAttribute("name") == "car_app_hosts_allowlist" }
-    val items = arrays.single().getElementsByTagName("item").let { n -> (0 until n.length).map { n.item(it).textContent.trim() } }
-    assertTrue(items.isNotEmpty())
-    for (item in items) {
-      assertTrue("allowlist entry '$item'", Regex("""[0-9a-f]{64},com\.google\.android\.apps\.automotive\.templates\.host""").matches(item))
-    }
-    // BuildConfig.DEBUG is false in release only as long as the release build type is not debuggable.
-    val gradle = File(srcDir().absoluteFile.parentFile, "build.gradle.kts").readText()
-    assertFalse(Regex("""isDebuggable\s*=\s*true""").containsMatchIn(gradle))
-  }
-
-  /**
-   * Battery Glance holds the link only while the host shows it: it binds LinkService (through
-   * LinkConnection) when the screen is created, attaches as a visible client on onStart, detaches
-   * on onStop and unbinds on onDestroy.
-   */
-  @Test
-  fun glanceKeepsTheLinkOnlyWhileVisible() {
-    val text = File(srcDir(), "main/kotlin/dev/silveradostats/glance/GlanceScreen.kt").readText()
-    fun body(fn: String): String =
-      Regex("""override fun $fn\(owner: LifecycleOwner\) \{([^}]*)\}""").find(text)?.groupValues?.get(1)?.trim()?.replace(Regex("\\s+"), " ")
-        ?: error("no $fn in GlanceScreen.kt")
-    assertEquals("conn = LinkConnection(carContext, lifecycleScope)", body("onCreate"))
-    assertEquals("conn?.setVisible(true)", body("onStart"))
-    assertEquals("conn?.setVisible(false)", body("onStop"))
-    assertEquals("conn?.close() conn = null", body("onDestroy"))
-    assertEquals(1, Regex("""\bLinkConnection\(""").findAll(text).count())
-    assertEquals(1, Regex("""setVisible\(true\)""").findAll(text).count())
-  }
-
   private companion object {
     const val ANDROID_NS = "http://schemas.android.com/apk/res/android"
     const val TOOLS_NS = "http://schemas.android.com/tools"
-    const val CAR_APP_ACTIVITY = "androidx.car.app.activity.CarAppActivity"
   }
 }

@@ -66,6 +66,20 @@ class UltiumSim:
                 return _u16(s["soc"] * 655.35)
             if did == 0x27AF:
                 return _u16(s["soc"] / 100 * 205.4 * 100)
+            if did == 0x27AE:
+                return _u16(20520.0)
+            if did == 0x4676:
+                return _u16(59340.0)
+            if did == 0x27B9:
+                return bytes.fromhex("001566")
+            if did == 0x2984:
+                return bytes.fromhex("2041")
+            if did == 0x270D:
+                return bytes.fromhex("0fa0")
+            if did == 0x28AF:
+                return bytes.fromhex("2710")
+            if did == 0x2770:
+                return bytes.fromhex("16")
             if did == 0x27C7:
                 return int(s["soc"] / 100 * 440 * 103).to_bytes(3, "big")
             if did == 0x27C0:

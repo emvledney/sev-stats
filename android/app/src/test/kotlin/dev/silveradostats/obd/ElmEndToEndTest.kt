@@ -11,7 +11,7 @@ import org.junit.Test
 
 /**
  * The ELM transport end to end against [FakeElm] over the stream abstraction ([StreamByteLink] on
- * a loopback socket, the same shape as a BluetoothSocket). Port of ElmTcpEndToEnd plus the link
+ * a loopback socket, the same shape as a BluetoothSocket). Port of ElmSocketEndToEnd plus the link
  * discipline cases (settle, resync, stale output, STOPPED, echo, banner, rejected settings).
  */
 class ElmEndToEndTest {

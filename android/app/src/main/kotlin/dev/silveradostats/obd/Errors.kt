@@ -23,7 +23,7 @@ open class FatalTransportError(message: String, cause: Throwable? = null) : Tran
  * an adapter that reset, errored or rejected a setting, which always waits for the user.
  */
 
-/** The connection itself failed or closed (Bluetooth / TCP dropped). Fatal for this link. */
+/** The connection itself failed or closed (Bluetooth dropped). Fatal for this link. */
 class LinkLostError(message: String, cause: Throwable? = null) : FatalTransportError(message, cause)
 
 /** No prompt within the timeout; the link is dirty until it resyncs. */

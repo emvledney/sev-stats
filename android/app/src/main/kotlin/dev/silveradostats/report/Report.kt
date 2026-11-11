@@ -1,7 +1,6 @@
 package dev.silveradostats.report
 
 import dev.silveradostats.DiagState
-import dev.silveradostats.ble.BleScan
 import dev.silveradostats.bt.BtErrors
 import dev.silveradostats.bt.BtUiState
 import dev.silveradostats.diag.KV
@@ -14,6 +13,7 @@ import dev.silveradostats.vehicle.EffUnits
 import dev.silveradostats.vehicle.Fmt
 import dev.silveradostats.vehicle.PropertyRow
 import dev.silveradostats.vehicle.SessionState
+import dev.silveradostats.vehicle.SignalVerdict
 import org.json.JSONArray
 import org.json.JSONObject
 import java.text.SimpleDateFormat
@@ -29,7 +29,7 @@ data class MxReport(val settings: UiSettings, val bt: BtUiState, val live: LiveS
 
 /** Builds the JSON report of everything on the Diagnostics screen. */
 object Report {
-  const val SCHEMA = "silverado-stats/diagnostics/2"
+  const val SCHEMA = "silverado-stats/diagnostics/3"
 
   fun build(s: DiagState, appId: String, versionName: String, versionCode: Int, mx: MxReport? = null): String {
     val root = JSONObject()
@@ -90,10 +90,8 @@ object Report {
     root.put("display", kv(s.display))
     root.put("displayCompose", kv(s.composeDisplay))
     root.put("network", kv(s.network))
-    root.put("adapterTest", s.adapterResult?.let(::linkCheck) ?: JSONObject.NULL)
     root.put("mxLink", mx?.let(::mxLink) ?: JSONObject.NULL)
     root.put("builtInSession", mx?.session?.let(::session) ?: JSONObject.NULL)
-    root.put("bleScan", s.bleResult?.let(::ble) ?: JSONObject.NULL)
     return root.toString(2)
   }
 
@@ -118,7 +116,7 @@ object Report {
     .put("permissions", r.permissions)
     .put("permissionGranted", r.permissionGranted ?: JSONObject.NULL)
 
-  /** Init-only adapter check (TCP or MX+). Bluetooth addresses are masked to their vendor part. */
+  /** Init-only adapter check (the MX+ Test link). Bluetooth addresses are masked to their vendor part. */
   fun linkCheck(r: LinkCheckResult): JSONObject = JSONObject()
     .put("target", BtErrors.maskAddressesIn(r.target))
     .put("ok", r.ok)
@@ -204,30 +202,32 @@ object Report {
       .put("charging", s.charging)
       .put("efficiency", s.efficiency.status.name)
       .put("efficiencyEarly", s.efficiency.early)
+      .put("warmupLeftMs", s.efficiency.warmupLeftMs)
       .put("miPerKwh", n(s.efficiency.mPerWh?.let(EffUnits::miPerKwh)))
+      .put("recentMiPerKwh", n(s.recentEfficiency.mPerWh?.let(EffUnits::miPerKwh)))
       .put("basisM", n(s.efficiency.basisM))
       .put("basisWh", n(s.efficiency.basisWh))
       .put("levelStepWh", n(s.levelStepWh))
-      .put("powerSource", s.power?.source?.name ?: JSONObject.NULL)
-      .put("powerKw", n(s.power?.kw))
+      .put("energySource", s.energySource.name)
+      .put("energyOutWh", n(s.energyOutWh))
+      .put("energyInWh", n(s.energyInWh))
+      .put("levelUsedWh", n(s.levelUsedWh))
       .put("chargeRateSeenNonZero", s.chargeRateSeenNonZero)
-      // Rate against level (+ discharge): disagreements mean the rate's sign is not the AOSP one, or it is stuck.
-      .put(
-        "chargeRateCheck",
-        JSONObject()
-          .put("agreed", s.rateCheck.agreed)
-          .put("disagreed", s.rateCheck.disagreed)
-          .put("lastRateKw", n(s.rateCheck.lastRateKw))
-          .put("lastLevelKw", n(s.rateCheck.lastLevelKw)),
-      )
-      .put("peakDischargeKw", n(s.peakDischargeKw))
-      .put("peakRegenKw", n(s.peakRegenKw))
+      // Each power signal against the battery level: sign -1 means it runs opposite to its documented sign, 0 not trusted.
+      .put("chargeRateCheck", verdict(s.chargeRateCheck))
+      .put("mxPackCheck", verdict(s.mxPackCheck))
       .put("levelWh", n(s.levelWh))
       .put("capacityWh", n(s.capacityWh))
+      .put("ratedWh", n(s.feed.ratedWh))
       .put("rangeM", n(s.rangeM))
+      .put("rangeEstimateM", n(s.rangeEstimate?.m))
+      .put("rangeMiPerKwh", n(s.rangeEstimate?.mPerWh?.let(EffUnits::miPerKwh)))
       .put("outsideC", n(s.outsideC))
       .put("gear", s.gear ?: JSONObject.NULL)
   }
+
+  private fun verdict(v: SignalVerdict): JSONObject =
+    JSONObject().put("signalWh", v.signalWh).put("levelWh", v.levelWh).put("sign", v.sign)
 
   /** Decoded OBD value as JSON: VIN-shaped text masked, non-finite numbers as text (JSON has none). */
   private fun jsonValue(v: Any?): Any = when (v) {
@@ -238,27 +238,6 @@ object Report {
     is List<*> -> JSONArray().also { a -> v.forEach { a.put(jsonValue(it)) } }
     else -> v
   }
-
-  private fun ble(r: BleScan.Result): JSONObject = JSONObject()
-    .put("ok", r.ok)
-    .put("error", r.error ?: JSONObject.NULL)
-    .put("durationMs", r.durationMs)
-    .put(
-      "devices",
-      JSONArray().also { a ->
-        r.devices.forEach {
-          a.put(
-            JSONObject()
-              .put("address", it.address)
-              .put("name", it.name ?: JSONObject.NULL)
-              .put("rssi", it.rssi)
-              .put("serviceUuids", JSONArray(it.serviceUuids))
-              .put("connectable", it.connectable)
-              .put("seen", it.seen),
-          )
-        }
-      },
-    )
 
   /** Key/value list as an object (insertion order kept); duplicate keys get a suffix. */
   private fun kv(list: List<KV>): JSONObject {
