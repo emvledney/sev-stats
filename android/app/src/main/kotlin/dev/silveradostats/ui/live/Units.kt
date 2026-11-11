@@ -12,6 +12,10 @@ enum class TempUnit(val symbol: String) { C("°C"), F("°F") }
 enum class DistUnit(val symbol: String) { MI("mi"), KM("km") }
 
 object Units {
+  /** What every screen shows, by the owner's choice (2026-11-06): no toggle, no locale, no saved setting. */
+  val TEMP = TempUnit.F
+  val DIST = DistUnit.MI
+
   const val KM_PER_MILE = 1.609344
   const val METERS_PER_MILE = 1609.344
   const val MINUS = "−"
@@ -30,11 +34,6 @@ object Units {
   /** "187.6 mi" / "301.9 km" from miles. */
   fun distText(miles: Double?, u: DistUnit, decimals: Int = 0): String =
     if (miles == null || !miles.isFinite()) DASH else "${num(distFromMiles(miles, u), decimals)} ${u.symbol}"
-
-  /** Fahrenheit and miles where the dash shows them (US, Liberia, Myanmar); miles + °C in the UK. */
-  fun defaultTemp(locale: Locale): TempUnit = if (locale.country in FAHRENHEIT) TempUnit.F else TempUnit.C
-
-  fun defaultDist(locale: Locale): DistUnit = if (locale.country in MILES) DistUnit.MI else DistUnit.KM
 
   /** Fixed decimals, US digits, a real minus sign, and never "-0.0". */
   fun num(x: Double, decimals: Int): String {
@@ -60,7 +59,4 @@ object Units {
   }
 
   const val DASH = "—"
-
-  private val FAHRENHEIT = setOf("US", "LR", "MM", "BS", "BZ", "KY", "PW", "FM", "MH")
-  private val MILES = setOf("US", "GB", "LR", "MM")
 }

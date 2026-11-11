@@ -100,9 +100,10 @@ class SessionHardeningTest {
     assertFalse("no charger at the thaw", s.charging)
     assertEquals(0.0, s.chargedWh, 0.0)
     assertEquals(1, s.gaps)
+    // Stood parked for the hour: driving off is a new drive.
     d.run(120.0, 25.0, kw)
     s = d.s()
-    assertEquals(used + kw * 1000 * 120 / 3600, s.usedWh, 20.0)
+    assertEquals(kw * 1000 * 120 / 3600, s.usedWh, 20.0)
     assertEquals(2.3, eff(s), 0.03)
   }
 
@@ -359,13 +360,7 @@ class SessionHardeningTest {
       if (e.status == EffStatus.OK) {
         val short = e.basisM < SessionTracker.EARLY_M || e.basisWh < SessionTracker.EARLY_WH
         assertEquals(short, e.early)
-        if (e.early) {
-          earlySeen = true
-          assertNull(s.rangeAtMeasuredM)
-        } else {
-          settled = true
-          assertNotNull(s.rangeAtMeasuredM)
-        }
+        if (e.early) earlySeen = true else settled = true
       }
       rel += 500
     }
@@ -383,7 +378,7 @@ class SessionHardeningTest {
     assertEquals(EffStatus.OK, high.efficiency.status)
     assertFalse(high.efficiency.early)
     assertTrue(EffUnits.miPerKwh(high.efficiency.mPerWh!!) > 6.0)
-    assertNull("no 3000 mi range", high.rangeAtMeasuredM)
+    assertNull("no 3000 mi range", high.rangeEstimate)
 
     // Net regen after the figure was OK: it says so, it does not start warming up again.
     val f = Truck()
@@ -394,7 +389,7 @@ class SessionHardeningTest {
     val s = f.s()
     assertEquals(EffStatus.NET_REGEN, s.efficiency.status)
     assertNull(s.efficiency.mPerWh)
-    assertNull(s.rangeAtMeasuredM)
+    assertNull(s.rangeEstimate)
     assertEquals(1.0, s.efficiency.progress, 0.0)
     assertEquals(mi(s.distanceM), mi(s.efficiency.basisM), 0.05)
     // A new session starts cold.
@@ -403,16 +398,14 @@ class SessionHardeningTest {
   }
 
   @Test
-  fun theWarmUpReportsWhatItReallyNeeds() {
+  fun aCoarseLevelNeedsMoreEnergyBeforeAFigure() {
     val d = Truck()
     d.rate = { null } // on the level alone
     d.quantWh = 1_000.0
     d.run(300.0, 25.0, kwFor(25.0, 2.3))
     val s = d.s()
     assertEquals(1_000.0, s.levelStepWh!!, 0.0)
-    assertEquals(3_000.0, s.efficiency.needWh, 0.0)
     assertEquals(EffStatus.WARMING_UP, s.efficiency.status)
-    assertEquals(SessionTracker.WARMUP_WH, SessionTracker { 0L }.snapshot().efficiency.needWh, 0.0)
   }
 
   @Test
@@ -436,7 +429,6 @@ class SessionHardeningTest {
     d.quantWh = 500.0
     d.run(600.0, 25.0, kwFor(25.0, 2.3))
     val e = d.s().efficiency
-    assertTrue(e.atM in (d.s().distanceM - 5_000)..d.s().distanceM)
     assertEquals(e.basisM / e.basisWh, e.mPerWh!!, 1e-9)
   }
 

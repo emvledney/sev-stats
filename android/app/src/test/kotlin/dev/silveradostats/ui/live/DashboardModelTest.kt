@@ -423,17 +423,6 @@ class DashboardModelTest {
     assertEquals("0 ms", Units.age(-5))
   }
 
-  @Test
-  fun defaultUnitsFollowTheLocale() {
-    assertEquals(TempUnit.F, Units.defaultTemp(Locale.US))
-    assertEquals(DistUnit.MI, Units.defaultDist(Locale.US))
-    assertEquals(TempUnit.C, Units.defaultTemp(Locale.UK))
-    assertEquals(DistUnit.MI, Units.defaultDist(Locale.UK))
-    assertEquals(TempUnit.C, Units.defaultTemp(Locale.GERMANY))
-    assertEquals(DistUnit.KM, Units.defaultDist(Locale.GERMANY))
-    assertEquals(DistUnit.KM, Units.defaultDist(Locale.CANADA))
-  }
-
   private companion object {
     const val NOW = 1_000_000L
     const val MAX_DRIVING_LINE = 24

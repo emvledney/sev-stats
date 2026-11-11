@@ -9,12 +9,14 @@ import dev.silveradostats.link.AppSettings
 import dev.silveradostats.link.AppTab
 import dev.silveradostats.link.LinkConnection
 import dev.silveradostats.link.LiveState
+import dev.silveradostats.link.MxAction
 import dev.silveradostats.link.UiSettings
+import dev.silveradostats.log.LogHub
 import dev.silveradostats.report.MxReport
-import dev.silveradostats.ui.live.DistUnit
-import dev.silveradostats.ui.live.TempUnit
+import dev.silveradostats.vehicle.DemoDrive
 import dev.silveradostats.vehicle.DrivingInputs
 import dev.silveradostats.vehicle.DrivingMonitor
+import dev.silveradostats.vehicle.LastCharge
 import dev.silveradostats.vehicle.SessionState
 import dev.silveradostats.vehicle.heldWhile
 import kotlinx.coroutines.flow.SharingStarted
@@ -26,14 +28,15 @@ import kotlinx.coroutines.launch
 
 /**
  * The Simple tab's, the Live dashboard's and the MX+ section's view of LinkService. Binds for the
- * ViewModel's lifetime (the built-in session stays attached with another app in front, for as long
- * as Android does not freeze the process, and stops by itself when nothing is visible and the truck
- * is not moving); OBD polling runs only while [setVisible] is true (MainActivity: onStart … onStop)
+ * ViewModel's lifetime (the built-in session stays attached with another app in front; VehicleWatchService
+ * is what keeps it sampling then); OBD polling runs only while [setVisible] is true (MainActivity: onStart … onStop)
  * and the selected tab uses OBD data (UiSettings.wantsObd: not Diagnostics while it is a text panel).
  *
- * [restricted] is the one driving state of the main screen. While it is true the screens offer only
- * the Simple / Live tabs, the layout selector and the MX+ button, and every other action here is refused as well
- * ([parkedOnly]), so a stale tap cannot change anything from behind the driving layout.
+ * [restricted] is the one driving state of the main screen. Simple's header works the same in every
+ * gear, by the owner's choice: its tabs, Reset session and the MX+ button. Beyond that,
+ * while it is true Live hides its controls and Trends and Diagnostics are one text panel, and every
+ * other action here is refused as well ([parkedOnly]), so a stale tap cannot start anything from
+ * behind the driving state.
  */
 class LiveViewModel(app: Application) : AndroidViewModel(app) {
   private val store = AppSettings.get(app)
@@ -63,6 +66,16 @@ class LiveViewModel(app: Application) : AndroidViewModel(app) {
   val shownLive: StateFlow<LiveState> =
     conn.live.heldWhile(restricted).stateIn(viewModelScope, SharingStarted.Eagerly, conn.live.value)
 
+  /** The last charge the Simple tab shows: the demo's in demo mode, which is never saved. */
+  val lastCharge: StateFlow<LastCharge?> =
+    combine(LogHub.get(app).lastCharge, store.state, shownSession) { c, s, session -> if (s.demo) DemoDrive.lastCharge(session.distanceM) else c }
+      .stateIn(viewModelScope, SharingStarted.Eagerly, if (store.state.value.demo) DemoDrive.LAST_CHARGE else LogHub.get(app).lastCharge.value)
+
+  /** What the MX+ button offers now, from the same figures the screens draw. */
+  val mxAction: StateFlow<MxAction> =
+    combine(store.state, shownLive) { s, l -> MxAction.of(s.mxOff, l) }
+      .stateIn(viewModelScope, SharingStarted.Eagerly, MxAction.of(store.state.value.mxOff, shownLive.value))
+
   init {
     // Also covers a service that binds after the restriction began.
     viewModelScope.launch {
@@ -85,7 +98,6 @@ class LiveViewModel(app: Application) : AndroidViewModel(app) {
 
   /** Selects (and remembers) a tab. */
   fun selectTab(t: AppTab) {
-    if (t == AppTab.DIAGNOSTICS && restricted.value) return
     store.setTab(t)
   }
 
@@ -95,7 +107,7 @@ class LiveViewModel(app: Application) : AndroidViewModel(app) {
   }
 
   /** "Reset session": distance, energy and charts start again from now. */
-  fun resetSession() = parkedOnly {
+  fun resetSession() {
     conn.service.value?.vehicle?.reset()
   }
 
@@ -104,14 +116,16 @@ class LiveViewModel(app: Application) : AndroidViewModel(app) {
   }
 
   /**
-   * Disconnect (true) / Connect (false): the MX+ stays free for other devices until Connect, app
-   * restarts included. Allowed while driving: the phone may need Bluetooth back on the road.
+   * The MX+ button, given the action it showed so a tap does what its label said. Cancel and Disconnect
+   * leave the MX+ free for other devices until Connect, app restarts included. Allowed while driving:
+   * the phone may need Bluetooth back on the road, and a dropped link can be brought back.
    */
-  fun setMxOff(off: Boolean) = store.setMxOff(off)
-
-  fun setTempUnit(u: TempUnit) = parkedOnly { store.setTempUnit(u) }
-
-  fun setDistUnit(u: DistUnit) = parkedOnly { store.setDistUnit(u) }
+  fun onMxAction(action: MxAction) {
+    when (action) {
+      MxAction.CONNECT -> if (store.state.value.mxOff) store.setMxOff(false) else conn.service.value?.engine?.retry()
+      MxAction.CANCEL, MxAction.DISCONNECT -> store.setMxOff(true)
+    }
+  }
 
   fun setDemo(on: Boolean) = parkedOnly { store.setDemo(on) }
 

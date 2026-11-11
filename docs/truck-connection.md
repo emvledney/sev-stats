@@ -42,7 +42,7 @@ mkdir -p logs/session2
 1. Plug the MX+ into the OBD port, through the extension or breakout if you have one. Its lights come on.
 2. **Nothing else may hold the MX+.** It serves one host at a time.
    - **Phone:** close the OBD app, or turn the phone's Bluetooth off for the session. Your phone will otherwise grab it.
-   - **Head-unit app:** it holds the MX+ while Simple, Live, Battery Glance or Diagnostics (in Park) is open with an MX+ chosen, and for about 15 s after. Tap **Disconnect MX+** before you start. From 0.6.0, closing the app isn't enough: the hourly job can still connect while the ignition is on.
+   - **Head-unit app:** it holds the MX+ while Simple, Live or Diagnostics (in Park) is open with an MX+ chosen, and for about 15 s after. Tap **Disconnect MX+** before you start. If the link has failed and the button reads **Connect MX+**, the app is still retrying: tap **Stop trying** under Diagnostics › OBDLink MX+ link. From 0.6.0, closing the app isn't enough: the hourly job can still connect while the ignition is on.
 3. On the laptop, open `bluetoothctl` and pair. Commands after the first line are typed inside `bluetoothctl`:
    ```bash
    bluetoothctl

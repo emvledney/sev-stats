@@ -31,6 +31,7 @@ import dev.silveradostats.bt.BtDevice
 import dev.silveradostats.diag.KV
 import dev.silveradostats.link.LinkCheckResult
 import dev.silveradostats.link.MonoClock
+import dev.silveradostats.link.MxAction
 import dev.silveradostats.ui.live.DashboardModel
 import dev.silveradostats.ui.live.Tone
 import dev.silveradostats.ui.live.Units
@@ -47,6 +48,7 @@ internal fun MxLinkSection(vm: LiveViewModel, onRequestPermissions: () -> Unit) 
   val bt by vm.bt.collectAsStateWithLifecycle()
   val live by vm.live.collectAsStateWithLifecycle()
   val settings by vm.settings.collectAsStateWithLifecycle()
+  val mxAction by vm.mxAction.collectAsStateWithLifecycle()
   val now by produceState(MonoClock.ms(), bt.discovering) {
     while (true) {
       value = MonoClock.ms()
@@ -64,9 +66,14 @@ internal fun MxLinkSection(vm: LiveViewModel, onRequestPermissions: () -> Unit) 
     Row(horizontalArrangement = Arrangement.spacedBy(16.dp), verticalAlignment = Alignment.CenterVertically) {
       Badge(chip, toneColor(tone))
       Text(live.message, Modifier.weight(1f), style = MaterialTheme.typography.bodyLarge)
-      if (live.canRetry) BigButton("Retry", onClick = vm::retry)
-      if (!settings.demo && settings.mxAddress != null) {
-        BigButton(if (settings.mxOff) "Connect" else "Disconnect", onClick = { vm.setMxOff(!settings.mxOff) })
+      if (settings.demo) {
+        if (live.canRetry) BigButton("Retry", onClick = vm::retry)
+      } else if (settings.mxAddress != null) {
+        BigButton(mxAction.label, onClick = { vm.onMxAction(mxAction) })
+        // A failed link keeps retrying by itself: this is how to make it stop before it gets through.
+        if (mxAction == MxAction.CONNECT && !settings.mxOff) {
+          OutlinedButton(onClick = { vm.onMxAction(MxAction.CANCEL) }, modifier = Modifier.heightIn(min = 56.dp)) { Text("Stop trying") }
+        }
       }
     }
     live.adapter?.let { Text("Link: $it", style = MaterialTheme.typography.bodyMedium, color = TextDim) }
@@ -77,7 +84,7 @@ internal fun MxLinkSection(vm: LiveViewModel, onRequestPermissions: () -> Unit) 
       Column(Modifier.weight(1f)) {
         Text("Demo data (simulated truck)", style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold)
         Text(
-          "Uses the built-in simulator instead of the MX+; the dashboard shows a DEMO DATA banner. " +
+          "Uses the built-in simulator instead of the MX+. Nothing on Simple says so: its figures are made up while this is on. " +
             "On by default on emulators and non-car devices.",
           style = MaterialTheme.typography.bodySmall,
           color = TextDim,

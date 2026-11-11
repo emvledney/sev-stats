@@ -99,13 +99,8 @@ class SessionTrackerTest {
     assertEquals(600_000L - 500, s.activeMs)
     assertEquals(25.0, s.avgSpeedMps!!, 0.05)
     assertEquals(0, s.gaps)
-    // One series point per 0.1 mi after the first mile; all close to 2.3.
-    val expected = (mi(s.distanceM) * 10).toInt() - 10
-    assertTrue("${s.series.size} vs $expected", abs(s.series.size - expected) <= 2)
-    s.series.forEach { assertEquals(2.3, EffUnits.miPerKwh(it.mPerWh), 0.05) }
-    assertEquals(0.1 * EffUnits.METERS_PER_MILE, s.series[1].distM - s.series[0].distM, 1e-6)
-    // Range at the measured efficiency: remaining Wh x m/Wh.
-    assertEquals(s.levelWh!! * s.efficiency.mPerWh!!, s.rangeAtMeasuredM!!, 1e-6)
+    // Range: remaining Wh x the last 15 minutes' m/Wh, here the whole drive.
+    assertEquals(s.levelWh!! * s.distanceM / s.usedWh, s.rangeEstimate!!.m, s.rangeEstimate!!.m * 0.01)
     // Energy from the charge-rate property once it has agreed with the level.
     assertEquals(EnergySource.CHARGE_RATE, s.energySource)
     assertTrue(s.chargeRateSeenNonZero)
@@ -121,9 +116,7 @@ class SessionTrackerTest {
     var s = d.state()
     assertEquals(EffStatus.WARMING_UP, s.efficiency.status)
     assertNull(s.efficiency.mPerWh)
-    assertNull(s.rangeAtMeasuredM)
     assertEquals(0.5, s.efficiency.progress, 0.03)
-    assertTrue(s.series.isEmpty())
     d.run(36.0, 25.0, kwFor(25.0, 2.3)) // past 1 mi, ~0.46 kWh
     s = d.state()
     assertEquals(EffStatus.OK, s.efficiency.status)
@@ -182,15 +175,17 @@ class SessionTrackerTest {
     d.plug = true
     d.chargeState = ChargeState.CHARGING
     d.run(600.0, 0.0, -60.0) // +10 kWh at a DC charger
-    assertTrue(d.state().charging)
+    var s = d.state()
+    assertTrue(s.charging)
+    assertEquals(10_000.0, s.chargedWh, 30.0)
+    assertEquals(used1 + 0.5 * 1000 * 10 / 3600, s.usedWh, 30.0)
     d.plug = false
     d.chargeState = ChargeState.NOT_CHARGING
-    d.run(130.0, 25.0, kw) // ~2 mi
-    val s = d.state()
+    d.run(130.0, 25.0, kw) // ~2 mi: a new drive, so only this counts
+    s = d.state()
     assertFalse(s.charging)
-    assertEquals(10_000.0, s.chargedWh, 30.0)
-    val expectedUsed = used1 + 0.5 * 1000 * 10 / 3600 + kw * 1000 * 130 / 3600
-    assertEquals(expectedUsed, s.usedWh, 30.0)
+    assertEquals(0.0, s.chargedWh, 0.0)
+    assertEquals(kw * 1000 * 130 / 3600, s.usedWh, 30.0)
     assertEquals(2.5, eff(s), 0.05)
   }
 
@@ -209,11 +204,12 @@ class SessionTrackerTest {
     assertTrue(s.charging)
     // The first 0.2 kWh of rise (before the detection) is not counted as negative use.
     assertEquals(used1 + 0.3 * 5 / 3.6, s.usedWh, 5.0)
-    d.run(130.0, 25.0, kw) // drives away: charging ends, accounting resumes
+    assertEquals(11.0 * 600 / 3.6, s.chargedWh, 10.0)
+    d.run(130.0, 25.0, kw) // drives away: charging ends, and this is a new drive
     s = d.state()
     assertFalse(s.charging)
-    assertEquals(11.0 * 600 / 3.6, s.chargedWh, 10.0)
-    assertEquals(used1 + 0.3 * 5 / 3.6 + kw * 1000 * 130 / 3600, s.usedWh, 10.0)
+    assertEquals(0.0, s.chargedWh, 0.0)
+    assertEquals(kw * 1000 * 130 / 3600, s.usedWh, 10.0)
     assertEquals(2.5, eff(s), 0.05)
   }
 
@@ -233,11 +229,11 @@ class SessionTrackerTest {
     e.plug = true
     e.chargeState = ChargeState.CHARGING
     e.run(300.0, 0.0, -11.0)
+    assertEquals(11.0 * 300 / 3.6, e.state().chargedWh, 10.0)
     e.plug = false
     e.chargeState = ChargeState.NOT_CHARGING
     e.run(130.0, 25.0, kwFor(25.0, 2.5))
     s = e.state()
-    assertEquals(11.0 * 300 / 3.6, s.chargedWh, 10.0)
     assertEquals(kwFor(25.0, 2.5) * 1000 * 129.5 / 3600, s.usedWh, 10.0)
   }
 
@@ -295,7 +291,6 @@ class SessionTrackerTest {
     assertEquals(0.0, s.usedWh, 0.0)
     assertEquals(0L, s.activeMs)
     assertEquals(EffStatus.WARMING_UP, s.efficiency.status)
-    assertTrue(s.series.isEmpty())
     assertEquals(0, s.gaps)
     // And it works again afterwards.
     d.t = d.now
@@ -324,7 +319,7 @@ class SessionTrackerTest {
     assertFalse(s.hasData)
     assertNull(s.avgSpeedMps)
     assertNull(s.socPct)
-    assertNull(s.rangeAtMeasuredM)
+    assertNull(s.rangeEstimate)
     // Level only, no speed: energy is counted, distance stays 0, still warming up.
     for (i in 1..120) {
       now = i * 1000L
@@ -339,7 +334,7 @@ class SessionTrackerTest {
     // Zero level: no range figure, no NaN.
     t.add(VehicleSample(now + 1000, levelWh = 0.0, speedMps = 0.0))
     s = t.snapshot()
-    assertNull(s.rangeAtMeasuredM)
+    assertNull(s.rangeEstimate)
     listOf(s.distanceM, s.usedWh, s.efficiency.progress).forEach { assertTrue(it.isFinite()) }
   }
 

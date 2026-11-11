@@ -52,6 +52,7 @@ import androidx.compose.ui.unit.sp
 import dev.silveradostats.link.LinkStatus
 import dev.silveradostats.link.LiveState
 import dev.silveradostats.link.MonoClock
+import dev.silveradostats.link.MxAction
 import dev.silveradostats.link.UiSettings
 import dev.silveradostats.ui.Chrome
 import dev.silveradostats.ui.layout.DashLayout
@@ -59,13 +60,13 @@ import dev.silveradostats.ui.layout.FitColumn
 import dev.silveradostats.ui.layout.FitColumnScope
 import dev.silveradostats.ui.layout.FitText
 import dev.silveradostats.ui.layout.PriorityRow
-import dev.silveradostats.ui.layout.Segmented
 import dev.silveradostats.ui.layout.SizeTier
 import dev.silveradostats.ui.layout.WindowTooSmall
 import dev.silveradostats.ui.theme.DivergingHigh
 import dev.silveradostats.ui.theme.DivergingLow
 import dev.silveradostats.ui.theme.DivergingMid
 import dev.silveradostats.ui.theme.GridLine
+import dev.silveradostats.ui.theme.Ink
 import dev.silveradostats.ui.theme.StatusError
 import dev.silveradostats.ui.theme.StatusOk
 import dev.silveradostats.ui.theme.StatusWarn
@@ -108,9 +109,8 @@ fun LiveScreen(
   layout: DashLayout,
   chrome: Chrome,
   onRetry: () -> Unit,
-  onMxOff: (Boolean) -> Unit,
-  onTempUnit: (TempUnit) -> Unit,
-  onDistUnit: (DistUnit) -> Unit,
+  mxAction: MxAction,
+  onMxAction: (MxAction) -> Unit,
   onOpenDiagnostics: () -> Unit,
 ) {
   val now by produceState(MonoClock.ms()) {
@@ -121,25 +121,24 @@ fun LiveScreen(
   }
   // While driving the figures all change together on the clock's tick, once a second, whatever
   // the two sources do between ticks.
-  val dash = remember(now, settings.tempUnit, settings.distUnit, if (layout.restricted) Unit else live, if (layout.restricted) Unit else vhal) {
-    DashboardModel.build(live, vhal, settings.tempUnit, settings.distUnit, now, settings.savedCapacity, System.currentTimeMillis(), ownRangeM)
+  val dash = remember(now, if (layout.restricted) Unit else live, if (layout.restricted) Unit else vhal) {
+    DashboardModel.build(live, vhal, Units.TEMP, Units.DIST, now, settings.savedCapacity, System.currentTimeMillis(), ownRangeM)
   }
 
   Column(Modifier.fillMaxSize()) {
     chrome(
       { LiveSummary(dash.status, layout) },
       {
-        MxButton(settings, layout, onMxOff)
+        MxButton(settings, mxAction, layout, onMxAction)
+        // With an MX+ that button reconnects; the simulator has no such button, only Retry.
         if (layout.controls) {
-          if (dash.status.canRetry) {
+          if (dash.status.canRetry && settings.demo) {
             Button(
               onClick = onRetry,
               modifier = Modifier.heightIn(min = layout.controlDp.dp),
               contentPadding = PaddingValues(horizontal = layout.segmentPadDp.dp),
             ) { FitText("Retry", sp = layout.type.tab - 2) }
           }
-          Segmented(TempUnit.entries.map { it.symbol }, settings.tempUnit.ordinal, layout.controlDp, layout.type.tab - 2, layout.segmentPadDp) { onTempUnit(TempUnit.entries[it]) }
-          Segmented(DistUnit.entries.map { it.symbol }, settings.distUnit.ordinal, layout.controlDp, layout.type.tab - 2, layout.segmentPadDp) { onDistUnit(DistUnit.entries[it]) }
         }
       },
     )
@@ -157,7 +156,7 @@ fun LiveScreen(
         if (layout.restricted) {
           LiveDriving(dash, layout, Modifier.weight(1f))
         } else {
-          LiveParked(dash, live.status == LinkStatus.NO_ADAPTER, settings.tempUnit, layout, onOpenDiagnostics, Modifier.weight(1f))
+          LiveParked(dash, live.status == LinkStatus.NO_ADAPTER, Units.TEMP, layout, onOpenDiagnostics, Modifier.weight(1f))
         }
       }
     }
@@ -188,18 +187,18 @@ private fun LiveParked(dash: Dashboard, noAdapter: Boolean, unit: TempUnit, layo
 }
 
 /**
- * Disconnect / Connect for the MX+, on every Simple and Live state, driving too: one tap, as big as
- * the other driving targets, so the phone can have Bluetooth back without pulling over.
+ * Connect / Disconnect for the MX+ ([MxAction]), on every Simple and Live state, driving too: one tap,
+ * as big as the other driving targets, so the phone can have Bluetooth back, or a dropped link can be
+ * brought back, without pulling over.
  */
 @Composable
-internal fun MxButton(settings: UiSettings, layout: DashLayout, onMxOff: (Boolean) -> Unit) {
+internal fun MxButton(settings: UiSettings, action: MxAction, layout: DashLayout, onMxAction: (MxAction) -> Unit) {
   if (settings.demo || settings.mxAddress == null) return
-  val word = if (settings.mxOff) "Connect" else "Disconnect"
   OutlinedButton(
-    onClick = { onMxOff(!settings.mxOff) },
+    onClick = { onMxAction(action) },
     modifier = Modifier.heightIn(min = layout.mxButtonDp.dp),
     contentPadding = PaddingValues(horizontal = layout.segmentPadDp.dp),
-  ) { FitText(if (!layout.shortChrome) "$word MX+" else if (settings.mxOff) "MX+ on" else "MX+ off", sp = layout.type.tab - 2) }
+  ) { FitText(if (layout.shortChrome) action.shortLabel else action.label, sp = layout.type.tab - 2) }
 }
 
 internal fun toneColor(t: Tone): Color = when (t) {
@@ -207,7 +206,7 @@ internal fun toneColor(t: Tone): Color = when (t) {
   Tone.WARN -> StatusWarn
   Tone.ERROR -> StatusError
   Tone.DIM -> TextDim
-  Tone.NORMAL -> Color(0xFFE8EDF2)
+  Tone.NORMAL -> Ink
 }
 
 @Composable
@@ -242,23 +241,20 @@ internal fun Dot(color: Color, size: Int = 14, modifier: Modifier = Modifier) {
 // --- Header summary -------------------------------------------------------------------------------
 
 /**
- * The link state, in the header row. In demo mode the app-wide DEMO chip says it already. While
- * driving: the chip alone, plus the data's age only once it is stale, because that changes what the
- * figures mean.
+ * The link state, in the header row, demo mode included. While driving: the chip alone, plus the data's
+ * age only once it is stale, because that changes what the figures mean.
  */
 @Composable
 private fun RowScope.LiveSummary(s: StatusView, layout: DashLayout) {
-  if (!s.demo) {
-    Surface(
-      shape = RoundedCornerShape(24.dp),
-      color = toneColor(s.tone).copy(alpha = 0.14f),
-      border = BorderStroke(2.dp, toneColor(s.tone)),
-    ) {
-      Row(Modifier.padding(horizontal = 12.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-        Dot(toneColor(s.tone), 12)
-        Spacer(Modifier.width(8.dp))
-        FitText(s.chip, sp = layout.type.body, weight = FontWeight.SemiBold)
-      }
+  Surface(
+    shape = RoundedCornerShape(24.dp),
+    color = toneColor(s.tone).copy(alpha = 0.14f),
+    border = BorderStroke(2.dp, toneColor(s.tone)),
+  ) {
+    Row(Modifier.padding(horizontal = 12.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+      Dot(toneColor(s.tone), 12)
+      Spacer(Modifier.width(8.dp))
+      FitText(s.chip, sp = layout.type.body, weight = FontWeight.SemiBold)
     }
   }
   if (layout.restricted) {
@@ -524,7 +520,7 @@ private fun ModuleTempStrip(temps: ModuleTemps, columns: Int, halfAfter: Int?, u
           FitText(
             Units.temp(c, unit).roundToInt().toString(),
             sp = layout.type.axis,
-            color = if (bg.luminance() > 0.4f) Color(0xFF14110A) else Color(0xFFE8EDF2),
+            color = if (bg.luminance() > 0.4f) Color(0xFF14110A) else Ink,
             weight = FontWeight.SemiBold,
           )
         }

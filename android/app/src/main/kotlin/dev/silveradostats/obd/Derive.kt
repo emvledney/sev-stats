@@ -72,7 +72,7 @@ object Derive {
     // Added in the app: the capacities the BECM reports itself, only while they fit the rest of the pack.
     val implied = (bms as? Number)?.toDouble()
     val capability = (v["battery_capability"] as? Number)?.toDouble()?.takeIf { it > 0 }
-    if (capability != null && (implied == null || abs(capability / implied - 1) <= CAPACITY_TOLERANCE)) d["capacity_kwh"] = capability
+    if (capability != null && implied != null && abs(capability / implied - 1) <= CAPACITY_TOLERANCE) d["capacity_kwh"] = capability
     val ah = (v["pack_capacity_ah"] as? Number)?.toDouble()?.takeIf { it > 0 }
     val kwh = (d["capacity_kwh"] as? Number)?.toDouble() ?: implied
     if (ah != null && kwh != null && groups is Number && groups.toDouble() > 0) {

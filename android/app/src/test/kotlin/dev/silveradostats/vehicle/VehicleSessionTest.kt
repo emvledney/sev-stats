@@ -99,13 +99,13 @@ class VehicleSessionTest {
     val s = session(src)
     s.setDemo(false)
     val dash = Any()
-    val glance = Any()
+    val next = Any()
     s.attach(dash)
     runCurrent()
     advanceTimeBy(3_000)
-    s.detach(dash) // P -> D: the dashboard goes, the glance comes 5 s later
+    s.detach(dash) // The screen goes, and another comes 5 s later.
     advanceTimeBy(5_000)
-    s.attach(glance)
+    s.attach(next)
     runCurrent()
     advanceTimeBy(30_000)
     runCurrent()
@@ -114,7 +114,7 @@ class VehicleSessionTest {
     assertEquals(0, s.state.value.gaps)
     // Two clients: one leaving does not stop anything.
     s.attach(dash)
-    s.detach(glance)
+    s.detach(next)
     advanceTimeBy(60_000)
     runCurrent()
     assertTrue(s.state.value.feed.sampling)
@@ -132,10 +132,10 @@ class VehicleSessionTest {
     val st = s.state.value
     assertEquals(FeedKind.DEMO, st.feed.kind)
     assertEquals(0, src.reads)
-    assertTrue("head start ${st.activeMs}", st.activeMs >= VehicleSession.DEMO_HEAD_START_MS)
+    // The drive starts when the demo leaves Park, a few seconds into its head start.
+    assertTrue("head start ${st.activeMs}", st.activeMs >= VehicleSession.DEMO_HEAD_START_MS - DemoDrive.PARK_MS)
     assertEquals(EffStatus.OK, st.efficiency.status)
     assertTrue(st.distanceM > 10_000)
-    assertTrue(st.series.isNotEmpty())
 
     // Reset: a demo starts from the beginning of its drive (warming up again).
     s.reset()
@@ -266,6 +266,137 @@ class VehicleSessionTest {
     assertTrue(s.state.value.feed.sampling)
     assertTrue(s.state.value.samples > samples)
     assertEquals(1, s.state.value.gaps)
+  }
+
+  /** The background service: nothing on screen and parked, it slows down rather than stopping, and it is no pause. */
+  @Test
+  fun watchingReadsSlowlyWhileParkedWithNothingOnScreen() = runTest {
+    val src = FakeSource()
+    src.speed = 0.0
+    val s = session(src)
+    s.setDemo(false)
+    val service = Any()
+    s.attach(service)
+    s.setWatching(true)
+    runCurrent()
+    advanceTimeBy(VehicleSession.IDLE_STOP_MS + 1_000)
+    runCurrent()
+    assertTrue(s.state.value.feed.sampling)
+    assertEquals("it keeps the car connection", 0, src.released)
+    val reads = src.reads
+    val full = src.fullReads
+    advanceTimeBy(60 * VehicleSession.WATCH_TICK_MS)
+    runCurrent()
+    assertEquals(60.0, (src.reads - reads).toDouble(), 1.0)
+    assertEquals("the level each time, for a charge", src.reads - reads, src.fullReads - full)
+    assertEquals("no pause", 0, s.state.value.gaps)
+  }
+
+  @Test
+  fun aDriveBringsTheFullRateBackWithinATick() = runTest {
+    val src = FakeSource()
+    src.speed = 0.0
+    val s = session(src)
+    s.setDemo(false)
+    val service = Any()
+    s.attach(service)
+    s.setWatching(true)
+    runCurrent()
+    advanceTimeBy(VehicleSession.IDLE_STOP_MS + 1_000)
+    runCurrent()
+    src.speed = 20.0
+    advanceTimeBy(VehicleSession.WATCH_TICK_MS)
+    runCurrent()
+    val reads = src.reads
+    advanceTimeBy(60_000)
+    runCurrent()
+    assertEquals(120.0, (src.reads - reads).toDouble(), 2.0)
+    // Behind another app, for as long as the drive goes on.
+    advanceTimeBy(VehicleSession.IDLE_STOP_MS * 5)
+    runCurrent()
+    assertTrue(s.state.value.feed.sampling)
+    assertEquals(0, s.state.value.gaps)
+    // Parked again: slow after the same two minutes, not stopped.
+    src.speed = 0.0
+    advanceTimeBy(VehicleSession.IDLE_STOP_MS + VehicleSession.WATCH_TICK_MS)
+    runCurrent()
+    val parked = src.reads
+    advanceTimeBy(40_000)
+    runCurrent()
+    assertEquals(10.0, (src.reads - parked).toDouble(), 1.0)
+  }
+
+  @Test
+  fun aScreenOpeningIsUpToDateAtOnce() = runTest {
+    val src = FakeSource()
+    src.speed = 0.0
+    val s = session(src)
+    s.setDemo(false)
+    val service = Any()
+    s.attach(service)
+    s.setWatching(true)
+    runCurrent()
+    advanceTimeBy(VehicleSession.IDLE_STOP_MS + 1_000)
+    runCurrent()
+    val reads = src.reads
+    val samples = s.state.value.samples
+    val ui = Any()
+    s.attach(ui)
+    s.setVisible(ui, true)
+    runCurrent()
+    assertEquals("a read now, not at the slow tick", reads + 1, src.reads)
+    assertTrue(s.state.value.samples > samples)
+    assertEquals("the same session", 0, s.state.value.gaps)
+    val before = src.reads
+    advanceTimeBy(10_000)
+    runCurrent()
+    assertEquals(20.0, (src.reads - before).toDouble(), 1.0)
+    // Off the screen again: slows again, still not stopped.
+    s.setVisible(ui, false)
+    runCurrent()
+    advanceTimeBy(VehicleSession.IDLE_STOP_MS * 3)
+    runCurrent()
+    assertTrue(s.state.value.feed.sampling)
+  }
+
+  /** The service stopping leaves the rules as they were: a screen still bound, parked, stops after the idle time. */
+  @Test
+  fun withoutTheServiceItStopsAsBefore() = runTest {
+    val src = FakeSource()
+    src.speed = 0.0
+    val s = session(src)
+    s.setDemo(false)
+    val service = Any()
+    val ui = Any()
+    s.attach(service)
+    s.attach(ui)
+    s.setWatching(true)
+    runCurrent()
+    advanceTimeBy(VehicleSession.IDLE_STOP_MS + 1_000)
+    runCurrent()
+    s.setWatching(false)
+    s.detach(service)
+    advanceTimeBy(VehicleSession.WATCH_TICK_MS + 1_000)
+    runCurrent()
+    assertFalse(s.state.value.feed.sampling)
+    assertEquals(1, src.released)
+    // And with the last one gone, after the grace.
+    val alone = FakeSource()
+    val t = session(alone)
+    t.setDemo(false)
+    t.attach(service)
+    t.setWatching(true)
+    runCurrent()
+    t.setWatching(false)
+    t.detach(service)
+    advanceTimeBy(VehicleSession.GRACE_MS + 1_000)
+    runCurrent()
+    assertFalse(t.state.value.feed.sampling)
+  }
+
+  @Test
+  fun theSlowTickIsNoPauseToTheTracker() {
+    assertTrue(VehicleSession.WATCH_TICK_MS < SessionTracker.GAP_MS)
   }
 
   @Test

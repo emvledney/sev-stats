@@ -19,36 +19,38 @@ class DashLayoutTest {
     }
   }
 
+  /** Simple's one layout: there is no gear in it. */
+  private fun forEachSimpleWindow(check: (DashLayout) -> Unit) {
+    for (w in widths) for (h in heights) check(DashLayout.ofSimple(w.toFloat(), h.toFloat()))
+  }
+
   private fun DashLayout.name() = "${widthDp}x$heightDp restricted=$restricted tier=$tier"
 
   @Test
   fun everyPageFitsTheWindowHeight() {
-    forEachWindow { l ->
+    forEachSimpleWindow { l ->
       assertTrue("Simple: ${l.requiredSimple(false)} > ${l.name()}", l.requiredSimple(false) <= l.heightDp)
       assertTrue("Simple + notice: ${l.requiredSimple(true)} > ${l.name()}", l.requiredSimple(true) <= l.heightDp)
-      assertTrue("Live: ${l.requiredLive()} > ${l.name()}", l.requiredLive() <= l.heightDp)
+    }
+    forEachWindow { l -> assertTrue("Live: ${l.requiredLive()} > ${l.name()}", l.requiredLive() <= l.heightDp) }
+  }
+
+  /** Simple is one layout whatever the gear, and what works in Drive is as big as Drive asks for. */
+  @Test
+  fun simpleHasOneLayoutWithDrivingTargets() {
+    forEachSimpleWindow { l ->
+      assertFalse(l.name(), l.restricted)
+      assertTrue("tabs fill the header: ${l.name()}", l.headerDp >= DashLayout.MIN_DRIVING_TARGET_DP)
+      assertEquals(l.name(), DashLayout.MIN_DRIVING_TARGET_DP, l.mxButtonDp)
+      assertTrue(l.name(), l.mxButtonDp <= l.headerDp)
+      assertTrue("Reset stays in the header row: ${l.name()}", l.controlDp <= l.headerDp)
+      assertTrue("all four tabs and the controls fit: ${l.headerNeededDp()} ${l.name()}", l.headerNeededDp() <= l.widthDp)
     }
   }
 
   @Test
   fun theHeaderRowFitsTheWindowWidth() {
     forEachWindow { l -> assertTrue("header ${l.headerNeededDp()} > ${l.name()}", l.headerNeededDp() <= l.widthDp) }
-  }
-
-  @Test
-  fun theHeaderDropsItsExtrasInOrderOfUse() {
-    // Every window that keeps the note also keeps the app title; the summary's words go last.
-    forEachWindow { l ->
-      if (l.readOnlyNote) assertTrue(l.name(), l.appTitle)
-      if (l.appTitle && !l.restricted) assertTrue(l.name(), l.longSummary)
-    }
-  }
-
-  @Test
-  fun whileDrivingTheSummaryIsOnlyItsFigures() {
-    forEachWindow { l -> if (l.restricted) assertFalse(l.name(), l.longSummary) }
-    assertTrue(DashLayout.of(2331f, 735f, false).longSummary)
-    assertFalse(DashLayout.of(2331f, 735f, true).longSummary)
   }
 
   @Test
@@ -71,12 +73,8 @@ class DashLayoutTest {
       assertEquals(l.name(), !l.restricted, l.controls)
       assertEquals(l.name(), !l.restricted, l.diagnosticsTab)
       assertEquals(l.name(), !l.restricted, l.heatmap)
-      assertEquals(l.name(), !l.restricted, l.ringDetail)
       if (l.restricted) {
-        assertFalse(l.name(), l.strip)
-        assertFalse(l.name(), l.readOnlyNote)
         assertFalse("no age unless stale: ${l.name()}", l.ages)
-        assertEquals(l.name(), 1, l.tileLines)
         assertTrue(l.name(), l.shortTitles)
       }
     }
@@ -89,10 +87,8 @@ class DashLayoutTest {
       val driving = DashLayout.of(w.toFloat(), h.toFloat(), true)
       assertEquals(parked.tier, driving.tier)
       assertTrue(driving.type.value > parked.type.value)
-      assertTrue(driving.type.hero > parked.type.hero)
       assertTrue(driving.type.body > parked.type.body)
       assertTrue(driving.type.tab > parked.type.tab)
-      assertTrue(driving.tileLines < parked.tileLines)
       assertTrue(driving.liveTileLines <= parked.liveTileLines)
     }
   }
@@ -123,8 +119,6 @@ class DashLayoutTest {
   @Test
   fun atTheDefaultFontNothingGivesWay() {
     forEachWindow { l ->
-      assertEquals(l.name(), l.tileLines, l.plainTileLines)
-      assertEquals(l.name(), 1, l.noticeTileLines)
       assertTrue(l.name(), l.liveTileLines >= 1)
       assertEquals(l.name(), DashLayout.LIVE_TILES, l.liveTileCols)
       assertTrue(l.name(), l.liveCards)
@@ -146,29 +140,90 @@ class DashLayoutTest {
     }
   }
 
-  /** Half a Simple tile holds a figure and its unit: full size on the truck, smaller only where it must be. */
+  /** Simple's figures fill their tiles, and "204.5 kWh" with its head and line still fits every window. */
   @Test
-  fun twoFiguresFitTheirTile() {
-    for (r in listOf(false, true)) {
-      for (h in heights) {
-        var last = 0
-        var tier: SizeTier? = null
-        for (w in widths) {
-          val l = DashLayout.of(w.toFloat(), h.toFloat(), r)
-          // A tier up brings a larger unit and more padding: only within one does more width mean more room.
-          if (l.tier != tier) last = 0
-          assertTrue("${l.name()}: ${l.twinValueSp} after $last", l.twinValueSp >= last)
-          assertTrue(l.name(), l.twinValueSp in DashLayout.LIVE_VALUE_MIN_SP..l.type.value)
-          last = l.twinValueSp
-          tier = l.tier
-        }
+  fun theSimpleFiguresFitTheirTiles() {
+    forEachSimpleWindow { l ->
+      for (notice in listOf(false, true)) {
+        val name = "${l.name()} notice=$notice"
+        val sp = l.simpleFigureSp(notice)
+        fun across(sp: Int) = 5 * sp * 0.54f + 2.1f * l.simpleUnitSp(sp) + 8
+        // "2.31 mi/kWh", in the last column.
+        fun efficiencyAcross(sp: Int) = 4 * sp * 0.54f + 6 * 0.58f * l.simpleUnitSp(sp) + 8
+        val room = l.simpleColumnDp - 2 * l.cardPadHDp
+        assertTrue("$name: $sp sp across $room", across(sp) <= room + 1)
+        assertTrue("$name: mi/kWh at $sp sp across $room", efficiencyAcross(sp) <= room + 1)
+        val tiles = l.bodyDp - if (notice) l.noticeDp + l.gapDp else 0
+        val columns = tiles - l.simpleChargeDp(notice) - l.gapDp
+        val tile = 2 * l.cardPadVDp + l.tileHeadDp + l.cardGapDp + l.lineDp(sp, DashLayout.VALUE_LINE_FACTOR)
+        // Range's line gives way first, and only with the figures already at their smallest. With room to spare
+        // for pixel rounding, or a tall window would lose it.
+        if (sp > DashLayout.LIVE_VALUE_MIN_SP) assertTrue("$name: $tile tall", 2 * (tile + l.simpleLineDp + 2) + l.gapDp <= columns)
+        assertTrue("$name: $tile tall", 2 * tile + l.gapDp <= columns)
       }
     }
-    val truck = DashLayout.of(2103f, 602f, false)
-    assertEquals(truck.type.value, truck.twinValueSp)
-    val driving = DashLayout.of(2103f, 602f, true)
-    assertEquals(driving.type.value, driving.twinValueSp)
-    assertTrue("a narrow window gives way", DashLayout.of(1000f, 420f, false).twinValueSp < DashLayout.of(1000f, 420f, false).type.value)
+  }
+
+  /** The last charge's four parts, each under its column with its figures, units and words, fit every window. */
+  @Test
+  fun theLastChargeFitsItsRow() {
+    forEachSimpleWindow { l ->
+      for (notice in listOf(false, true)) {
+        val name = "${l.name()} notice=$notice"
+        val sp = l.simpleChargeSp(notice)
+        val unit = l.simpleChargeUnitSp(sp)
+        val words = l.simpleChargeLabelSp
+        assertTrue(name, sp >= DashLayout.LIVE_VALUE_MIN_SP)
+        val tall = 2 * l.cardPadVDp + l.lineDp(sp, DashLayout.VALUE_LINE_FACTOR) + l.cardGapDp + l.lineDp(words)
+        assertTrue("$name: $sp sp, $tall in ${l.simpleChargeDp(notice)}", tall <= l.simpleChargeDp(notice) + 1)
+        // With room for the glyphs' rounding: without it, "100.0 %" lost its % on the emulator at 1250 dp.
+        assertTrue(DashLayout.CHARGE_ROUNDING_DP >= 4)
+        fun figure(chars: Int, unitChars: Int, wordChars: Int) =
+          maxOf(chars * sp * 0.54f + unitChars * unit * 0.68f + 8 + DashLayout.CHARGE_ROUNDING_DP, wordChars * words * 0.5f)
+        val room = l.simpleColumnDp - 2 * l.cardPadHDp
+        // Under the first column, what the charge reached at its widest: "186.4 kWh", a card's padding, "100.0 %".
+        val reached = listOf(figure(5, 3, 15) + l.cardPadHDp, figure(5, 1, 11))
+        assertTrue("$name: ${reached.sum()} in $room", reached.sum() <= room + 1)
+        // Under each of the other three, one figure.
+        listOf(figure(5, 3, 10), figure(4, 6, 5), figure(5, 3, 5)).forEachIndexed { i, w -> assertTrue("$name: part ${i + 2}, $w in $room", w <= room + 1) }
+        // Each of the first two gets what it needs, so the % never moves with the kWh.
+        val weights = l.simpleChargeReachedWeights(notice)
+        assertEquals(2, weights.size)
+        reached.indices.forEach { i -> assertTrue("$name: figure $i", reached[i] <= weights[i] / weights.sum() * room + 1) }
+      }
+    }
+    assertTrue("the figures stay well above the smallest on the narrow window", DashLayout.ofSimple(1408f, 576f).simpleChargeSp(false) >= 40)
+    assertTrue("and on the wide one", DashLayout.ofSimple(2331f, 735f).simpleChargeSp(false) >= 60)
+    // The truck's window: as large as when the row was five columns under three, before the ring went.
+    assertEquals(72, DashLayout.ofSimple(2331f, 735f).simpleChargeSp(false))
+  }
+
+  /** Four columns alike, the page's width shared evenly: the owner had the battery ring taken out for cells like the others (2026-11-07). */
+  @Test
+  fun theColumnsAreFourAlike() {
+    val l = DashLayout.ofSimple(1470f, 700f)
+    assertEquals(4, DashLayout.SIMPLE_COLUMNS)
+    assertEquals((1470f - 2 * l.pagePadHDp - 3 * l.gapDp).toDouble(), (4 * l.simpleColumnDp).toDouble(), 0.5)
+    // Well above the old tile figure: they fill the tile.
+    assertTrue("${l.simpleFigureSp(false)}", l.simpleFigureSp(false) > 70)
+  }
+
+  @Test
+  fun aLargerWindowNeverGetsASmallerSimpleFigure() {
+    for (h in heights) {
+      var last = 0
+      var tier: SizeTier? = null
+      for (w in widths) {
+        val l = DashLayout.ofSimple(w.toFloat(), h.toFloat())
+        // A tier up brings more padding: only within one does more width mean more room.
+        if (l.tier != tier) {
+          last = 0
+        }
+        assertTrue("${l.name()}: ${l.simpleFigureSp(false)} after $last", l.simpleFigureSp(false) >= last)
+        last = l.simpleFigureSp(false)
+        tier = l.tier
+      }
+    }
   }
 
   @Test
@@ -178,7 +233,7 @@ class DashLayoutTest {
       // What is left above the promises is what the chart absorbs: never negative (asserted above),
       // and a taller window only ever adds to it.
       val taller = DashLayout.of(l.widthDp.toFloat(), l.heightDp + 100f, l.restricted)
-      if (taller.tier == l.tier) assertEquals(l.name(), l.bodyDp + 100 - (if (taller.strip && !l.strip) taller.stripDp else 0), taller.bodyDp)
+      if (taller.tier == l.tier) assertEquals(l.name(), l.bodyDp + 100, taller.bodyDp)
     }
   }
 
@@ -189,8 +244,9 @@ class DashLayoutTest {
       for (w in 1000..2800 step 50) for (h in 420..1300 step 10) for (r in listOf(false, true)) {
         val l = DashLayout.of(w.toFloat(), h.toFloat(), r, scale)
         val name = "${l.name()} scale=$scale"
-        assertTrue("Simple ${l.requiredSimple(false)} $name", l.requiredSimple(false) <= h)
-        assertTrue("Simple + notice ${l.requiredSimple(true)} $name", l.requiredSimple(true) <= h)
+        val simple = DashLayout.ofSimple(w.toFloat(), h.toFloat(), scale)
+        assertTrue("Simple ${simple.requiredSimple(false)} $name", simple.requiredSimple(false) <= h)
+        assertTrue("Simple + notice ${simple.requiredSimple(true)} $name", simple.requiredSimple(true) <= h)
         assertTrue("Live ${l.requiredLive()} $name", l.requiredLive() <= h)
         assertTrue("the cards stay: $name", l.liveCards)
         assertEquals("four across: $name", DashLayout.LIVE_TILES, l.liveTileCols)
@@ -329,18 +385,13 @@ class DashLayoutTest {
     // 1000 x 420, the floor: everything compact, but no line of the promise lost.
     val floor = DashLayout.of(1000f, 420f, false)
     assertEquals(SizeTier.COMPACT, floor.tier)
-    assertFalse(floor.appTitle)
     // Blazer proxy, 2914 x 1134 px at 200 dpi, below its bars.
     val proxy = DashLayout.of(2331f, 735f, false)
     assertEquals(SizeTier.LARGE, proxy.tier)
-    assertTrue(proxy.appTitle)
-    assertTrue(proxy.longSummary)
-    assertTrue(proxy.strip)
     assertTrue(proxy.requiredLive() < 735)
     // The same panel minus its measured cutouts (right 285 px, top 167 px), below its bars.
     val truck = DashLayout.of(2103f, 602f, false)
     assertEquals(SizeTier.MEDIUM, truck.tier)
-    assertTrue(truck.appTitle)
     assertTrue(truck.requiredLive() < 602)
     // 1408 x 792 at 160 dpi, below the emulator's bars.
     assertEquals(SizeTier.MEDIUM, DashLayout.of(1408f, 620f, false).tier)

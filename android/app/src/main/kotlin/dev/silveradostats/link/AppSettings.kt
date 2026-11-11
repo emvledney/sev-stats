@@ -4,14 +4,10 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Build
 import androidx.core.content.edit
-import dev.silveradostats.ui.live.DistUnit
-import dev.silveradostats.ui.live.TempUnit
-import dev.silveradostats.ui.live.Units
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
-import java.util.Locale
 
 /** The main screen's tabs, in order. Only Live and Diagnostics show the OBD link's data (the MX+). */
 enum class AppTab(val label: String, val needsObd: Boolean) {
@@ -27,10 +23,8 @@ enum class AppTab(val label: String, val needsObd: Boolean) {
 
 /** The persisted user choices the dashboard and the link use. */
 data class UiSettings(
-  /** Use the simulator instead of the MX+ (a DEMO DATA banner is shown). */
+  /** Use the simulator instead of the MX+. */
   val demo: Boolean,
-  val tempUnit: TempUnit,
-  val distUnit: DistUnit,
   /** The chosen OBDLink MX+ (Bluetooth address and name), or null. */
   val mxAddress: String?,
   val mxName: String?,
@@ -59,11 +53,8 @@ class AppSettings private constructor(context: Context) {
   val state: StateFlow<UiSettings> = _state.asStateFlow()
 
   private fun load(app: Context): UiSettings {
-    val locale = Locale.getDefault()
     return UiSettings(
       demo = if (prefs.contains(KEY_DEMO)) prefs.getBoolean(KEY_DEMO, false) else defaultDemo(app),
-      tempUnit = prefs.getString(KEY_TEMP, null)?.let { runCatching { TempUnit.valueOf(it) }.getOrNull() } ?: Units.defaultTemp(locale),
-      distUnit = prefs.getString(KEY_DIST, null)?.let { runCatching { DistUnit.valueOf(it) }.getOrNull() } ?: Units.defaultDist(locale),
       mxAddress = prefs.getString(KEY_MX_ADDRESS, null),
       mxName = prefs.getString(KEY_MX_NAME, null),
       tab = prefs.getString(KEY_TAB, null)?.let { runCatching { AppTab.valueOf(it) }.getOrNull() } ?: AppTab.SIMPLE,
@@ -88,13 +79,6 @@ class AppSettings private constructor(context: Context) {
     _state.update { it.copy(savedCapacity = c) }
   }
 
-  /** The last settled efficiency, m/Wh: VehicleSession's, from any thread, and not in [state] as no screen chooses it. */
-  fun lastEfficiency(): Double? = prefs.getString(KEY_EFFICIENCY, null)?.toDoubleOrNull()
-
-  fun setLastEfficiency(mPerWh: Double) {
-    prefs.edit { putString(KEY_EFFICIENCY, mPerWh.toString()) }
-  }
-
   fun setTab(t: AppTab) {
     prefs.edit { putString(KEY_TAB, t.name) }
     _state.update { it.copy(tab = t) }
@@ -103,16 +87,6 @@ class AppSettings private constructor(context: Context) {
   fun setDemo(v: Boolean) {
     prefs.edit { putBoolean(KEY_DEMO, v) }
     _state.update { it.copy(demo = v) }
-  }
-
-  fun setTempUnit(u: TempUnit) {
-    prefs.edit { putString(KEY_TEMP, u.name) }
-    _state.update { it.copy(tempUnit = u) }
-  }
-
-  fun setDistUnit(u: DistUnit) {
-    prefs.edit { putString(KEY_DIST, u.name) }
-    _state.update { it.copy(distUnit = u) }
   }
 
   /** Remembers the chosen adapter (null forgets it). Choosing one also ends a disconnect. */
@@ -127,8 +101,6 @@ class AppSettings private constructor(context: Context) {
 
   companion object {
     private const val KEY_DEMO = "demo_mode"
-    private const val KEY_TEMP = "temp_unit"
-    private const val KEY_DIST = "distance_unit"
     private const val KEY_MX_ADDRESS = "mx_address"
     private const val KEY_MX_NAME = "mx_name"
     private const val KEY_TAB = "last_tab"
@@ -136,7 +108,6 @@ class AppSettings private constructor(context: Context) {
     private const val KEY_CAPACITY_KWH = "capacity_kwh"
     private const val KEY_CAPACITY_AH = "capacity_ah"
     private const val KEY_CAPACITY_AT = "capacity_at"
-    private const val KEY_EFFICIENCY = "last_efficiency"
 
     @Volatile private var instance: AppSettings? = null
 

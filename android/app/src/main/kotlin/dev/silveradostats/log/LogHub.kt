@@ -2,6 +2,8 @@ package dev.silveradostats.log
 
 import android.content.Context
 import android.net.Uri
+import android.os.SystemClock
+import androidx.core.content.edit
 import dev.silveradostats.BuildConfig
 import dev.silveradostats.diag.AppPermissions
 import dev.silveradostats.diag.CrashLog
@@ -11,9 +13,17 @@ import dev.silveradostats.link.LinkStatus
 import dev.silveradostats.link.LiveState
 import dev.silveradostats.link.MonoClock
 import dev.silveradostats.vehicle.CarConnState
+import dev.silveradostats.vehicle.ChargeReading
+import dev.silveradostats.vehicle.ChargeState
+import dev.silveradostats.vehicle.ChargeWatch
+import dev.silveradostats.vehicle.ChargeWatchState
+import dev.silveradostats.vehicle.FeedKind
 import dev.silveradostats.vehicle.KnownProperties
+import dev.silveradostats.vehicle.LastCharge
+import dev.silveradostats.vehicle.ReadingClock
 import dev.silveradostats.vehicle.RawRead
 import dev.silveradostats.vehicle.ReadProblem
+import dev.silveradostats.vehicle.SessionState
 import dev.silveradostats.vehicle.VehicleReader
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -62,9 +72,103 @@ class LogHub private constructor(private val app: Context) {
   @Volatile private var carProblems: Map<Int, ReadProblem>? = null
   private val mxRows = MutableStateFlow(0L)
 
+  // The last charge. Main thread, like every reading that feeds it.
+  private val chargePrefs = app.getSharedPreferences("last_charge", Context.MODE_PRIVATE)
+
+  /** Null until the first run has been through the log; readings wait in [chargeWaiting] until then. */
+  private var chargeWatch: ChargeWatch? = null
+  private var chargeWaiting: ChargeReading? = null
+  private var chargeSaved: ChargeWatchState? = null
+
+  /** When the newest reading was taken; a run of the app starts from when the last one saved. */
+  private var chargeClock: ReadingClock? = null
+  private val _lastCharge = MutableStateFlow<LastCharge?>(null)
+
+  /** The last charge the readings show, kept between runs of the app; null until one has been seen. */
+  val lastCharge: StateFlow<LastCharge?> = _lastCharge.asStateFlow()
+
+  init {
+    chargeClock = loadChargeClock()
+    val kept = loadChargeWatch()
+    if (kept != null) {
+      chargeSaved = kept
+      chargeWatch = ChargeWatch(kept)
+      _lastCharge.value = kept.charge?.copy(levelWh = kept.seenWh)
+    } else {
+      // The first run with this feature: a charge may already be in the log, so the figure need not wait for the next.
+      scope.launch {
+        val rows = withContext(io) { store.rows(0L, LogSource.CAR, LogRows.CHARGE_COLS) }
+        val watch = ChargeWatch()
+        rows.forEach { watch.add(LogRows.chargeReading(it)) }
+        watch.usedFromLevels()
+        chargeWaiting?.let { watch.add(it) }
+        chargeWaiting = null
+        chargeWatch = watch
+        publishCharge(watch)
+      }
+    }
+  }
+
   /** The app opened: keeps the hourly job scheduled. */
   fun onAppOpened() {
     LogScheduler.ensure(app)
+  }
+
+  /** Main thread: every SessionState the session publishes. Only the truck's own readings, never a demo's. */
+  fun onSession(s: SessionState) {
+    if (s.feed.kind == FeedKind.VEHICLE && s.hasData) noteCharge(ChargeReading.fromSession(s))
+  }
+
+  private fun noteCharge(reading: ChargeReading) {
+    val clock = ReadingClock(SystemClock.elapsedRealtime(), SystemClock.uptimeMillis(), System.currentTimeMillis())
+    val r = reading.copy(atMs = clock.elapsedMs, awake = chargeClock?.let { clock.stayedUpSince(it) } ?: false)
+    chargeClock = clock
+    val watch = chargeWatch
+    if (watch == null) {
+      chargeWaiting = r
+      return
+    }
+    watch.add(r)
+    publishCharge(watch)
+  }
+
+  private fun publishCharge(watch: ChargeWatch) {
+    val now = watch.state
+    _lastCharge.value = now.charge?.copy(levelWh = now.seenWh)
+    if (!ChargeWatch.saveDue(chargeSaved, now)) return
+    chargeSaved = now
+    chargePrefs.edit {
+      putBoolean(KEY_CHARGE_KEPT, true)
+      putBoolean(KEY_CHARGE_GOING, now.inCharge)
+      putBoolean(KEY_CHARGE_ON, now.on)
+      fun put(key: String, v: Double?) = if (v == null) remove(key) else putString(key, v.toString())
+      put(KEY_CHARGE_TO, now.charge?.toWh)
+      put(KEY_CHARGE_PCT, now.charge?.toPct)
+      put(KEY_CHARGE_SEEN, now.seenWh)
+      put(KEY_CHARGE_USED, now.charge?.usedWh)
+      put(KEY_CHARGE_DRIVEN, now.charge?.drivenM)
+      chargeClock?.let {
+        putLong(KEY_CLOCK_ELAPSED, it.elapsedMs)
+        putLong(KEY_CLOCK_UPTIME, it.uptimeMs)
+        putLong(KEY_CLOCK_WALL, it.wallMs)
+      }
+    }
+  }
+
+  private fun loadChargeWatch(): ChargeWatchState? {
+    if (!chargePrefs.getBoolean(KEY_CHARGE_KEPT, false)) return null
+    fun get(key: String) = chargePrefs.getString(key, null)?.toDoubleOrNull()
+    return ChargeWatchState(
+      get(KEY_CHARGE_TO)?.let { LastCharge(it, get(KEY_CHARGE_PCT), get(KEY_CHARGE_USED), drivenM = get(KEY_CHARGE_DRIVEN)) },
+      get(KEY_CHARGE_SEEN),
+      chargePrefs.getBoolean(KEY_CHARGE_GOING, false),
+      chargePrefs.getBoolean(KEY_CHARGE_ON, false),
+    )
+  }
+
+  private fun loadChargeClock(): ReadingClock? {
+    if (!chargePrefs.contains(KEY_CLOCK_ELAPSED)) return null
+    return ReadingClock(chargePrefs.getLong(KEY_CLOCK_ELAPSED, 0L), chargePrefs.getLong(KEY_CLOCK_UPTIME, 0L), chargePrefs.getLong(KEY_CLOCK_WALL, 0L))
   }
 
   /**
@@ -116,6 +220,8 @@ class LogHub private constructor(private val app: Context) {
         )
       }
       carProblems = problems
+      // The hourly job is how a charge with no screen up gets seen at all.
+      noteCharge(ChargeReading.fromCar(reading.levelWh, reading.usableWh ?: reading.nominalWh, reading.plugged, ChargeState.fromAosp(reading.chargeState?.toInt()), reading.speedMs, reading.ignition?.toInt(), reading.gear?.toInt()))
       val now = System.currentTimeMillis()
       if (LogRows.wallClockValid(now)) LogRows.fromCar(reading, now, tzMinutes(now), trigger)?.let { save(it) }
       return reading.ignition?.toInt()
@@ -207,6 +313,17 @@ class LogHub private constructor(private val app: Context) {
 
   companion object {
     private const val CONNECT_TIMEOUT_MS = 15_000L
+    private const val KEY_CHARGE_KEPT = "kept"
+    private const val KEY_CHARGE_GOING = "going"
+    private const val KEY_CHARGE_TO = "to_wh"
+    private const val KEY_CHARGE_PCT = "to_pct"
+    private const val KEY_CHARGE_SEEN = "seen_wh"
+    private const val KEY_CHARGE_USED = "used_wh"
+    private const val KEY_CHARGE_DRIVEN = "driven_m"
+    private const val KEY_CHARGE_ON = "on"
+    private const val KEY_CLOCK_ELAPSED = "clock_elapsed"
+    private const val KEY_CLOCK_UPTIME = "clock_uptime"
+    private const val KEY_CLOCK_WALL = "clock_wall"
 
     @Volatile private var instance: LogHub? = null
 

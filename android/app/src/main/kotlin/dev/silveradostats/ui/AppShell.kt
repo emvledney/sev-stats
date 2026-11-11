@@ -33,7 +33,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
@@ -48,17 +47,18 @@ import dev.silveradostats.ui.layout.FitColumn
 import dev.silveradostats.ui.layout.FitText
 import dev.silveradostats.ui.live.LiveScreen
 import dev.silveradostats.ui.live.vhalFigures
+import dev.silveradostats.ui.simple.SimpleModel
 import dev.silveradostats.ui.simple.SimpleScreen
 import dev.silveradostats.ui.trends.TrendsScreen
-import dev.silveradostats.ui.theme.DemoBannerColor
 import dev.silveradostats.ui.theme.TextDim
 import dev.silveradostats.vehicle.DrivingInputs
 import dev.silveradostats.vehicle.DrivingPolicy
 import kotlinx.coroutines.flow.StateFlow
 
 /**
- * The one header row the selected screen draws above itself: its summary goes between the tabs and
- * its controls. Height is what the dashboards are short of, so nothing else sits above them.
+ * The one header row the selected screen draws above itself: the tabs, then its buttons. A status of its
+ * own goes in [summary], between the two; Simple has none, by the owner's choice (2026-11-06). Height is
+ * what the dashboards are short of, so nothing else sits above them.
  */
 typealias Chrome = @Composable (summary: @Composable RowScope.() -> Unit, controls: @Composable RowScope.() -> Unit) -> Unit
 
@@ -69,6 +69,8 @@ typealias Chrome = @Composable (summary: @Composable RowScope.() -> Unit, contro
  *
  * While the truck is out of Park (`layout.restricted`) the Diagnostics and Trends tabs are not offered
  * and show only [AvailableInParkPanel]; none of their tables, charts, pairing, fields or buttons compose.
+ * Simple is the one page that does not change with the gear ([DashLayout.ofSimple]): those two tabs stay
+ * on it and can be tapped, which out of Park leads to that panel.
  */
 @Composable
 fun AppShell(
@@ -79,6 +81,7 @@ fun AppShell(
   onOpenAppSettings: () -> Unit,
 ) {
   val settings by liveVm.settings.collectAsStateWithLifecycle()
+  val mxAction by liveVm.mxAction.collectAsStateWithLifecycle()
   val restricted by liveVm.restricted.collectAsStateWithLifecycle()
   val stateKnown by liveVm.drivingStateKnown.collectAsStateWithLifecycle()
   val tab = settings.tab
@@ -92,20 +95,26 @@ fun AppShell(
         DashLayout.of(maxWidth.value, maxHeight.value, restricted, fontScale)
       }
       val chrome: Chrome = { summary, controls ->
-        ShellHeader(layout, tab, settings.demo, liveVm::selectTab, summary, controls)
+        ShellHeader(layout, tab, liveVm::selectTab, summary, controls)
       }
       when (tab) {
         AppTab.SIMPLE -> {
           val session by liveVm.shownSession.collectAsStateWithLifecycle()
+          val live by liveVm.shownLive.collectAsStateWithLifecycle()
+          val lastCharge by liveVm.lastCharge.collectAsStateWithLifecycle()
+          // No gear in this one: shifting moves nothing on the page.
+          val simpleLayout = remember(maxWidth, maxHeight, fontScale) { DashLayout.ofSimple(maxWidth.value, maxHeight.value, fontScale) }
           SimpleScreen(
             session = session,
+            mxCapacityKwh = SimpleModel.mxCapacityKwh(live),
+            lastCharge = lastCharge,
             settings = settings,
-            layout = layout,
-            chrome = chrome,
-            onTempUnit = liveVm::setTempUnit,
-            onDistUnit = liveVm::setDistUnit,
+            layout = simpleLayout,
+            driving = restricted,
+            chrome = { summary, controls -> ShellHeader(simpleLayout, tab, liveVm::selectTab, summary, controls) },
             onReset = liveVm::resetSession,
-            onMxOff = liveVm::setMxOff,
+            mxAction = mxAction,
+            onMxAction = liveVm::onMxAction,
             onRequestPermissions = onRequestCarPermissions,
             onOpenDiagnostics = { liveVm.selectTab(AppTab.DIAGNOSTICS) },
           )
@@ -122,9 +131,8 @@ fun AppShell(
             layout = layout,
             chrome = chrome,
             onRetry = liveVm::retry,
-            onMxOff = liveVm::setMxOff,
-            onTempUnit = liveVm::setTempUnit,
-            onDistUnit = liveVm::setDistUnit,
+            mxAction = mxAction,
+            onMxAction = liveVm::onMxAction,
             onOpenDiagnostics = { liveVm.selectTab(AppTab.DIAGNOSTICS) },
           )
         }
@@ -154,7 +162,6 @@ fun AppShell(
 private fun ShellHeader(
   layout: DashLayout,
   tab: AppTab,
-  demo: Boolean,
   onSelect: (AppTab) -> Unit,
   summary: @Composable RowScope.() -> Unit,
   controls: @Composable RowScope.() -> Unit,
@@ -165,17 +172,14 @@ private fun ShellHeader(
     verticalAlignment = Alignment.CenterVertically,
     horizontalArrangement = Arrangement.spacedBy(gap),
   ) {
-    if (layout.appTitle) FitText("Silverado Stats", sp = layout.type.tab, weight = FontWeight.Bold)
     Row(Modifier.fillMaxHeight()) {
       AppTab.entries.filter { it != AppTab.DIAGNOSTICS || layout.diagnosticsTab }.filter { it != AppTab.TRENDS || layout.trendsTab }.forEach { t ->
         HeaderTab(t.label, tab == t, layout) { onSelect(t) }
       }
     }
-    if (demo) DemoChip(layout)
     // Takes what is left: every other child in this row has already been measured when it does.
     Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(gap)) { summary() }
     controls()
-    if (layout.readOnlyNote) FitText("Read-only", sp = layout.type.body, color = TextDim)
   }
 }
 
@@ -198,20 +202,6 @@ private fun HeaderTab(label: String, selected: Boolean, layout: DashLayout, onCl
     contentAlignment = Alignment.Center,
   ) {
     FitText(label, sp = layout.type.tab, weight = FontWeight.SemiBold, color = if (selected) accent else MaterialTheme.colorScheme.onSurface)
-  }
-}
-
-/** Stays on screen in every state: it changes what every number means. */
-@Composable
-private fun DemoChip(layout: DashLayout) {
-  Surface(color = DemoBannerColor, shape = RoundedCornerShape(8.dp)) {
-    FitText(
-      if (layout.shortChrome) "DEMO" else "DEMO DATA",
-      Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
-      sp = layout.type.body,
-      color = Color(0xFF1A1400),
-      weight = FontWeight.Bold,
-    )
   }
 }
 

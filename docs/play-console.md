@@ -12,6 +12,8 @@ Internal testing only, never production: the app's while-driving screens go agai
 3. *Test and release › Testing › Internal testing* (the normal one) › *Create new release*. Upload the newest `release/silverado-ev-v<code>.aab`. If Claude uploads it through the browser, its `file_upload` tool is limited to 10 MB, so check the size first (v7 was 9.3 MB). An upload by hand doesn't have that limit. Name it, then **Next › Save and publish**. If **Publishing overview** shows pending changes, send or publish them there too.
 4. The truck's Play Store updates it, or use Play Store › menu › *My apps* › *Updates*.
 
+*Policy › App content* lists 11 declarations as needing attention, among them Foreground service permissions since 0.10.0. None of them has blocked an internal-testing release, and they have been left unfilled. Play's review page shows two warnings on every upload, about deobfuscation and native debug files. They are optional, and neither affects how the app runs.
+
 The upload key is `~/.android-keys/silveradostats-upload.jks`, and all builds are signed with it. **Back it up.** `release/` is git-ignored, so the tag doesn't hold the bundles.
 
 ## First install (done; steps kept for a new setup)

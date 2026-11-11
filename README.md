@@ -11,13 +11,13 @@ A personal, one-truck Android Automotive app that shows battery data on a 2024 C
 
 The owner confirmed on the truck, on 0.4.0: the app stays up in Drive and Live shows real data from the MX+. MX+ pairing from the head unit: owner report 2026-11-04, on the build before 0.4.0; the working Live link on 0.4.0 shows the connection holds. Everything still unconfirmed, such as current sign under load, charging and 12 V drain, is under Open work in [`PLAN.md`](PLAN.md).
 
-Tests: 403 in the app, 50 in the probe. They run on the JVM and the simulator, not on the truck.
+Tests: 512 in the app, 50 in the probe. They run on the JVM and the simulator, not on the truck.
 
 ![Simple tab in Park](docs/images/simple.png)
 ![Live tab in Park](docs/images/live-park.png)
-![Simple tab in Drive: larger figures; only the tabs and, with an adapter chosen, Connect/Disconnect MX+ remain](docs/images/simple-drive.png)
+![Simple tab in Drive: the same page as in Park, with the same working controls](docs/images/simple-drive.png)
 
-These are emulator captures with demo data: Simple from this checkout, Live of 0.5.0. Every screen in `docs/images/` is listed under [Screenshots](#screenshots).
+These are emulator captures with demo data, from this checkout. Every screen in `docs/images/` is listed under [Screenshots](#screenshots).
 
 ## The hard rule
 
@@ -25,7 +25,9 @@ These are emulator captures with demo data: Simple from this checkout, Live of 0
 - the read-only allowlists: UDS `0x22`, OBD `03`/`07`/`0A` and `01`/`09`, and the adapter AT allowlist
 - the ELM link discipline: no write until the prompt and quiet, no bare CR, no protocol search
 - sleep silence: nothing on the bus while the truck sleeps
-- the driving lockdown: out of Park, only Simple and Live; the tabs, Simple's layout selector and the Connect/Disconnect MX+ button are the only controls, and there are no tap details
+- the driving lockdown: out of Park, Diagnostics and Trends show only "Available in Park", Live hides its controls and tap details, and no pairing or system dialog opens. The one exception is the owner's choice of 2026-11-06: Simple keeps one layout in every gear and its header works in every gear, Reset session (with its confirmation) included
+
+The background service, the owner's choice of 2026-11-06, stays inside these: it reads only the truck's API, never touches the MX+ and holds no wake lock (`vehicle/VehicleWatchService.kt`).
 
 These tests enforce it. If a change makes one fail, the change is wrong, not the test.
 
@@ -33,7 +35,7 @@ These tests enforce it. If a change makes one fail, the change is wrong, not the
 |---|---|
 | `SafetyTest` | The app's allowlist: what may be sent, and to which addresses |
 | `ElmLinkHardeningTest` | The AT allowlist and ELM link discipline |
-| `SourceSafetyTest` | No write calls, GM content providers or foreign binds in the source; the exact permissions; the exact distraction-optimized activities |
+| `SourceSafetyTest` | No write calls, GM content providers or foreign binds in the source; the exact permissions; one service start, of the app's own read-only service; the exact distraction-optimized activities |
 | `AndroidWiringTest` | Diagnostics and pairing reachable only in Park; the OBD engine attaches only when `UiSettings.wantsObd` says so; Simple and Live never scroll |
 | `DrivingStateTest` | The driving state fails safe |
 | `DashLayoutTest` | Every page fits at every window size; driving locks everything else away |
@@ -64,14 +66,15 @@ The next round of work is layout tweaks. All of this is under `android/app/src/m
 | `ui/layout/DashWidgets.kt` | The fitting widgets: `FitText`, `FitColumn`, `PriorityRow`, `Segmented`. |
 | `ui/AppShell.kt` | The header row and tabs, and the "Available in Park" panel. |
 | `ui/simple/SimpleScreen.kt`, `ui/simple/SimpleModel.kt` | The Simple tab; the model is pure and unit tested. |
+| `vehicle/ChargeWatch.kt` | The last charge on Simple and the energy and miles since, worked out from battery-level readings, since the truck reports neither. Used since is a running total with the truck on, so the level moving while it is off counts for nothing, and shows instead as the drift beside it. Pure and unit tested. `log/LogHub.kt` feeds and saves it. |
+| `vehicle/VehicleWatchService.kt` | The background service: keeps the session reading the truck's API with no screen up, so a drive behind Maps or a charge with the app closed is still measured. Slower in Park with nothing on screen (`VehicleSession.setWatching`). |
 | `ui/live/LiveScreen.kt`, `ui/live/DashboardModel.kt`, `ui/live/Units.kt` | The Live tab: tiles, Pack card, temperatures, cell heatmap (parked only). |
 | `ui/theme/Theme.kt` | Colors and the Material theme. |
-| `glance/GlanceModel.kt`, `glance/GlanceScreen.kt` | Battery Glance. Its title and row titles must stay constant, because of the template quota noted in the model. |
 | `log/` | The battery log: rows, CSV, the PID catalog and what Trends draws (pure, unit tested), SQLite store, hourly job, MX+ visit. |
 | `ui/trends/TrendsScreen.kt` | The Trends tab: one source at a time (Truck API or MX+), capacity tiles, a chart with separate axes, the PID list in groups, range, CSV export. In Park only. |
 | `ui/DiagnosticsScreen.kt`, `ui/MxLinkSection.kt` | The Diagnostics tab and MX+ pairing, parked only. |
 
-**Read this before changing layout:** the owner's photo has no "Silverado Stats" title in the header, so the truck's window is narrower than the emulator proxy, or its font is larger. The real window size and font scale aren't known yet. See §5 of [`PLAN.md`](PLAN.md).
+**Read this before changing layout:** the owner's photo of 0.4.0, which drew a "Silverado Stats" title only where the window had room, shows none, so the truck's window is narrower than the emulator proxy, or its font is larger. The real window size and font scale aren't known yet. See §5 of [`PLAN.md`](PLAN.md).
 
 ### Everything else
 
@@ -80,7 +83,7 @@ The next round of work is layout tweaks. All of this is under `android/app/src/m
 | `android/app/src/main/kotlin/dev/silveradostats/obd/` | Kotlin port of the probe: `Safety.kt` (allowlist), `ElmTransport.kt` and `ElmLink.kt` (adapter), `Poller.kt`, `Profile.kt`, `Derive.kt` |
 | `.../link/` | `LinkService`, `LinkEngine`, `LinkConnection` (who holds the MX+ and when), `AppSettings` |
 | `.../bt/` | Bluetooth Classic discovery, pairing and RFCOMM |
-| `.../vehicle/` | Read-only VHAL access, `DrivingState.kt`, `SessionTracker.kt` (measured efficiency), `DemoDrive.kt` |
+| `.../vehicle/` | Read-only VHAL access, `DrivingState.kt`, `SessionTracker.kt` (the current drive, its range, measured efficiency), `DemoDrive.kt` |
 | `.../report/`, `.../diag/` | The Send to laptop report, permissions, system facts |
 | `android/app/src/main/assets/profile.json` | Exported DID profile. Generated; don't edit by hand |
 | `android/app/src/test/resources/golden_decode.json` | Python-to-Kotlin parity vectors. Generated |
@@ -239,18 +242,17 @@ adb emu kill
 
 ### Screenshots
 
-All are emulator captures, in `docs/images/`, with demo data except `glance-builtin.png`: the Simple ones from this checkout, the rest of 0.5.0.
+All are emulator captures from this checkout, in `docs/images/`, with demo data.
 
 | File | Shows |
 |---|---|
 | [`simple.png`](docs/images/simple.png) | Simple in Park |
 | [`live-park.png`](docs/images/live-park.png) | Live in Park, with the cell heatmap |
 | [`diagnostics-park.png`](docs/images/diagnostics-park.png) | Diagnostics in Park |
-| [`simple-drive.png`](docs/images/simple-drive.png) | Simple in Drive |
+| [`simple-drive.png`](docs/images/simple-drive.png) | Simple in Drive: the same page as in Park |
 | [`live-drive.png`](docs/images/live-drive.png) | Live in Drive, without the heatmap |
 | [`diagnostics-drive.png`](docs/images/diagnostics-drive.png) | The Diagnostics panel out of Park: "Available in Park" |
-| [`simple-compact.png`](docs/images/simple-compact.png), [`live-compact.png`](docs/images/live-compact.png) | A smaller window, 1408 x 792 at 160 dpi, with no title in the header |
-| [`glance-builtin.png`](docs/images/glance-builtin.png), [`glance-demo.png`](docs/images/glance-demo.png) | Battery Glance: built-in data only, and with demo OBD data |
+| [`simple-compact.png`](docs/images/simple-compact.png), [`live-compact.png`](docs/images/live-compact.png) | A smaller window, 1408 x 792 at 160 dpi |
 
 ## Docs
 

@@ -220,7 +220,7 @@ class LinkEngineTest {
   @Test
   fun stopMessages() {
     assertTrue(LinkMessages.stopped(FatalTransportError("adapter link failed: Broken pipe")).startsWith("Connection to the MX+ was lost"))
-    assertTrue(LinkMessages.stopped(FatalTransportError("adapter closed the connection")).contains("Retry"))
+    assertTrue(LinkMessages.stopped(FatalTransportError("adapter closed the connection")).contains("tap Connect"))
     assertTrue(LinkMessages.stopped(FatalTransportError("adapter reported 'LV RESET' on '22 2AF5'; stopping")).contains("LV RESET"))
     assertTrue(LinkMessages.stopped(TransportError("adapter timed out on '222AF5'")).contains("timed out"))
     assertTrue(LinkMessages.stopped(UnsafeRequestError("x")).contains("read-only guard"))

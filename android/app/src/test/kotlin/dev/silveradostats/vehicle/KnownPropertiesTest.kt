@@ -90,11 +90,12 @@ class KnownPropertiesTest {
 
   @Test
   fun otherFormatters() {
-    assertEquals("412.3 km / 256.2 mi", Fmt.meters(412_300f))
-    assertEquals("21.5 °C / 70.7 °F", Fmt.celsius(21.5f))
+    assertEquals("256.2 mi", Fmt.meters(412_300f))
+    assertEquals("70.7 °F", Fmt.celsius(21.5f))
     assertEquals("80.0 %", Fmt.percent(80f))
     assertEquals("1 h 05 min (3900 s)", Fmt.seconds(3900))
-    assertEquals("36.0 km/h / 22.4 mph", Fmt.speedMs(10f))
+    assertEquals("22.4 mph", Fmt.speedMs(10f))
+    assertEquals("100.0 mi", Fmt.kilometers(160.9344f))
     assertEquals("PARK (4)", KnownProperties.format(KnownProperties.GEAR_SELECTION, 4))
     assertEquals("CHARGING (1)", KnownProperties.format(KnownProperties.EV_CHARGE_STATE, 1))
     assertEquals("ELECTRIC (10)", KnownProperties.format(KnownProperties.INFO_FUEL_TYPE, listOf(10)))

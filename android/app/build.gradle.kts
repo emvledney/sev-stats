@@ -22,8 +22,8 @@ android {
     applicationId = silveradoApplicationId
     minSdk = 32 // Android 12L (GM SQBR builds)
     targetSdk = 35 // Play requirement for Android Automotive OS apps
-    versionCode = 10
-    versionName = "0.7.0"
+    versionCode = 19
+    versionName = "0.15.0"
   }
 
   buildTypes {
@@ -90,10 +90,6 @@ dependencies {
   implementation(libs.androidx.lifecycle.runtime.compose)
   implementation(libs.androidx.compose.ui)
   implementation(libs.androidx.compose.material3)
-  // Templated glance screen (Car App Library): CarAppService + CarAppActivity on Android Automotive.
-  implementation(libs.androidx.car.app)
-  implementation(libs.androidx.car.app.automotive)
-  implementation(libs.androidx.fragment) // = app-automotive's own runtime dependency; see libs.versions.toml
 
   testImplementation(libs.junit)
   testImplementation(libs.kotlinx.coroutines.test)

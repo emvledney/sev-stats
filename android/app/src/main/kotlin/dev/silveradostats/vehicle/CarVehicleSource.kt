@@ -7,10 +7,12 @@ import dev.silveradostats.BuildConfig
 import dev.silveradostats.diag.AppPermissions
 import dev.silveradostats.diag.CrashLog
 import dev.silveradostats.link.AppSettings
+import dev.silveradostats.log.LogHub
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.MainScope
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
@@ -66,6 +68,7 @@ class CarVehicleSource(context: Context) : VehicleSource {
         chargeRateAgeMs = rate?.ageMs,
         rangeM = get(KnownProperties.RANGE_REMAINING, Signal.RANGE, CarPerm.CAR_ENERGY)?.number,
         gear = get(KnownProperties.GEAR_SELECTION, Signal.GEAR, CarPerm.CAR_POWERTRAIN)?.number?.toInt(),
+        ignition = get(KnownProperties.IGNITION_STATE, null, CarPerm.CAR_POWERTRAIN)?.number?.toInt(),
         plugConnected = get(KnownProperties.EV_CHARGE_PORT_CONNECTED, Signal.PLUG, CarPerm.CAR_ENERGY_PORTS)?.value as? Boolean,
         chargeState = ChargeState.fromAosp(get(KnownProperties.EV_CHARGE_STATE, Signal.CHARGE_STATE, CarPerm.CAR_ENERGY)?.number?.toInt()),
         capacityWh = capacityWh,
@@ -150,7 +153,8 @@ class CarVehicleSource(context: Context) : VehicleSource {
 /**
  * The process's one VehicleSession: it outlives LinkService (which is destroyed when the last
  * screen unbinds), so a session survives the dashboard closing and reopening, and only ends with
- * a reset, a demo switch or the process. LinkService hands it to the screens.
+ * a reset, a demo switch or the process. LinkService hands it to the screens, and VehicleWatchService
+ * keeps it running without them.
  */
 object SessionHub {
   @Volatile private var instance: VehicleSession? = null
@@ -175,8 +179,10 @@ object SessionHub {
         automotive -> CarVehicleSource(app)
         else -> UnavailableSource(Feed(FeedKind.NOT_AUTOMOTIVE, CarVehicleSource.NOT_A_CAR))
       }
-    }, onFailure = record, savedEfficiency = settings.lastEfficiency(), onEfficiency = settings::setLastEfficiency)
+    }, onFailure = record)
     scope.launch { settings.state.map { it.demo }.distinctUntilChanged().collect { session.setDemo(it) } }
+    // Here, not in a service: a reading counts whichever service asked for it.
+    MainScope().launch { session.state.collect { LogHub.get(app).onSession(it) } }
     return session
   }
 }

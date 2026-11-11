@@ -5,6 +5,8 @@ import dev.silveradostats.link.LiveState
 import dev.silveradostats.link.LiveValue
 import dev.silveradostats.ui.live.DashboardModel
 import dev.silveradostats.ui.live.Units
+import dev.silveradostats.vehicle.ChargeReading
+import dev.silveradostats.vehicle.ChargeState
 import java.time.Instant
 import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
@@ -272,6 +274,18 @@ object LogRows {
   private const val MAX_HEX_DIGITS = 8
 
   fun wallClockValid(wallMs: Long): Boolean = wallMs >= MIN_VALID_WALL_MS
+
+  /** What [chargeReading] needs of a built-in row. */
+  val CHARGE_COLS: List<LogCol> = listOf(LogCol.CAR_ENERGY_KWH, LogCol.CAR_CAPACITY_KWH, LogCol.CAR_PLUGGED, LogCol.CAR_CHARGE_STATE, LogCol.CAR_SPEED_KMH)
+
+  /** A built-in row as the last charge reads it: the log can say how far back the last charge was, not what was used with the truck on. */
+  fun chargeReading(row: LogRow): ChargeReading = ChargeReading.fromCar(
+    levelWh = row[LogCol.CAR_ENERGY_KWH]?.times(1000.0),
+    capacityWh = row[LogCol.CAR_CAPACITY_KWH]?.times(1000.0),
+    plugged = row[LogCol.CAR_PLUGGED]?.let { it != 0.0 },
+    chargeState = ChargeState.fromAosp(row[LogCol.CAR_CHARGE_STATE]?.toInt()),
+    speedMps = row[LogCol.CAR_SPEED_KMH]?.div(3.6),
+  ).copy(atMs = row.atMs, awake = false) // Each row a moment of its own: no usage is counted across them.
 
   /** A row of the built-in data; null when the truck gave nothing to log. */
   fun fromCar(r: CarReading, atMs: Long, tzMinutes: Int, trigger: LogTrigger): LogRow? {

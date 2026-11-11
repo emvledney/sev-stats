@@ -56,10 +56,10 @@ object DrivingPolicy {
     else -> false
   }
 
-  /** "Gear Park · speed 0.1 m/s · restrictions off": what [restricted] is going by, as read. */
+  /** "Gear Park · speed 0.2 mph · restrictions off": what [restricted] is going by, as read. */
   fun reason(i: DrivingInputs): String {
     val gear = i.gear?.let { g -> CarEnums.GEAR[g]?.lowercase()?.replaceFirstChar { it.uppercase() } ?: g.toString() } ?: "not read"
-    val speed = i.speedMps?.let { String.format(Locale.US, "%.1f m/s", it) } ?: "not read"
+    val speed = i.speedMps?.let { String.format(Locale.US, "%.1f mph", it * 2.2369363) } ?: "not read"
     val ux = when (i.requiresOptimization) {
       null -> "no answer"
       true -> "on"

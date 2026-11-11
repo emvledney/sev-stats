@@ -26,14 +26,14 @@ import kotlinx.coroutines.launch
  * (LinkConnection attaches on onStart and detaches on onStop) or during the log's hourly visit with the
  * truck on (LogHub.visit, through the same LinkConnection), which keeps one row of what is read. Without a visible screen nothing is
  * sent; the socket stays open, silent, for at most [LinkEngine.GRACE_MS] in case a screen comes
- * back (glance <-> dashboard), then closes and releases the MX+. When the last client
+ * back, then closes and releases the MX+. When the last client
  * unbinds, the service is destroyed and the socket is closed at once.
  *
  * It also hands the screens the session of the truck's built-in data ([vehicle], the process's
- * SessionHub instance): sampled while any screen is bound, independent of the OBD link. Bound is not
- * enough on its own: Android freezes the process once none of its screens is visible (the
- * cached-app freezer, within 10 s to about 6 min on API 34), so a drive is measured while the main
- * screen or Battery Glance is on screen, and a frozen stretch becomes a gap the session leaves out.
+ * SessionHub instance), independent of the OBD link. Sampling with no screen up is VehicleWatchService's
+ * doing, not this service's: without that one Android freezes the process once none of its screens is
+ * visible (the cached-app freezer, within 10 s to about 6 min on API 34), and a frozen stretch becomes a
+ * gap the session leaves out.
  */
 class LinkService : Service() {
   inner class LocalBinder : Binder() {
@@ -91,11 +91,14 @@ class LinkService : Service() {
       packReadAtMs = current.atMs
       vehicle.addPackPower(kw)
     }
-    val kwh = (s.derived["capacity_kwh"] as? Number ?: s.derived["bms_energy_at_100_kwh"] as? Number)?.toDouble()
-    val ah = (s.derived["capacity_ah"] as? Number ?: s.derived["ah_nominal_est"] as? Number)?.toDouble()
+    // Only what the BECM reported, never an estimate: it shows later as what was last read, and when.
+    val kwh = (s.derived["capacity_kwh"] as? Number)?.toDouble()
+    val ah = (s.derived["capacity_ah"] as? Number)?.toDouble()
+    if (kwh == null && ah == null) return
     val saved = settings.state.value.savedCapacity
-    if (kwh != null && (saved == null || saved.kwh != kwh || saved.ah != ah) && (saved == null || System.currentTimeMillis() - saved.atWallMs >= SAVE_CAPACITY_MS)) {
-      settings.setSavedCapacity(SavedCapacity(kwh, ah, System.currentTimeMillis()))
+    val now = System.currentTimeMillis()
+    if (saved == null || now - saved.atWallMs >= SAVE_CAPACITY_MS) {
+      settings.setSavedCapacity(SavedCapacity(kwh ?: saved?.kwh, ah ?: saved?.ah, now))
     }
   }
 

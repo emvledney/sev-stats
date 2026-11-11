@@ -221,7 +221,7 @@ object Report {
       .put("ratedWh", n(s.feed.ratedWh))
       .put("rangeM", n(s.rangeM))
       .put("rangeEstimateM", n(s.rangeEstimate?.m))
-      .put("rangeBasis", s.rangeEstimate?.basis?.name ?: JSONObject.NULL)
+      .put("rangeMiPerKwh", n(s.rangeEstimate?.mPerWh?.let(EffUnits::miPerKwh)))
       .put("outsideC", n(s.outsideC))
       .put("gear", s.gear ?: JSONObject.NULL)
   }

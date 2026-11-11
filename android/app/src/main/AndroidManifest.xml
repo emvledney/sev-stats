@@ -1,15 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    xmlns:tools="http://schemas.android.com/tools">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <!--
       Distributed on the REGULAR Play internal-testing track (the dedicated Android Automotive OS
       track stayed inactive for this account), so car features are declared but not required.
       The app checks FEATURE_AUTOMOTIVE / the car service at runtime. GM's Google built-in head
-      units have both the automotive feature and the Templates Host used by the glance screen.
+      units have the automotive feature.
     -->
     <uses-feature android:name="android.hardware.type.automotive" android:required="false" />
-    <uses-feature android:name="android.software.car.templates_host" android:required="false" />
     <uses-feature android:name="android.hardware.wifi" android:required="false" />
     <uses-feature android:name="android.hardware.screen.portrait" android:required="false" />
     <uses-feature android:name="android.hardware.screen.landscape" android:required="false" />
@@ -28,8 +26,15 @@
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
 
-    <!-- Battery log: the hourly job is persisted, so it survives a reboot of the head unit. -->
+    <!--
+      Battery log: the hourly job is persisted, so it survives a reboot of the head unit. The background
+      service below starts at boot as well.
+    -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+
+    <!-- The background service below: nothing but the right to run one, no vehicle access of any kind. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
 
     <!--
       Bluetooth: Classic discovery and pairing with the OBDLink MX+, then one RFCOMM serial
@@ -52,14 +57,6 @@
 
         <uses-library android:name="android.car" android:required="false" />
 
-        <!-- Car App Library: this app is a templated app; lowest Car App API level it needs. -->
-        <meta-data
-            android:name="com.android.automotive"
-            android:resource="@xml/automotive_app_desc" />
-        <meta-data
-            android:name="androidx.car.app.minCarApiLevel"
-            android:value="1" />
-
         <!--
           OBD link (MX+ or demo simulator). Bound only by this app's own screens, never started,
           not exported: no other app can reach it, and it runs only while a screen is bound.
@@ -79,22 +76,29 @@
             android:permission="android.permission.BIND_JOB_SERVICE" />
 
         <!--
-          Battery Glance: the Car App Library's templated service, also usable while driving. The
-          host (the system's Templates Host) binds to it, so it must be exported; which hosts may
-          connect is decided in GlanceCarAppService.createHostValidator (allowlist in release
-          builds), as the library documents.
+          Keeps the session of the truck's built-in data running with no screen up, the owner's choice
+          (vehicle/VehicleWatchService.kt). Read-only, the truck's API only: it never touches the OBD link
+          or the LinkService above, and holds no wake lock. Started by this app only, never exported.
+          Special use: none of Android's other types is what it does.
         -->
         <service
-            android:name=".glance.GlanceCarAppService"
-            android:exported="true"
-            android:icon="@mipmap/ic_launcher"
-            android:label="@string/glance_name"
-            tools:ignore="ExportedService">
-            <intent-filter>
-                <action android:name="androidx.car.app.CarAppService" />
-                <category android:name="androidx.car.app.category.IOT" />
-            </intent-filter>
+            android:name=".vehicle.VehicleWatchService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Reads the truck's battery level and speed, read-only, to measure drives and charges with no screen open" />
         </service>
+
+        <!-- Brings that service back after a reboot of the head unit or an update of the app. Only the system can send these. -->
+        <receiver
+            android:name=".vehicle.VehicleWatchStarter"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
 
         <!--
           Simple, Live and Diagnostics. Marked distractionOptimized so that Android Automotive does
@@ -103,7 +107,8 @@
            - INTERNAL TESTING ONLY. It goes against Google's guidelines for car apps (a Compose screen
              is not a reviewed template), so this build must never go to a production Play track;
            - Android honours the flag only for apps installed from an allowed source (Play);
-           - GM could block it in an update: Battery Glance below remains the fallback;
+           - GM could block it in an update, and the app has no other screen for driving: the owner
+             removed the templated fallback, Battery Glance, on 2026-11-07;
            - known limit: a system permission dialog opened in Park stays up if the truck then leaves
              Park. Android gives the app no way to close it, and the emulator's OS did not cover it
              (the truck's permission controller is untested). The app opens no further dialog.
@@ -115,31 +120,6 @@
             android:name=".MainActivity"
             android:exported="true"
             android:windowSoftInputMode="adjustResize">
-            <intent-filter>
-                <action android:name="android.intent.action.MAIN" />
-                <category android:name="android.intent.category.LAUNCHER" />
-            </intent-filter>
-
-            <meta-data
-                android:name="distractionOptimized"
-                android:value="true" />
-        </activity>
-
-        <!--
-          The Car App Library's host activity for Battery Glance, declared as Google's Android
-          Automotive guide says, plus its own task affinity so that each launcher entry opens its
-          own task (otherwise "Silverado Stats" could resume on the glance, and back from the glance
-          would land on the dashboard). It shows only what the Templates Host renders. With
-          MainActivity it is one of exactly two distraction-optimized activities (SourceSafetyTest
-          enforces that list).
-        -->
-        <activity
-            android:name="androidx.car.app.activity.CarAppActivity"
-            android:exported="true"
-            android:label="@string/glance_name"
-            android:launchMode="singleTask"
-            android:taskAffinity="dev.silveradostats.glance"
-            android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />

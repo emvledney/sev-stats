@@ -73,7 +73,7 @@ object LinkMessages {
   const val ASLEEP_SILENT = "Truck asleep: nothing is sent on the bus. The adapter's own voltage is checked once a minute; " +
     "polling resumes when the truck wakes."
   const val ASLEEP_NO_VOLTAGE = "Truck asleep: single checks at 1, 5 and 30 minutes (this adapter can't report its voltage)."
-  const val POLLING_STOPPED = "Polling stopped: the truck stayed asleep. Tap Retry once the truck is on."
+  const val POLLING_STOPPED = "Polling stopped: the truck stayed asleep. Tap Connect once the truck is on."
   const val POLLING_DEMO = "Simulated truck: these values are not from your battery."
   const val POLLING = "Reading the truck through the MX+ (read-only, one request at a time)."
 
@@ -81,9 +81,9 @@ object LinkMessages {
   fun recovering(e: Throwable): String {
     val m = e.message ?: e.javaClass.simpleName
     return if (e is AdapterTimeoutError) {
-      "The MX+ did not answer in time ($m). Reconnecting automatically with a full adapter setup; tap Retry to do it now."
+      "The MX+ did not answer in time ($m). Reconnecting automatically with a full adapter setup; tap Connect to do it now."
     } else {
-      "Connection to the MX+ was lost ($m). Reconnecting automatically; tap Retry to do it now."
+      "Connection to the MX+ was lost ($m). Reconnecting automatically; tap Connect to do it now."
     }
   }
 
@@ -92,10 +92,10 @@ object LinkMessages {
     val m = e.message ?: e.javaClass.simpleName
     return when {
       e is LinkLostError || m.startsWith("adapter link failed") || m.startsWith("adapter closed the connection") || m == "adapter link is closed" ->
-        "Connection to the MX+ was lost ($m). Check that it is plugged in and awake, then tap Retry."
+        "Connection to the MX+ was lost ($m). Check that it is plugged in and awake, then tap Connect."
       e is UnsafeRequestError -> "Stopped: a request was refused by the read-only guard ($m). Nothing was sent."
-      e is FatalTransportError -> "Stopped: $m. Nothing more was sent; tap Retry to reconnect and set the adapter up again."
-      e is TransportError -> "Stopped: $m. Tap Retry to reconnect."
+      e is FatalTransportError -> "Stopped: $m. Nothing more was sent; tap Connect to reconnect and set the adapter up again."
+      e is TransportError -> "Stopped: $m. Tap Connect to reconnect."
       else -> "Stopped by an unexpected error: ${e.javaClass.simpleName}: $m"
     }
   }
@@ -213,7 +213,7 @@ class LinkEngine(
     object Park : Action()
     object Resume : Action()
     object Cycle : Action()
-    class Connect(val source: LinkSource) : Action()
+    class Connect(val source: LinkSource, val automaticRetry: Boolean = false) : Action()
     class Check(val request: CheckRequest) : Action()
   }
 
@@ -318,6 +318,8 @@ class LinkEngine(
       recoveries = 0
       wake.signalAll()
     }
+    // Tapped during an automatic attempt: that attempt is now the user's, so show it at once.
+    publish { if (it.status == LinkStatus.CONNECTING) it.copy(canRetry = false) else it }
   }
 
   /**
@@ -408,7 +410,7 @@ class LinkEngine(
           Action.Park -> publish { it.copy(polling = false) }
           Action.Resume -> publish { it.copy(polling = true) }
           Action.Cycle -> cycle()
-          is Action.Connect -> connect(a.source)
+          is Action.Connect -> connect(a.source, a.automaticRetry)
           is Action.Check -> runCheck(a.request)
         }
       }
@@ -492,7 +494,7 @@ class LinkEngine(
           continue
         }
       }
-      return Action.Connect(src)
+      return Action.Connect(src, automaticRetry = failures > 0 || recoveries > 0)
     }
     @Suppress("UNREACHABLE_CODE")
     Action.Exit
@@ -584,7 +586,7 @@ class LinkEngine(
     publish { it.copy(status = LinkStatus.CONNECTING, message = LinkMessages.IDLE, polling = false) }
   }
 
-  private fun connect(src: LinkSource) {
+  private fun connect(src: LinkSource, automaticRetry: Boolean) {
     abort = false
     lock.withLock { disconnectShown = false }
     val demo = src is LinkSource.Demo
@@ -594,7 +596,8 @@ class LinkEngine(
         message = if (demo) "Starting the simulator…" else "Connecting to ${src.description}…",
         demo = demo,
         adapter = src.description,
-        canRetry = false,
+        // Retry stays offered through an automatic attempt: the MX+ button must not change under a finger.
+        canRetry = automaticRetry,
         nextAutoRetryAtMs = null,
         polling = false,
       )

@@ -85,18 +85,6 @@ class DriveWarmupTest {
   }
 
   @Test
-  fun theSeriesStartsAfterTheWarmUp() {
-    val d = Truck()
-    d.run(warmupS, mps, kw, settling)
-    assertTrue(d.s().series.isEmpty())
-    d.run(900.0, mps, kw)
-    val s = d.s()
-    // No line under the warm-up's distance and its first mile; on the settled figure from there.
-    assertTrue(s.series.first().distM >= mps * warmupS + EffUnits.METERS_PER_MILE - SessionTracker.SERIES_STEP_M)
-    s.series.forEach { assertEquals(miPerKwh, EffUnits.miPerKwh(it.mPerWh), 0.05) }
-  }
-
-  @Test
   fun theFigureComesOutTheSameOnAPowerSignal() {
     val d = Truck()
     d.rate = { k -> -k * 1_000_000.0 }
@@ -173,28 +161,20 @@ class DriveWarmupTest {
   }
 
   @Test
-  fun eachDriveOfASessionWarmsUp() {
-    // Truck off between the drives, for less than it takes VehicleSession to start a new session.
+  fun eachDriveWarmsUpAgain() {
+    // Truck off between the drives: a new drive, whose figure starts from nothing.
     val d = Truck()
     d.run(warmupS, mps, kw, settling)
     d.run(600.0, mps, kw)
     d.run(10.0, 0.0, 0.0)
-    val figure = eff(d.s())
-    val basis = d.s().efficiency.basisM
     d.hole(20 * 60.0)
     d.run(2.0, 0.0, 0.0)
-    d.run(warmupS - 1, mps, kw, settling) { s ->
-      // The first drive's figure stands, unmoved, and it never says "warming up" again.
-      assertEquals(EffStatus.OK, s.efficiency.status)
-      assertEquals(figure, eff(s), 0.01)
-      assertEquals(basis, s.efficiency.basisM, 1.0)
-      assertEquals(1.0, s.efficiency.progress, 0.0)
-    }
+    d.run(warmupS - 1, mps, kw, settling) { s -> assertEquals(EffStatus.WARMING_UP, s.efficiency.status) }
     assertTrue(d.s().efficiency.warmupLeftMs in 1L..2_000L)
     d.run(600.0, mps, kw)
     assertEquals(0L, d.s().efficiency.warmupLeftMs)
     assertEquals(miPerKwh, eff(d.s()), 0.02)
-    assertEquals(basis + mps * 600.0, d.s().efficiency.basisM, 60.0)
+    assertEquals(mps * 600.0, d.s().efficiency.basisM, 60.0)
   }
 
   @Test

@@ -79,6 +79,7 @@ import dev.silveradostats.ui.layout.inspectTap
 import dev.silveradostats.ui.live.Marker
 import dev.silveradostats.ui.live.Units
 import dev.silveradostats.ui.theme.GridLine
+import dev.silveradostats.ui.theme.Ink
 import dev.silveradostats.ui.theme.TextDim
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -92,7 +93,7 @@ import kotlin.math.abs
 // Solid with round marks on the left axis, dashed with square marks on the right: never colour alone.
 private val LeftColor = Color(0xFF3987E5)
 private val RightColor = Color(0xFFD95926)
-private val ReadoutColor = Color(0xFFE8EDF2)
+private val ReadoutColor = Ink
 
 /** Above this many points on a chart the marks would merge; the line says it all. */
 private const val MAX_MARKED_POINTS = 400
@@ -117,9 +118,9 @@ fun TrendsScreen(settings: UiSettings, mxStatus: LinkStatus, layout: DashLayout,
   var note by remember { mutableStateOf<String?>(null) }
   val revision by hub.revision.collectAsStateWithLifecycle()
   val pick = picks.getValue(source)
-  val page by produceState<TrendPage?>(null, range, revision, settings.demo, source, pick, settings.tempUnit, settings.distUnit) {
+  val page by produceState<TrendPage?>(null, range, revision, settings.demo, source, pick) {
     value = withContext(Dispatchers.IO) {
-      TrendsModel.page(hub.trendData(range, settings.demo, source, pick), range, settings.tempUnit, settings.distUnit)
+      TrendsModel.page(hub.trendData(range, settings.demo, source, pick), range, Units.TEMP, Units.DIST)
     }
   }
   val saver = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("text/csv")) { uri ->
@@ -171,7 +172,6 @@ fun TrendsScreen(settings: UiSettings, mxStatus: LinkStatus, layout: DashLayout,
         PidCard(
           p,
           groups.getValue(shownSource),
-          settings,
           layout,
           Modifier.width(layout.trendPidsDp.dp).fillMaxHeight(),
           onGroup = { g ->
@@ -299,9 +299,9 @@ private fun StatsLine(s: TrendSeries, layout: DashLayout, modifier: Modifier) {
 }
 
 @Composable
-private fun PidCard(p: TrendPage, group: TrendGroup, settings: UiSettings, layout: DashLayout, modifier: Modifier, onGroup: (TrendGroup) -> Unit, onPick: (ChartPick) -> Unit) {
+private fun PidCard(p: TrendPage, group: TrendGroup, layout: DashLayout, modifier: Modifier, onGroup: (TrendGroup) -> Unit, onPick: (ChartPick) -> Unit) {
   val source = p.data.source
-  val rows = remember(p, group, settings.tempUnit, settings.distUnit) { TrendsModel.pidRows(p.data, group, settings.tempUnit, settings.distUnit) }
+  val rows = remember(p, group) { TrendsModel.pidRows(p.data, group, Units.TEMP, Units.DIST) }
   val all = TrendMeasure.of(source)
   Card(modifier, shape = RoundedCornerShape(14.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
     Column(Modifier.fillMaxSize().padding(horizontal = layout.cardPadHDp.dp, vertical = layout.cardPadVDp.dp), verticalArrangement = Arrangement.spacedBy(layout.cardGapDp.dp)) {
