@@ -1,5 +1,7 @@
 package dev.silveradostats.ui
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -30,9 +32,6 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.drawBehind
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
@@ -177,7 +176,7 @@ private fun ShellHeader(
     verticalAlignment = Alignment.CenterVertically,
     horizontalArrangement = Arrangement.spacedBy(gap),
   ) {
-    Row(Modifier.fillMaxHeight()) {
+    Row(Modifier.fillMaxHeight(), horizontalArrangement = Arrangement.spacedBy(DashLayout.TAB_GAP_DP.dp)) {
       AppTab.entries.filter { it != AppTab.DIAGNOSTICS || layout.diagnosticsTab }.filter { it != AppTab.TRENDS || layout.trendsTab }.forEach { t ->
         HeaderTab(t.label, tab == t, layout) { onSelect(t) }
       }
@@ -188,25 +187,26 @@ private fun ShellHeader(
   }
 }
 
+private val TAB_BUTTON_INSET = 8.dp
+private val TAB_BUTTON_SHAPE = RoundedCornerShape(14.dp)
+
 @Composable
 private fun HeaderTab(label: String, selected: Boolean, layout: DashLayout, onClick: () -> Unit) {
-  val accent = MaterialTheme.colorScheme.primary
-  // As tall as the header: at least 76 dp while driving.
+  val colors = MaterialTheme.colorScheme
+  // The tap target is as tall as the header (at least 76 dp while driving); the button drawn inside
+  // it is a little shorter, filled when selected and outlined when not.
   Box(
     Modifier
       .fillMaxHeight()
       .widthIn(min = layout.tabMinWidthDp.dp)
       .selectable(selected = selected, role = Role.Tab, onClick = onClick)
-      .drawBehind {
-        if (selected) {
-          val line = 4.dp.toPx()
-          drawRect(accent, Offset(0f, size.height - line), Size(size.width, line))
-        }
-      }
+      .padding(vertical = TAB_BUTTON_INSET)
+      .background(if (selected) colors.primary else colors.surfaceVariant, TAB_BUTTON_SHAPE)
+      .border(1.dp, if (selected) colors.primary else colors.outline, TAB_BUTTON_SHAPE)
       .padding(horizontal = layout.segmentPadDp.dp),
     contentAlignment = Alignment.Center,
   ) {
-    FitText(label, sp = layout.type.tab, weight = FontWeight.SemiBold, color = if (selected) accent else MaterialTheme.colorScheme.onSurface)
+    FitText(label, sp = layout.type.tab, weight = FontWeight.SemiBold, color = if (selected) colors.onPrimary else colors.onSurface)
   }
 }
 

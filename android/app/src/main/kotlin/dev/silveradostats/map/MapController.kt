@@ -28,6 +28,7 @@ import com.google.android.gms.maps.model.BitmapDescriptorFactory
 import com.google.android.gms.maps.model.Dash
 import com.google.android.gms.maps.model.Gap
 import com.google.android.gms.maps.model.LatLng
+import com.google.android.gms.maps.model.LatLngBounds
 import com.google.android.gms.maps.model.Marker
 import com.google.android.gms.maps.model.MarkerOptions
 import com.google.android.gms.maps.model.Polygon
@@ -61,6 +62,9 @@ private val CELL_DEGREES = doubleArrayOf(0.25, 0.5, 1.0, 2.0, 4.0, 8.0, 16.0, 32
 private const val DOT_SPACING_DP = 12 // closest two charger dots may sit before the weaker one is hidden
 private const val OUTLINE_REFRESH = 0.05 // redraw the outline after moving, or the range changing, by this share of the range
 private const val OUTLINE_COLOR = 0xFF378ADD.toInt()
+
+/** How far around the truck the map shows after the GPS button, and on the first fix: this many miles each way. */
+const val LOCATE_RADIUS_MILES = 50
 
 /** Dot and tag colours by power: 150 kW and up, 50 to 149, under 50. */
 val TIER_COLORS = intArrayOf(0xFF1D9E75.toInt(), 0xFFEF9F27.toInt(), 0xFF888780.toInt())
@@ -186,8 +190,32 @@ class MapController(private val context: Context) : LocationListener {
     val first = here == null
     val pos = LatLng(l.latitude, l.longitude)
     here = pos
-    if (following) map?.animateCamera(if (first) CameraUpdateFactory.newLatLngZoom(pos, 11f) else CameraUpdateFactory.newLatLng(pos))
+    if (following) {
+      if (first) showAround(pos) else map?.animateCamera(CameraUpdateFactory.newLatLng(pos))
+    }
     refreshOutline()
+  }
+
+  /** Centres on [pos] with [LOCATE_RADIUS_MILES] visible in every direction. */
+  private fun showAround(pos: LatLng) {
+    val m = map ?: return
+    val reach = LOCATE_RADIUS_MILES * METERS_PER_MILE
+    val bounds = LatLngBounds.builder().apply {
+      for (bearing in listOf(0.0, 90.0, 180.0, 270.0)) include(destination(pos.latitude, pos.longitude, bearing, reach).let { LatLng(it.first, it.second) })
+    }.build()
+    try {
+      m.animateCamera(CameraUpdateFactory.newLatLngBounds(bounds, dp(16)))
+    } catch (_: RuntimeException) {
+      // The map has no size yet (first layout): the nearest fixed zoom will do until the next tap.
+      m.moveCamera(CameraUpdateFactory.newLatLngZoom(pos, 8f))
+    }
+  }
+
+  /** The GPS button: back to the truck, following it again, at the standard radius. */
+  fun locate() {
+    following = true
+    val pos = here ?: return toast("Waiting for a GPS fix")
+    showAround(pos)
   }
 
   private fun metersBetween(a: LatLng, b: LatLng): Float {
@@ -245,11 +273,12 @@ class MapController(private val context: Context) : LocationListener {
       isTiltGesturesEnabled = false
       isCompassEnabled = false
       isMapToolbarEnabled = false
-      isZoomControlsEnabled = true
+      isZoomControlsEnabled = false // pinch to zoom; the GPS button returns to the standard view
+      // The map's own locate button is too small to hit while driving; the screen draws a larger one.
+      isMyLocationButtonEnabled = false
     }
     m.setOnCameraIdleListener { loadChargers() }
     m.setOnCameraMoveStartedListener { if (it == GoogleMap.OnCameraMoveStartedListener.REASON_GESTURE) following = false }
-    m.setOnMyLocationButtonClickListener { following = true; false }
     m.setOnMarkerClickListener { marker -> (marker.tag as? Charger)?.let { show(place(it)) }; true }
     m.setOnMapLongClickListener { show(Place("Dropped pin", "", it.latitude, it.longitude)) }
     startLocation()

@@ -175,7 +175,7 @@ fun MapScreen(
               voice.launch(Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM))
             }
           },
-          modifier = Modifier.onSizeChanged { controller.setPadding(it.width + 2 * EDGE.roundToPx(context), it.height + 2 * EDGE.roundToPx(context)) },
+          modifier = Modifier.onSizeChanged { controller.setPadding(it.width + 2 * EDGE.roundToPx(context), 0) },
         )
         if (!keyboard) {
           FilterChips(controller.filters, body, onPick = { picker = it }, onToggleWorking = { controller.applyFilters(controller.filters.copy(workingOnly = !controller.filters.workingOnly)) })
@@ -183,6 +183,18 @@ fun MapScreen(
           if (!controller.hasLocationPermission && !layout.restricted) {
             Button(onClick = onRequestPermissions, modifier = Modifier.height(TOUCH)) { Text("Allow location to show the truck", fontSize = body.sp) }
           }
+        }
+      }
+
+      // The GPS button: back to the truck at the standard radius.
+      Surface(
+        Modifier.align(Alignment.TopEnd).padding(EDGE).size(TOUCH).clickable(onClick = controller::locate),
+        shape = RoundedCornerShape(50),
+        color = MaterialTheme.colorScheme.surface,
+        shadowElevation = 4.dp,
+      ) {
+        Box(contentAlignment = Alignment.Center) {
+          Icon(painterResource(R.drawable.map_ic_locate), "Show the truck", Modifier.size(36.dp), tint = MaterialTheme.colorScheme.primary)
         }
       }
 

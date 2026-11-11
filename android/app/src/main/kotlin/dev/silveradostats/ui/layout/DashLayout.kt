@@ -355,8 +355,11 @@ data class DashLayout(
 
     /** A toggle's segment stays this wide, whatever its text needs: still one easy tap. */
     const val MIN_SEGMENT_DP = 44
-    private val TAB_CHARS = listOf(6, 4, 11, 6) // Simple, Live, Diagnostics, Trends
-    private const val PARKED_TABS_NARROW = 3 // no Trends
+    private val TAB_CHARS = listOf(6, 4, 3, 11, 6) // Simple, Live, Map, Diagnostics, Trends
+    private const val PARKED_TABS_NARROW = 4 // no Trends
+
+    /** The tabs are drawn as buttons: this much space between two of them. */
+    const val TAB_GAP_DP = 8
 
     /** Trends' tiles, chart, PID list and controls need this much window; narrower, the tab is not offered. */
     const val TRENDS_MIN_WIDTH_DP = 1100
@@ -366,7 +369,7 @@ data class DashLayout(
     private const val TREND_ROW_SPARE_DP = 20
     private const val TREND_CHIP_MIN_DP = 36
     private const val TREND_BUTTON_MAX_DP = 48
-    private const val DRIVING_TABS = 2 // Simple, Live
+    private const val DRIVING_TABS = 3 // Simple, Live, Map
     private const val STATUS_CHARS = 15 // The least Live's link state and Trends' row count get.
     private const val RESET_CHARS = 13 // Reset session
     private const val RESET_SHORT_CHARS = 5 // Reset
@@ -503,21 +506,21 @@ data class DashLayout(
     private fun typeFor(tier: SizeTier, restricted: Boolean): TypeScale = when (tier) {
       SizeTier.COMPACT ->
         if (restricted) {
-          TypeScale(value = 48, unit = 20, cardTitle = 22, title = 20, body = 18, label = 16, tab = 24, axis = 14)
+          TypeScale(value = 48, unit = 20, cardTitle = 22, title = 20, body = 18, label = 16, tab = 29, axis = 14)
         } else {
-          TypeScale(value = 40, unit = 18, cardTitle = 20, title = 18, body = 16, label = 14, tab = 18, axis = 12)
+          TypeScale(value = 40, unit = 18, cardTitle = 20, title = 18, body = 16, label = 14, tab = 22, axis = 12)
         }
       SizeTier.MEDIUM ->
         if (restricted) {
-          TypeScale(value = 68, unit = 26, cardTitle = 26, title = 24, body = 22, label = 18, tab = 26, axis = 16)
+          TypeScale(value = 68, unit = 26, cardTitle = 26, title = 24, body = 22, label = 18, tab = 31, axis = 16)
         } else {
-          TypeScale(value = 56, unit = 22, cardTitle = 24, title = 20, body = 18, label = 16, tab = 22, axis = 14)
+          TypeScale(value = 56, unit = 22, cardTitle = 24, title = 20, body = 18, label = 16, tab = 26, axis = 14)
         }
       SizeTier.LARGE ->
         if (restricted) {
-          TypeScale(value = 80, unit = 32, cardTitle = 30, title = 28, body = 24, label = 20, tab = 28, axis = 18)
+          TypeScale(value = 80, unit = 32, cardTitle = 30, title = 28, body = 24, label = 20, tab = 34, axis = 18)
         } else {
-          TypeScale(value = 64, unit = 28, cardTitle = 28, title = 24, body = 20, label = 18, tab = 24, axis = 16)
+          TypeScale(value = 64, unit = 28, cardTitle = 28, title = 24, body = 20, label = 18, tab = 29, axis = 16)
         }
     }
 
@@ -535,7 +538,8 @@ data class DashLayout(
       windowDp: Int,
     ): Int {
       val segment = type.tab - 2
-      val tabs = TAB_CHARS.take(if (restricted) DRIVING_TABS else if (windowDp < TRENDS_MIN_WIDTH_DP) PARKED_TABS_NARROW else TAB_CHARS.size).sumOf { max(tabMin, textDp(it, type.tab, scale) + 2 * segmentPad) }
+      val shown = TAB_CHARS.take(if (restricted) DRIVING_TABS else if (windowDp < TRENDS_MIN_WIDTH_DP) PARKED_TABS_NARROW else TAB_CHARS.size)
+      val tabs = shown.sumOf { max(tabMin, textDp(it, type.tab, scale) + 2 * segmentPad) } + (shown.size - 1) * TAB_GAP_DP
       val reset = if (restricted) 0 else textDp(if (short) RESET_SHORT_CHARS else RESET_CHARS, segment, scale) + 2 * segmentPad
       val mx = textDp(if (short) MX_SHORT_CHARS else MX_CHARS, segment, scale) + 2 * segmentPad
       val status = ceil(STATUS_CHARS * type.title * SUMMARY_EM * scale).toInt()
