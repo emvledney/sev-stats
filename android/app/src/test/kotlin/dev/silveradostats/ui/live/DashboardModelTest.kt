@@ -73,10 +73,11 @@ class DashboardModelTest {
     // The deviation's DID is unknown: no figure rather than a guess.
     assertFalse(d.capacityDeviation.hasValue)
     assertEquals("PID not identified yet", d.capacityDeviation.lines[0])
-    // Pack: V and A, + = discharge, and the cell spread.
-    assertEquals(listOf("Pack voltage", "Pack current", "Cell spread"), d.pack.map { it.label })
+    // Pack: V, A and the kW they make, + = discharge, and the cell spread.
+    assertEquals(listOf("Pack voltage", "Pack current", "Pack power", "Cell spread"), d.pack.map { it.label })
     assertEquals("+40.0 A", d.pack[1].value)
-    assertTrue(d.pack[2].value, d.pack[2].value.endsWith(" mV"))
+    assertTrue(d.pack[2].value, Regex("""\+\d+\.\d kW""").matches(d.pack[2].value))
+    assertTrue(d.pack[3].value, d.pack[3].value.endsWith(" mV"))
     // The simulated truck draws 40 A: the array was read under load, so the spread is the larger
     // per-half spread from the BMS summaries (half A holds the low outlier, group 47 in module 6).
     val heat = d.heatmap!!

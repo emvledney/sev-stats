@@ -94,10 +94,12 @@ fun vhalFigures(rows: List<PropertyRow>): VhalFigures {
 }
 
 /**
- * Live dashboard, on one page in any landscape window: KPI tiles of a fixed height, then cards that
- * share what is left. Parked: pack and temperatures, cell-group heatmap with its module strip.
- * Driving ([DashLayout.restricted]): larger tiles, pack, a temperature summary; the heatmap and the
- * strip are not composed, there is nothing to tap, and cell min / max stays in its tile.
+ * The OBD dashboard, on one page in any landscape window: KPI tiles of a fixed height, then the grid of pack
+ * and temperature tiles beside the cell-group heatmap with its module strip.
+ *
+ * The page is the same in every gear, by the owner's choice (2026-11-11): the shell gives it the parked layout
+ * ([DashLayout.ofLive]) whatever the truck is doing, heatmap and its tap-to-inspect included. [driving] only
+ * slows the figures to one change a second.
  */
 @Composable
 fun LiveScreen(
@@ -107,6 +109,8 @@ fun LiveScreen(
   ownRangeM: Double?,
   settings: UiSettings,
   layout: DashLayout,
+  /** The truck is out of Park: the figures then change together, once a second. */
+  driving: Boolean,
   chrome: Chrome,
   onRetry: () -> Unit,
   mxAction: MxAction,
@@ -121,7 +125,7 @@ fun LiveScreen(
   }
   // While driving the figures all change together on the clock's tick, once a second, whatever
   // the two sources do between ticks.
-  val dash = remember(now, if (layout.restricted) Unit else live, if (layout.restricted) Unit else vhal) {
+  val dash = remember(now, if (driving) Unit else live, if (driving) Unit else vhal) {
     DashboardModel.build(live, vhal, Units.TEMP, Units.DIST, now, settings.savedCapacity, System.currentTimeMillis(), ownRangeM)
   }
 
@@ -129,13 +133,14 @@ fun LiveScreen(
     chrome(
       { LiveSummary(dash.status, layout) },
       {
-        MxButton(settings, mxAction, layout, onMxAction)
+        val wide = if (layout.inRail) Modifier.fillMaxWidth() else Modifier
+        MxButton(settings, mxAction, layout, onMxAction, wide)
         // With an MX+ that button reconnects; the simulator has no such button, only Retry.
         if (layout.controls) {
           if (dash.status.canRetry && settings.demo) {
             Button(
               onClick = onRetry,
-              modifier = Modifier.heightIn(min = layout.controlDp.dp),
+              modifier = wide.heightIn(min = layout.controlDp.dp),
               contentPadding = PaddingValues(horizontal = layout.segmentPadDp.dp),
             ) { FitText("Retry", sp = layout.type.tab - 2) }
           }
@@ -153,31 +158,18 @@ fun LiveScreen(
       KpiTiles(dash, layout)
       // Only what has its minimum height: a window too short for the cards shows no empty ones.
       if (layout.liveCards) {
-        if (layout.restricted) {
-          LiveDriving(dash, layout, Modifier.weight(1f))
-        } else {
-          LiveParked(dash, live.status == LinkStatus.NO_ADAPTER, Units.TEMP, layout, onOpenDiagnostics, Modifier.weight(1f))
-        }
+        LiveParked(dash, live.status == LinkStatus.NO_ADAPTER, Units.TEMP, layout, onOpenDiagnostics, Modifier.weight(1f))
       }
     }
   }
 }
 
-/** Driving: the pack and a temperature summary, nothing to tap, no cell or module grid. */
-@Composable
-private fun LiveDriving(dash: Dashboard, layout: DashLayout, modifier: Modifier) {
-  Row(modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(layout.gapDp.dp)) {
-    TempsCard("Pack", dash.pack, layout, Modifier.weight(1f).fillMaxHeight())
-    TempsCard("Temperatures", dash.tempSummary, layout, Modifier.weight(1f).fillMaxHeight())
-  }
-}
-
-/** Parked: everything, and only here the tap-to-inspect details and the grids that need them. */
+/** The cards under the tiles: the grid of pack and temperature tiles, and the cell-group heatmap with its tap-to-inspect. */
 @Composable
 private fun LiveParked(dash: Dashboard, noAdapter: Boolean, unit: TempUnit, layout: DashLayout, onOpenDiagnostics: () -> Unit, modifier: Modifier) {
   var selectedGroup by rememberSaveable { mutableStateOf<Int?>(null) }
   Row(modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(layout.gapDp.dp)) {
-    TempsCard(if (layout.liveShort) "Pack and temps" else "Pack, temperatures and 12 V", dash.pack + dash.temps, layout, Modifier.weight(1f).fillMaxHeight())
+    PackTiles(dash.packTiles, layout, Modifier.weight(1f).fillMaxHeight())
     if (dash.heatmap == null) {
       NoCellDataCard(noAdapter, dash.obdHint, dash.moduleTemps, unit, layout, onOpenDiagnostics, Modifier.weight(2.4f).fillMaxHeight())
     } else {
@@ -192,11 +184,11 @@ private fun LiveParked(dash: Dashboard, noAdapter: Boolean, unit: TempUnit, layo
  * brought back, without pulling over.
  */
 @Composable
-internal fun MxButton(settings: UiSettings, action: MxAction, layout: DashLayout, onMxAction: (MxAction) -> Unit) {
+internal fun MxButton(settings: UiSettings, action: MxAction, layout: DashLayout, onMxAction: (MxAction) -> Unit, modifier: Modifier = Modifier) {
   if (settings.demo || settings.mxAddress == null) return
   OutlinedButton(
     onClick = { onMxAction(action) },
-    modifier = Modifier.heightIn(min = layout.mxButtonDp.dp),
+    modifier = modifier.heightIn(min = layout.mxButtonDp.dp),
     contentPadding = PaddingValues(horizontal = layout.segmentPadDp.dp),
   ) { FitText(if (layout.shortChrome) action.shortLabel else action.label, sp = layout.type.tab - 2) }
 }
@@ -246,7 +238,9 @@ internal fun Dot(color: Color, size: Int = 14, modifier: Modifier = Modifier) {
  */
 @Composable
 private fun RowScope.LiveSummary(s: StatusView, layout: DashLayout) {
+  val wide = if (layout.inRail) Modifier.fillMaxWidth() else Modifier
   Surface(
+    modifier = wide,
     shape = RoundedCornerShape(24.dp),
     color = toneColor(s.tone).copy(alpha = 0.14f),
     border = BorderStroke(2.dp, toneColor(s.tone)),
@@ -259,6 +253,12 @@ private fun RowScope.LiveSummary(s: StatusView, layout: DashLayout) {
   }
   if (layout.restricted) {
     if (s.dataStale) s.dataAge?.let { FitText(it, Modifier.weight(1f, fill = false), sp = layout.type.body, color = StatusWarn) }
+  } else if (layout.inRail) {
+    // In the rail: narrow, so the message wraps and each detail has its own line.
+    Column(Modifier.fillMaxWidth()) {
+      FitText(s.message, sp = layout.type.label, maxLines = 3)
+      listOfNotNull(s.dataAge, s.retryIn).forEach { FitText(it, sp = layout.type.label, color = if (s.dataStale) StatusWarn else TextDim) }
+    }
   } else {
     Column(Modifier.weight(1f)) {
       FitText(s.message, sp = layout.type.body)
@@ -272,27 +272,37 @@ private fun RowScope.LiveSummary(s: StatusView, layout: DashLayout) {
 
 @Composable
 private fun ColumnScope.KpiTiles(dash: Dashboard, layout: DashLayout) {
-  val tiles = listOf(dash.soc, dash.capacity, dash.capacityAh, dash.capacityDeviation)
-  val rows = tiles.chunked(layout.liveTileCols)
+  val tiles = listOf(dash.soc, dash.remaining, dash.capacity, dash.capacityAh, dash.capacityDeviation)
+  // One row of all five where the page has its tiles in a row; two to a row on a window too narrow for that.
+  val across = if (layout.liveTileCols >= DashLayout.LIVE_TILES) tiles.size else 2
+  val rows = tiles.chunked(across)
+  val figureSp = layout.liveFigureSp(across)
   val size = if (layout.liveCards) Modifier.height(layout.liveTilesDp.dp) else Modifier.weight(1f)
   Column(Modifier.fillMaxWidth().then(size), verticalArrangement = Arrangement.spacedBy(layout.gapDp.dp)) {
     rows.forEach { row ->
       Row(Modifier.fillMaxWidth().weight(1f), horizontalArrangement = Arrangement.spacedBy(layout.gapDp.dp)) {
-        row.forEach { KpiTile(it, layout, Modifier.weight(1f).fillMaxHeight()) }
+        row.forEach { k ->
+          // The capacity tiles carry no description of what they are, by the owner's choice (2026-11-11): only
+          // the marker beside the title says read, estimated or last read. Their lines stay where they are
+          // news: a figure that is a saved one (how old it is), or missing because there is no adapter.
+          // The charge is alone in its tile: what is left has the tile beside it, and this page shows no range.
+          val lines = k !== dash.soc && k !== dash.remaining && (k.marker == DashboardModel.LAST_READ || (!k.hasValue && k !== dash.capacityDeviation))
+          KpiTile(k, lines, figureSp, layout, Modifier.weight(1f).fillMaxHeight())
+        }
       }
     }
   }
 }
 
 @Composable
-private fun KpiTile(k: Kpi, layout: DashLayout, modifier: Modifier) {
+private fun KpiTile(k: Kpi, lines: Boolean, figureSp: Int, layout: DashLayout, modifier: Modifier) {
   val type = layout.type
   val short = layout.liveShort
   DashCard(modifier, layout) {
     // Who gives way first: an age that is not a warning, then the label.
     PriorityRow(Modifier.fit(1).fillMaxWidth()) {
       FitText(if (short) k.shortTitle else k.title, Modifier.slot(1, minWidth = layout.labelMinDp(type.title).dp), sp = type.title, color = TextDim)
-      k.marker?.let { Marker(it, type.label, Modifier.slot(0)) }
+      tag(k.marker)?.let { Marker(it, type.label, Modifier.slot(0)) }
       k.age?.takeIf { layout.ages || k.stale }?.let {
         FitText(it, Modifier.slot(if (k.stale) 2 else 5, end = true), sp = type.label, color = if (k.stale) StatusWarn else TextDim)
       }
@@ -301,14 +311,16 @@ private fun KpiTile(k: Kpi, layout: DashLayout, modifier: Modifier) {
       FitText(
         k.value,
         Modifier.alignByBaseline(),
-        sp = layout.liveValueSp,
+        sp = figureSp,
         lineFactor = DashLayout.VALUE_LINE_FACTOR,
         weight = FontWeight.Bold,
         color = if (k.hasValue) MaterialTheme.colorScheme.onSurface else TextDim,
       )
       FitText(k.unit, Modifier.alignByBaseline().weight(1f, fill = false), sp = type.unit, color = TextDim)
     }
-    if (layout.restricted) {
+    if (!lines) {
+      // No description under this figure.
+    } else if (layout.restricted) {
       k.drivingLines.take(layout.liveTileLines).forEach { FitText(it, Modifier.fit(3), sp = type.body, color = TextDim) }
     } else {
       k.lines.take(layout.liveTileLines).forEachIndexed { i, line ->
@@ -330,7 +342,7 @@ private fun TempsCard(title: String, lines: List<TempLine>, layout: DashLayout, 
     lines.forEachIndexed { i, l ->
       PriorityRow(Modifier.fit(3 + i).fillMaxWidth()) {
         FitText(if (short) l.shortLabel else l.label, Modifier.slot(2, minWidth = layout.labelMinDp(type.body).dp), sp = type.body, color = TextDim)
-        l.marker?.let { Marker(it, type.label, Modifier.slot(1, end = true)) }
+        tag(l.marker)?.let { Marker(it, type.label, Modifier.slot(1, end = true)) }
         FitText(
           if (short) l.shortValue else l.value,
           Modifier.slot(0, minWidth = 1.dp, end = true),
@@ -338,6 +350,78 @@ private fun TempsCard(title: String, lines: List<TempLine>, layout: DashLayout, 
           weight = FontWeight.SemiBold,
           color = if (l.stale) StatusWarn else MaterialTheme.colorScheme.onSurface,
         )
+      }
+    }
+  }
+}
+
+/** The tag beside a title, except "unverified": the owner does not want that one shown (2026-11-11). */
+private fun tag(marker: String?): String? = marker?.takeUnless { it == "unverified" }
+
+/**
+ * The parked page's grid of small tiles ([Dashboard.packTiles]): two to a row, each a label over its value; a
+ * tile with parts (a battery half's temperatures) takes a whole row, its figures side by side over their
+ * captions. A list of rows ran out of height and read as a table, not as figures.
+ */
+@Composable
+private fun PackTiles(tiles: List<PackTile>, layout: DashLayout, modifier: Modifier) {
+  val type = layout.type
+  val gap = Arrangement.spacedBy(layout.gapDp.dp)
+  val rows = mutableListOf<List<PackTile>>()
+  var waiting: PackTile? = null
+  for (t in tiles) {
+    val first = waiting
+    when {
+      t.parts.isNotEmpty() -> {
+        if (first != null) rows += listOf(first)
+        waiting = null
+        rows += listOf(t)
+      }
+      first == null -> waiting = t
+      else -> {
+        rows += listOf(first, t)
+        waiting = null
+      }
+    }
+  }
+  waiting?.let { rows += listOf(it) }
+  Column(modifier, verticalArrangement = gap) {
+    rows.forEach { row ->
+      Row(Modifier.fillMaxWidth().weight(1f), horizontalArrangement = gap) {
+        row.forEach { t ->
+          Card(
+            modifier = Modifier.weight(1f).fillMaxHeight(),
+            shape = RoundedCornerShape(16.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+          ) {
+            val ink = if (t.stale) StatusWarn else MaterialTheme.colorScheme.onSurface
+            FitColumn(Modifier.fillMaxSize().padding(horizontal = layout.cardPadHDp.dp, vertical = 6.dp), spacing = 2.dp) {
+              if (t.parts.isEmpty()) {
+                PriorityRow(Modifier.fit(1).fillMaxWidth()) {
+                  FitText(t.label, Modifier.slot(1, minWidth = layout.labelMinDp(type.label).dp), sp = type.label, color = TextDim)
+                  tag(t.marker)?.let { Marker(it, type.label, Modifier.slot(0, end = true)) }
+                }
+                FitText(t.value, Modifier.fit(0).fillMaxWidth(), sp = type.cardTitle, weight = FontWeight.Bold, color = ink)
+              } else {
+                // A wide tile: its name and unit lead the row, so a short tile cannot lose them, then the figures.
+                Row(Modifier.fit(0).fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
+                  Column(Modifier.weight(1f)) {
+                    FitText(t.label, sp = type.body, weight = FontWeight.SemiBold)
+                    // Under the name: the unit only. There is no room here for a tag such as "likely".
+                    FitText(t.value, sp = type.label, color = TextDim)
+                  }
+                  t.parts.forEach { (caption, figure) ->
+                    Column(Modifier.weight(1f)) {
+                      // Five figures share the row with the name: a size that leaves room for "3.913".
+                      FitText(figure, sp = type.title, weight = FontWeight.Bold, color = ink)
+                      FitText(caption, sp = type.label, color = TextDim)
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
       }
     }
   }

@@ -30,8 +30,8 @@ android {
     applicationId = silveradoApplicationId
     minSdk = 32 // Android 12L (GM SQBR builds)
     targetSdk = 35 // Play requirement for Android Automotive OS apps
-    versionCode = 22
-    versionName = "0.18.0"
+    versionCode = 23
+    versionName = "0.19.0"
     manifestPlaceholders["MAPS_API_KEY"] = localKey("MAPS_API_KEY")
     buildConfigField("String", "MAPS_API_KEY", "\"${localKey("MAPS_API_KEY")}\"")
     buildConfigField("String", "OCM_API_KEY", "\"${localKey("OCM_API_KEY")}\"")

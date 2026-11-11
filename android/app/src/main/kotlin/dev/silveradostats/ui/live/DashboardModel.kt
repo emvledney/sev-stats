@@ -120,6 +120,18 @@ data class HeatmapView(
 
 data class ModuleTemps(val celsius: List<Double?>, val marker: String?, val stale: Boolean)
 
+/**
+ * One tile of the parked OBD page's grid: a label over a value, or, with [parts], a wide tile of small
+ * captioned figures (a battery half's module temperatures).
+ */
+data class PackTile(
+  val label: String,
+  val value: String,
+  val marker: String? = null,
+  val stale: Boolean = false,
+  val parts: List<Pair<String, String>> = emptyList(),
+)
+
 data class Dashboard(
   val status: StatusView,
   val soc: Kpi,
@@ -137,6 +149,10 @@ data class Dashboard(
   val moduleTemps: ModuleTemps?,
   /** Shown when OBD data is missing: what is needed to get it. */
   val obdHint: String?,
+  /** The OBD page's grid of tiles. */
+  val packTiles: List<PackTile> = emptyList(),
+  /** The energy left, a tile of its own beside the charge. */
+  val remaining: Kpi = Kpi("Remaining", Units.DASH, "kWh", emptyList(), hasValue = false),
 )
 
 object DashboardModel {
@@ -170,7 +186,76 @@ object DashboardModel {
       heatmap = heat,
       moduleTemps = moduleTemps(v, nowMs),
       obdHint = if (hasObd) null else OBD_HINT,
+      packTiles = packTiles(v, vhal, temp, nowMs, spread, heat),
+      remaining = remaining(v, vhal, nowMs),
     )
+  }
+
+  /** The energy left: the BMS's figure, else the car API's (marked), else a dash. */
+  fun remaining(v: Map<String, LiveValue>, vhal: VhalFigures, nowMs: Long): Kpi {
+    val src = v["energy_remaining"]
+    val kwh = num(v, "energy_remaining")
+    return when {
+      kwh != null -> Kpi("Remaining", Units.num(kwh, 1), "kWh", emptyList(), marker = marker(src), age = ageOf(src, nowMs), stale = isStale(src, nowMs))
+      vhal.energyWh != null -> Kpi("Remaining", Units.num(vhal.energyWh / 1000.0, 1), "kWh", emptyList(), marker = "VHAL")
+      else -> Kpi("Remaining", Units.DASH, "kWh", emptyList(), hasValue = false)
+    }
+  }
+
+  /** Min, mean, median and max of [readings] (gaps skipped), or null with none. */
+  fun minMeanMedianMax(readings: List<Double?>): List<Double>? {
+    val t = readings.filterNotNull().sorted()
+    if (t.isEmpty()) return null
+    val median = if (t.size % 2 == 1) t[t.size / 2] else (t[t.size / 2 - 1] + t[t.size / 2]) / 2
+    return listOf(t.first(), t.sum() / t.size, median, t.last())
+  }
+
+  private val TEMP_PARTS = listOf("min", "mean", "median", "max")
+
+  /**
+   * The OBD page's grid, as the owner asked for it (2026-11-11): each battery half's voltage, the cell groups'
+   * voltages as min, mean, median and max, the cell spread, each half's module temperatures as min, mean,
+   * median and max, the two coolant temperatures in one tile, and the outside temperature. No current, power,
+   * range or 12 V figure; the energy left is a tile of the top row ([remaining]).
+   */
+  fun packTiles(v: Map<String, LiveValue>, vhal: VhalFigures, temp: TempUnit, nowMs: Long, spread: Kpi, heat: HeatmapView? = null): List<PackTile> {
+    val out = mutableListOf<PackTile>()
+    // A half's voltage is the sum of its cell groups: the BECM reports the pack's, not each half's. Only a
+    // complete half is summed; without the cell groups the pack's own figure stands in.
+    val halfVolts = heat?.halfAfter?.let { half ->
+      val split = half * heat.groupsPerModule
+      listOf(heat.cells.take(split), heat.cells.drop(split)).map { cells -> cells.mapNotNull { it.volts }.takeIf { it.isNotEmpty() && it.size == cells.size }?.sum() }
+    }
+    if (heat != null && halfVolts != null && halfVolts.all { it != null }) {
+      halfVolts.forEachIndexed { i, sum -> out += PackTile("Battery ${i + 1}", "${Units.num(sum ?: 0.0, 1)} V", stale = heat.stale) }
+    } else {
+      pack(v, nowMs).first().let { out += PackTile(it.shortLabel, it.value, it.marker, it.stale) }
+    }
+    minMeanMedianMax(heat?.cells.orEmpty().map { it.volts })?.let { s ->
+      out += PackTile("Cells", "V", stale = heat?.stale ?: false, parts = TEMP_PARTS.zip(s.map { Units.num(it, 3) }))
+    }
+    out += PackTile("Cell spread", if (spread.hasValue) "${spread.value} ${spread.unit}" else Units.DASH, spread.marker, spread.stale)
+    // Module temperatures, one tile per battery half (the pack is two halves in series).
+    val mt = moduleTemps(v, nowMs)
+    val all = mt?.celsius.orEmpty()
+    val halves = if (all.size >= 4 && all.size % 2 == 0) listOf("Batt 1" to all.take(all.size / 2), "Batt 2" to all.drop(all.size / 2)) else listOf("Batt" to all) // short: the name shares a row with four figures
+    for ((name, list) in halves) {
+      val stats = minMeanMedianMax(list)
+      val figures = if (stats == null) List(4) { Units.DASH } else listOf(0, 1, 1, 0).mapIndexed { i, decimals -> Units.num(Units.temp(stats[i], temp), decimals) }
+      // For a tile with parts, the value is the unit its figures are in.
+      out += PackTile(name, temp.symbol, mt?.marker ?: marker(v["module_temps"]), mt?.stale ?: false, TEMP_PARTS.zip(figures))
+    }
+    val c1 = v["coolant_temp_1"]
+    val c2 = v["coolant_temp_2"]
+    val coolant = listOf(num(v, "coolant_temp_1"), num(v, "coolant_temp_2"))
+    out += PackTile(
+      "Coolant 1 · 2",
+      if (coolant.all { it == null }) Units.DASH else coolant.joinToString(" · ") { c -> c?.let { Units.num(Units.temp(it, temp), 0) } ?: Units.DASH } + " ${temp.symbol}",
+      marker(c1) ?: marker(c2),
+      isStale(c1, nowMs) || isStale(c2, nowMs),
+    )
+    out += PackTile("Outside", Units.tempText(vhal.outsideC, temp, 0))
+    return out
   }
 
   // --- Status -----------------------------------------------------------------------------------
@@ -342,13 +427,16 @@ object DashboardModel {
   private const val DEVIATION_TITLE = "Capacity deviation"
   private const val DEVIATION_SHORT = "Deviation"
 
-  /** Pack voltage and current, + discharge, each with its own age and marker. */
+  /** Pack voltage, current and the power they make, + discharge, each with its own age and marker. */
   fun pack(v: Map<String, LiveValue>, nowMs: Long): List<TempLine> {
     val volts = v["pack_voltage"]
     val amps = v["pack_current"]
+    val kw = num(v, "pack_voltage")?.let { u -> num(v, "pack_current")?.let { i -> u * i / 1000.0 } }
     return listOf(
       TempLine("Pack voltage", num(v, "pack_voltage")?.let { "${Units.num(it, 1)} V" } ?: Units.DASH, marker(volts), isStale(volts, nowMs), shortLabel = "Voltage"),
       TempLine("Pack current", num(v, "pack_current")?.let { "${Units.signed(it, 1)} A" } ?: Units.DASH, marker(amps), isStale(amps, nowMs), shortLabel = "Current"),
+      // Volts x amps: as old as the older of the two.
+      TempLine("Pack power", kw?.let { "${Units.signed(it, 1)} kW" } ?: Units.DASH, marker(amps), isStale(volts, nowMs) || isStale(amps, nowMs), shortLabel = "Power"),
     )
   }
 

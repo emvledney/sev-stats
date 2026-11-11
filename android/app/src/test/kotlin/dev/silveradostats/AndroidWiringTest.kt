@@ -68,8 +68,8 @@ class AndroidWiringTest {
     assertTrue(Regex("""combine\(store\.state, restricted\) \{ s, r -> s\.wantsObd\(r\) \}\.distinctUntilChanged\(\)\.collect \{ conn\.setObdWanted\(it\) \}""").containsMatchIn(vm))
     assertEquals(1, Regex("""conn\.setObdWanted\(""").findAll(vm).count())
     val settings = src("link/AppSettings.kt")
-    assertTrue(settings.contains("SIMPLE(\"Simple\", false)"))
-    assertTrue(settings.contains("LIVE(\"Live\", true)"))
+    assertTrue(settings.contains("SIMPLE(\"API\", false)"))
+    assertTrue(settings.contains("LIVE(\"OBD\", true)"))
     assertTrue(settings.contains("DIAGNOSTICS(\"Diagnostics\", true)"))
     // Nothing else in the app attaches the engine.
     val main = listOf(File("src/main/kotlin"), File("app/src/main/kotlin")).first { it.isDirectory }
@@ -140,7 +140,7 @@ class AndroidWiringTest {
     assertTrue(Regex("""BoxWithConstraints\(Modifier\.fillMaxSize\(\)\.windowInsetsPadding\(WindowInsets\.safeDrawing\)\)""").containsMatchIn(shell))
     assertTrue(Regex("""DashLayout\.of\(maxWidth\.value, maxHeight\.value, restricted, fontScale\)""").containsMatchIn(shell))
     assertEquals("one layout decision, and Simple's", 1, Regex("""DashLayout\.of\(""").findAll(shell).count())
-    assertTrue(Regex("""DashLayout\.ofSimple\(maxWidth\.value, maxHeight\.value, fontScale\)""").containsMatchIn(shell))
+    assertTrue(Regex("""DashLayout\.ofSimple\(maxWidth\.value, maxHeight\.value, fontScale\)\.withoutHeader\(\)""").containsMatchIn(shell))
   }
 
   /**
@@ -155,7 +155,8 @@ class AndroidWiringTest {
     assertEquals("the page takes nothing from the layout's gear", emptyList<String>(), Regex("""layout\.(restricted|controls)""").findAll(simple).map { it.value }.toList())
     assertTrue(shell.contains("layout = simpleLayout,"))
     assertTrue(shell.contains("driving = restricted,"))
-    assertTrue(shell.contains("ShellHeader(simpleLayout, tab, liveVm::selectTab, summary, controls)"))
+    // Its buttons are drawn at the foot of the rail, and the page has no header row.
+    assertTrue(shell.contains("chrome = toRail,"))
     // Nothing on the page depends on the gear but a notice's button.
     assertEquals(listOf("driving"), Regex("""\bif \((driving)\)""").findAll(simple).map { it.groupValues[1] }.toList())
     assertFalse(simple.contains("!driving"))
@@ -235,7 +236,8 @@ class AndroidWiringTest {
   fun diagnosticsAndPairingAreReachableOnlyInPark() {
     val shell = src("ui/AppShell.kt")
     assertTrue(Regex("""if \(layout\.restricted\) \{\s*AvailableInParkPanel\(layout, stateKnown, liveVm\.drivingInputs\)\s*\} else \{\s*DiagnosticsScreen\(diagVm, liveVm,""").containsMatchIn(shell))
-    assertTrue("the tab is not offered", shell.contains("it != AppTab.DIAGNOSTICS || layout.diagnosticsTab"))
+    // The rail offers every tab in every gear (the owner's choice, 2026-11-11): restricted, selecting Diagnostics leads only to the panel above.
+    assertTrue(funBody(shell, "NavRailColumn").contains("AppTab.entries.forEach { t -> NavButton(t.label, tab == t, rail) { onSelect(t) } }"))
     val panel = funBody(shell, "AvailableInParkPanel")
     assertEquals("the panel has nothing to tap", emptyList<String>(), Regex("""Button|clickable|selectable|TextField|Switch|onClick""").findAll(panel).map { it.value }.toList())
     val main = listOf(File("src/main/kotlin"), File("app/src/main/kotlin")).first { it.isDirectory }
@@ -341,19 +343,22 @@ class AndroidWiringTest {
     val vm = src("LiveViewModel.kt")
     assertTrue(vm.contains("fun onMxAction(action: MxAction) {"))
     assertTrue(funBody(vm, "onMxAction"), !funBody(vm, "onMxAction").contains("parkedOnly"))
-    assertTrue(funBody(src("ui/AppShell.kt"), "HeaderTab").contains(".fillMaxHeight()"))
+    // The rail buttons are as tall as the policy says: 76 dp or more while driving (DashLayoutTest).
+    assertTrue(funBody(src("ui/AppShell.kt"), "NavButton").contains(".height(rail.buttonDp.dp)"))
   }
 
-  /** The heatmap, the module strip and every tap gesture exist only on the parked path. */
+  /**
+   * The OBD page is the same in every gear (the owner's choice, 2026-11-11): the shell gives it the parked
+   * layout always, so the heatmap and its tap-to-inspect are there while driving too. One card function draws
+   * it, and the heatmap still has exactly one tap gesture.
+   */
   @Test
-  fun tapToInspectAndTheGridsAreParkedOnly() {
+  fun theObdPageIsTheSameInEveryGear() {
     val live = src("ui/live/LiveScreen.kt")
-    val driving = funBody(live, "LiveDriving")
-    for (absent in listOf("HeatmapCard", "Heatmap(", "ModuleTempStrip", "NoCellDataCard", "selectedGroup")) {
-      assertTrue("$absent in LiveDriving", !driving.contains(absent))
-    }
-    assertTrue("nothing to tap", !driving.contains("onSelect"))
-    assertTrue(Regex("""if \(layout\.restricted\) \{\s*LiveDriving\(""").containsMatchIn(live))
+    val shell = src("ui/AppShell.kt")
+    assertTrue(shell.contains("DashLayout.ofLive(maxWidth.value, maxHeight.value, fontScale)"))
+    assertTrue(src("ui/layout/DashLayout.kt").contains("fun ofLive(widthDp: Float, heightDp: Float, fontScale: Float = 1f): DashLayout = of(widthDp, heightDp, false, fontScale).withoutHeader()"))
+    assertTrue("no driving variant of the page", !live.contains("LiveDriving"))
     assertEquals("one caller", 1, Regex("""(?<!fun )\bHeatmapCard\(""").findAll(live).count())
     assertTrue(funBody(live, "LiveParked").contains("HeatmapCard("))
     assertEquals("the cell tap", 1, Regex("""\.clickable\(""").findAll(live).count())
@@ -416,7 +421,7 @@ class AndroidWiringTest {
     assertTrue(shell.contains("liveVm.shownLive.collectAsStateWithLifecycle()"))
     assertTrue(!Regex("""liveVm\.(session|live)\.""").containsMatchIn(shell))
     // Live has two sources: while driving only the clock's one-second tick rebuilds what it draws.
-    assertTrue(src("ui/live/LiveScreen.kt").contains("remember(now, if (layout.restricted) Unit else live, if (layout.restricted) Unit else vhal)"))
+    assertTrue(src("ui/live/LiveScreen.kt").contains("remember(now, if (driving) Unit else live, if (driving) Unit else vhal)"))
     // No animation on the dashboards: nothing to catch the eye while driving.
     val animated = Regex("""\banimate\w*\(|\brememberInfiniteTransition\b|\bCircularProgressIndicator\b|\bAnimatedVisibility\b|\bCrossfade\b""")
     for ((name, text) in dashboards()) assertEquals("$name animates", emptyList<String>(), animated.findAll(text).map { it.value }.toList())

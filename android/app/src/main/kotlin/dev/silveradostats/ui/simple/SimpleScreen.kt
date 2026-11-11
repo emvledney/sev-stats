@@ -49,7 +49,6 @@ import dev.silveradostats.ui.layout.WindowTooSmall
 import dev.silveradostats.ui.live.Marker
 import dev.silveradostats.ui.live.MxButton
 import dev.silveradostats.ui.live.Units
-import dev.silveradostats.ui.theme.GridLine
 import dev.silveradostats.ui.theme.TextDim
 import dev.silveradostats.ui.theme.ToneEfficiency
 import dev.silveradostats.ui.theme.ToneHave
@@ -105,13 +104,14 @@ fun SimpleScreen(
   }
 
   Column(Modifier.fillMaxSize()) {
+    // The two buttons are drawn at the foot of the navigation rail, each as wide as the rail.
     chrome(
       {},
       {
-        MxButton(settings, mxAction, layout, onMxAction)
+        MxButton(settings, mxAction, layout, onMxAction, Modifier.fillMaxWidth())
         OutlinedButton(
           onClick = { confirmReset = true },
-          modifier = Modifier.heightIn(min = layout.controlDp.dp),
+          modifier = Modifier.fillMaxWidth().heightIn(min = layout.controlDp.dp),
           contentPadding = PaddingValues(horizontal = layout.segmentPadDp.dp),
         ) { FitText(if (layout.shortChrome) "Reset" else "Reset session", sp = layout.type.tab - 2) }
       },
@@ -268,51 +268,33 @@ private fun Tiles(view: SimpleView, layout: DashLayout, modifier: Modifier) {
 }
 
 /**
- * The last charge, as a row of four parts, each under a column above and spaced as those are, so that its figures
- * start where theirs do: what the charge reached in kWh and %, then what has been used since, the mi/kWh since and
- * the drift.
+ * The last charge, as a row of four tiles in the style of the ones above, each under a column above and spaced as
+ * those are, so that its figures start where theirs do: what the charge reached in kWh and %, then what has been
+ * used since, the mi/kWh since and the drift.
  */
 @Composable
 private fun ChargeTile(c: ChargeView, notice: Boolean, layout: DashLayout, modifier: Modifier) {
   val sp = layout.simpleChargeSp(notice)
   val unitSp = layout.simpleChargeUnitSp(sp)
   val reached = layout.simpleChargeReachedWeights(notice)
-  val surface = MaterialTheme.colorScheme.surface
-  Card(modifier, shape = RoundedCornerShape(20.dp), colors = CardDefaults.cardColors(containerColor = surface)) {
-    Row(Modifier.fillMaxSize().toned(TONE_CHARGE, surface), horizontalArrangement = Arrangement.spacedBy(layout.gapDp.dp)) {
-      ChargePart(layout, rule = false) {
-        ChargeFigure(c.to, layout, sp, unitSp, Modifier.weight(reached[0]))
-        ChargeFigure(c.toPct, layout, sp, unitSp, Modifier.weight(reached[1]))
-      }
-      listOf(c.used, c.efficiency, c.drift).forEach { s ->
-        ChargePart(layout, rule = true) { ChargeFigure(s, layout, sp, unitSp, Modifier.weight(1f)) }
-      }
+  Row(modifier, horizontalArrangement = Arrangement.spacedBy(layout.gapDp.dp)) {
+    ChargePart(layout) {
+      ChargeFigure(c.to, layout, sp, unitSp, Modifier.weight(reached[0]))
+      ChargeFigure(c.toPct, layout, sp, unitSp, Modifier.weight(reached[1]))
+    }
+    listOf(c.used, c.efficiency, c.drift).forEach { s ->
+      ChargePart(layout) { ChargeFigure(s, layout, sp, unitSp, Modifier.weight(1f)) }
     }
   }
 }
 
-/** A part of the last charge's row, as wide as a column above, its figures as far in; past the first, a rule in the gap before it. */
+/** One tile of the last charge's row: as wide as a column above, its figures as far in, and toned like the tiles above. */
 @Composable
-private fun RowScope.ChargePart(layout: DashLayout, rule: Boolean, content: @Composable RowScope.() -> Unit) {
-  val padV = layout.cardPadVDp.dp
-  val gap = layout.gapDp.dp
-  Row(
-    Modifier
-      .weight(1f)
-      .fillMaxHeight()
-      .then(
-        if (rule) {
-          Modifier.drawBehind {
-            val x = -gap.toPx() / 2
-            drawLine(GridLine, Offset(x, padV.toPx()), Offset(x, size.height - padV.toPx()), strokeWidth = DashLayout.SIMPLE_RULE_DP.dp.toPx())
-          }
-        } else {
-          Modifier
-        },
-      )
-      .padding(horizontal = layout.cardPadHDp.dp),
-    content = content,
-  )
+private fun RowScope.ChargePart(layout: DashLayout, content: @Composable RowScope.() -> Unit) {
+  val surface = MaterialTheme.colorScheme.surface
+  Card(Modifier.weight(1f).fillMaxHeight(), shape = RoundedCornerShape(20.dp), colors = CardDefaults.cardColors(containerColor = surface)) {
+    Row(Modifier.fillMaxSize().toned(TONE_CHARGE, surface).padding(horizontal = layout.cardPadHDp.dp), content = content)
+  }
 }
 
 /** A figure of the last charge's row, with its words under it. */

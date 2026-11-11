@@ -6,6 +6,10 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.WindowInsets
@@ -25,6 +29,7 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -42,10 +47,12 @@ import dev.silveradostats.DiagnosticsViewModel
 import dev.silveradostats.LiveViewModel
 import dev.silveradostats.link.AppTab
 import dev.silveradostats.ui.layout.DashLayout
+import dev.silveradostats.ui.layout.NavRail
 import dev.silveradostats.ui.layout.FitColumn
 import dev.silveradostats.ui.layout.FitText
 import dev.silveradostats.ui.live.LiveScreen
 import dev.silveradostats.ui.live.vhalFigures
+import dev.silveradostats.ui.map.MapRangeSummary
 import dev.silveradostats.ui.map.MapScreen
 import dev.silveradostats.ui.simple.SimpleModel
 import dev.silveradostats.ui.simple.SimpleScreen
@@ -56,21 +63,21 @@ import dev.silveradostats.vehicle.DrivingPolicy
 import kotlinx.coroutines.flow.StateFlow
 
 /**
- * The one header row the selected screen draws above itself: the tabs, then its buttons. A status of its
- * own goes in [summary], between the two; Simple has none, by the owner's choice (2026-11-06). Height is
- * what the dashboards are short of, so nothing else sits above them.
+ * The one header row the selected screen draws above itself: its status in [summary], then its buttons.
+ * Simple has no status, by the owner's choice (2026-11-06). Height is what the dashboards are short of,
+ * so nothing else sits above them; the tabs are in the rail on the left.
  */
 typealias Chrome = @Composable (summary: @Composable RowScope.() -> Unit, controls: @Composable RowScope.() -> Unit) -> Unit
 
 /**
- * Top-level layout: the header row (tabs Simple | Live | Trends | Map | Diagnostics, the last one remembered) and
- * the selected screen, sized from the window this composition actually got after insets, never
- * from a known panel. Which tabs use the OBD link: UiSettings.wantsObd.
+ * Top-level layout: a rail of five buttons down the left edge (API | OBD | Trends | Map | Diagnostics, the
+ * last one remembered) and the selected screen beside it, sized from the room this composition actually
+ * got after insets and the rail, never from a known panel. Which tabs use the OBD link: UiSettings.wantsObd.
  *
- * While the truck is out of Park (`layout.restricted`) the Diagnostics and Trends tabs are not offered
- * and show only [AvailableInParkPanel]; none of their tables, charts, pairing, fields or buttons compose.
- * Simple is the one page that does not change with the gear ([DashLayout.ofSimple]): those two tabs stay
- * on it and can be tapped, which out of Park leads to that panel.
+ * The rail always shows all five, parked or driving, by the owner's choice (2026-11-11). While the truck
+ * is out of Park (`layout.restricted`) Diagnostics and Trends can be selected but show only
+ * [AvailableInParkPanel]; none of their tables, charts, pairing, fields or buttons compose.
+ * Simple is the one page that does not change with the gear ([DashLayout.ofSimple]).
  */
 @Composable
 fun AppShell(
@@ -91,11 +98,35 @@ fun AppShell(
   Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
     BoxWithConstraints(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing)) {
       val fontScale = LocalDensity.current.fontScale
+      val rail = remember(maxWidth, maxHeight, fontScale) { DashLayout.navRail(maxWidth.value, maxHeight.value, fontScale) }
+      // The selected screen's own status and buttons, when it hands them to the rail instead of a header row (API, OBD).
+      val railSummary = remember(tab) { mutableStateOf<(@Composable RowScope.() -> Unit)?>(null) }
+      val railControls = remember(tab) { mutableStateOf<(@Composable RowScope.() -> Unit)?>(null) }
+      val toRail: Chrome = { summary, controls ->
+        SideEffect {
+          railSummary.value = summary
+          railControls.value = controls
+        }
+      }
+      Row(Modifier.fillMaxSize()) {
+      NavRailColumn(rail, tab, liveVm::selectTab) {
+        // The Map tab has no header row: its range reads here, under the buttons.
+        if (tab == AppTab.MAP) {
+          val session by liveVm.shownSession.collectAsStateWithLifecycle()
+          MapRangeSummary(session, rail.textSp, rail.footSp)
+        }
+        for (part in listOf(railSummary.value, railControls.value)) {
+          if (part == null) continue
+          FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(DashLayout.TAB_GAP_DP.dp), verticalArrangement = Arrangement.spacedBy(DashLayout.TAB_GAP_DP.dp)) { part() }
+        }
+      }
+      // The screens are laid out in the room beside the rail, measured here, never assumed.
+      BoxWithConstraints(Modifier.weight(1f).fillMaxHeight()) {
       val layout = remember(maxWidth, maxHeight, restricted, fontScale) {
         DashLayout.of(maxWidth.value, maxHeight.value, restricted, fontScale)
       }
       val chrome: Chrome = { summary, controls ->
-        ShellHeader(layout, tab, liveVm::selectTab, summary, controls)
+        ShellHeader(layout, summary, controls)
       }
       when (tab) {
         AppTab.SIMPLE -> {
@@ -103,7 +134,8 @@ fun AppShell(
           val live by liveVm.shownLive.collectAsStateWithLifecycle()
           val lastCharge by liveVm.lastCharge.collectAsStateWithLifecycle()
           // No gear in this one: shifting moves nothing on the page.
-          val simpleLayout = remember(maxWidth, maxHeight, fontScale) { DashLayout.ofSimple(maxWidth.value, maxHeight.value, fontScale) }
+          // Its buttons (MX+, Reset) go to the foot of the rail, so the page has no header row.
+          val simpleLayout = remember(maxWidth, maxHeight, fontScale) { DashLayout.ofSimple(maxWidth.value, maxHeight.value, fontScale).withoutHeader() }
           SimpleScreen(
             session = session,
             mxCapacityKwh = SimpleModel.mxCapacityKwh(live),
@@ -111,7 +143,7 @@ fun AppShell(
             settings = settings,
             layout = simpleLayout,
             driving = restricted,
-            chrome = { summary, controls -> ShellHeader(simpleLayout, tab, liveVm::selectTab, summary, controls) },
+            chrome = toRail,
             onReset = liveVm::resetSession,
             mxAction = mxAction,
             onMxAction = liveVm::onMxAction,
@@ -128,8 +160,10 @@ fun AppShell(
             vhal = vhalFigures(diag.live),
             ownRangeM = session.rangeEstimate?.m,
             settings = settings,
-            layout = layout,
-            chrome = chrome,
+            // The same page in every gear, its link status and buttons at the foot of the rail.
+            layout = remember(maxWidth, maxHeight, fontScale) { DashLayout.ofLive(maxWidth.value, maxHeight.value, fontScale) },
+            driving = restricted,
+            chrome = toRail,
             onRetry = liveVm::retry,
             mxAction = mxAction,
             onMxAction = liveVm::onMxAction,
@@ -137,26 +171,24 @@ fun AppShell(
           )
         }
         AppTab.TRENDS -> if (layout.restricted) {
-          Column(Modifier.fillMaxSize()) {
-            chrome({}, {})
-            AvailableInParkPanel(layout, stateKnown, liveVm.drivingInputs, "Trends")
-          }
+          AvailableInParkPanel(layout, stateKnown, liveVm.drivingInputs, "Trends")
         } else {
           val live by liveVm.shownLive.collectAsStateWithLifecycle()
           TrendsScreen(settings, live.status, layout, chrome)
         }
         AppTab.MAP -> {
           val session by liveVm.shownSession.collectAsStateWithLifecycle()
-          MapScreen(session = session, settings = settings, layout = layout, chrome = chrome, onRequestPermissions = onRequestPermissions)
+          MapScreen(session = session, layout = layout, onRequestPermissions = onRequestPermissions)
         }
         AppTab.DIAGNOSTICS -> Column(Modifier.fillMaxSize()) {
-          chrome({}, {})
           if (layout.restricted) {
             AvailableInParkPanel(layout, stateKnown, liveVm.drivingInputs)
           } else {
             DiagnosticsScreen(diagVm, liveVm, diagnosticsList, diagnosticsShowAll, { diagnosticsShowAll = it }, onRequestPermissions, onOpenAppSettings)
           }
         }
+      }
+      }
       }
     }
   }
@@ -165,8 +197,6 @@ fun AppShell(
 @Composable
 private fun ShellHeader(
   layout: DashLayout,
-  tab: AppTab,
-  onSelect: (AppTab) -> Unit,
   summary: @Composable RowScope.() -> Unit,
   controls: @Composable RowScope.() -> Unit,
 ) {
@@ -176,37 +206,45 @@ private fun ShellHeader(
     verticalAlignment = Alignment.CenterVertically,
     horizontalArrangement = Arrangement.spacedBy(gap),
   ) {
-    Row(Modifier.fillMaxHeight(), horizontalArrangement = Arrangement.spacedBy(DashLayout.TAB_GAP_DP.dp)) {
-      AppTab.entries.filter { it != AppTab.DIAGNOSTICS || layout.diagnosticsTab }.filter { it != AppTab.TRENDS || layout.trendsTab }.forEach { t ->
-        HeaderTab(t.label, tab == t, layout) { onSelect(t) }
-      }
-    }
     // Takes what is left: every other child in this row has already been measured when it does.
     Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(gap)) { summary() }
     controls()
   }
 }
 
-private val TAB_BUTTON_INSET = 8.dp
 private val TAB_BUTTON_SHAPE = RoundedCornerShape(14.dp)
 
+/**
+ * The rail: every tab, always, in the same place, whichever is selected and whatever the gear. What a
+ * screen wants under them ([foot]) sits at the bottom.
+ */
 @Composable
-private fun HeaderTab(label: String, selected: Boolean, layout: DashLayout, onClick: () -> Unit) {
+private fun NavRailColumn(rail: NavRail, tab: AppTab, onSelect: (AppTab) -> Unit, foot: @Composable ColumnScope.() -> Unit) {
+  Column(
+    Modifier.width(rail.widthDp.dp).fillMaxHeight().background(MaterialTheme.colorScheme.surface).padding(rail.padDp.dp),
+    verticalArrangement = Arrangement.spacedBy(DashLayout.TAB_GAP_DP.dp),
+  ) {
+    AppTab.entries.forEach { t -> NavButton(t.label, tab == t, rail) { onSelect(t) } }
+    Spacer(Modifier.weight(1f))
+    foot()
+  }
+}
+
+/** One rail button: filled when selected, outlined when not; [NavRail.buttonDp] tall (76 dp or more while driving). */
+@Composable
+private fun NavButton(label: String, selected: Boolean, rail: NavRail, onClick: () -> Unit) {
   val colors = MaterialTheme.colorScheme
-  // The tap target is as tall as the header (at least 76 dp while driving); the button drawn inside
-  // it is a little shorter, filled when selected and outlined when not.
   Box(
     Modifier
-      .fillMaxHeight()
-      .widthIn(min = layout.tabMinWidthDp.dp)
+      .fillMaxWidth()
+      .height(rail.buttonDp.dp)
       .selectable(selected = selected, role = Role.Tab, onClick = onClick)
-      .padding(vertical = TAB_BUTTON_INSET)
       .background(if (selected) colors.primary else colors.surfaceVariant, TAB_BUTTON_SHAPE)
       .border(1.dp, if (selected) colors.primary else colors.outline, TAB_BUTTON_SHAPE)
-      .padding(horizontal = layout.segmentPadDp.dp),
+      .padding(horizontal = DashLayout.NAV_BUTTON_PAD_DP.dp),
     contentAlignment = Alignment.Center,
   ) {
-    FitText(label, sp = layout.type.tab, weight = FontWeight.SemiBold, color = if (selected) colors.onPrimary else colors.onSurface)
+    FitText(label, sp = rail.textSp, weight = FontWeight.SemiBold, color = if (selected) colors.onPrimary else colors.onSurface)
   }
 }
 

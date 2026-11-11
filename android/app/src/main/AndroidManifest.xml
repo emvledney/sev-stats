@@ -146,6 +146,7 @@
           dialogs, toggles or chart details, and values change at most once a second.
           The Map tab is the owner's deliberate exception (2026-11-10): charger search with the app's
           own keyboard, the filter pickers and the hand-off to Google Maps stay usable out of Park.
+          So is the OBD tab (2026-11-11): it keeps its parked page, cell-group grid included, in every gear.
         -->
         <activity
             android:name=".MainActivity"

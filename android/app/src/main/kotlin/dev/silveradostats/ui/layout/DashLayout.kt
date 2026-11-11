@@ -2,6 +2,7 @@ package dev.silveradostats.ui.layout
 
 import kotlin.math.ceil
 import kotlin.math.max
+import kotlin.math.min
 
 /*
  * Pure Kotlin (no android.* imports): how the dashboards fit one page in the window they actually
@@ -263,6 +264,12 @@ data class DashLayout(
   val trendAxisButtonDp: Int get() = minOf(trendRowDp - 4, TREND_BUTTON_MAX_DP)
 
   /** What the header row needs: the tabs, the buttons, and the least of a status for the tabs that draw one. */
+  /** For a screen whose status and controls are drawn in the navigation rail: no header row, so the page gets its height. */
+  fun withoutHeader(): DashLayout = copy(headerDp = 0)
+
+  /** The screen's status and buttons are stacked at the foot of the navigation rail, each as wide as the rail. */
+  val inRail: Boolean get() = headerDp == 0
+
   fun headerNeededDp(): Int = headerWidth(type, restricted, shortChrome, fontScale, segmentPadDp, tabMinWidthDp, headerGapDp, pagePadHDp, widthDp)
 
   /** The tiles' figures and secondary lines give way until the Live page fits; the cards go last. */
@@ -280,6 +287,12 @@ data class DashLayout(
     // Still no room for the cards: the tiles have the page to themselves, as they were.
     return if (l.requiredLive() > heightDp) start.copy(liveCards = false) else l
   }
+
+  /**
+   * The figure size for a row of [tiles] tiles: the page's own ([liveValueSp], worked out for [LIVE_TILES] a
+   * row), or smaller when more tiles than that share the row (the OBD page has five).
+   */
+  fun liveFigureSp(tiles: Int): Int = if (tiles <= LIVE_TILES) liveValueSp else max(LIVE_VALUE_MIN_SP, min(liveValueSp, figureSp(tiles)))
 
   /** The largest figure, up to [TypeScale.value], that fits beside its unit with [cols] tiles a row. */
   private fun figureSp(cols: Int): Int {
@@ -355,11 +368,32 @@ data class DashLayout(
 
     /** A toggle's segment stays this wide, whatever its text needs: still one easy tap. */
     const val MIN_SEGMENT_DP = 44
-    private val TAB_CHARS = listOf(6, 4, 3, 11, 6) // Simple, Live, Map, Diagnostics, Trends
-    private const val PARKED_TABS_NARROW = 4 // no Trends
-
-    /** The tabs are drawn as buttons: this much space between two of them. */
+    /** The tabs are buttons in a rail on the left: this much space between two of them. */
     const val TAB_GAP_DP = 8
+
+    /** Space between a rail button's edge and its label. */
+    const val NAV_BUTTON_PAD_DP = 12
+    private const val NAV_RAIL_PAD_DP = 10
+    private const val NAV_LONGEST_CHARS = 11 // Diagnostics
+    private const val NAV_BUTTONS = 5
+
+    /**
+     * The navigation rail down the left edge, sized from the whole window: wide enough for its longest
+     * label, and five buttons at the driving size (76 dp or more) unless the window is too short for
+     * that. It does not depend on the gear: the buttons are the same size parked and driving, by the
+     * owner's choice (2026-11-11).
+     */
+    fun navRail(widthDp: Float, heightDp: Float, fontScale: Float = 1f): NavRail {
+      val l = of(widthDp, heightDp, true, fontScale)
+      val room = (heightDp.toInt() - 2 * NAV_RAIL_PAD_DP - (NAV_BUTTONS - 1) * TAB_GAP_DP) / NAV_BUTTONS
+      return NavRail(
+        widthDp = textDp(NAV_LONGEST_CHARS, l.type.tab, l.fontScale) + 2 * NAV_BUTTON_PAD_DP + 2 * NAV_RAIL_PAD_DP,
+        buttonDp = min(l.headerDp, room),
+        textSp = l.type.tab,
+        footSp = l.type.body,
+        padDp = NAV_RAIL_PAD_DP,
+      )
+    }
 
     /** Trends' tiles, chart, PID list and controls need this much window; narrower, the tab is not offered. */
     const val TRENDS_MIN_WIDTH_DP = 1100
@@ -369,7 +403,6 @@ data class DashLayout(
     private const val TREND_ROW_SPARE_DP = 20
     private const val TREND_CHIP_MIN_DP = 36
     private const val TREND_BUTTON_MAX_DP = 48
-    private const val DRIVING_TABS = 3 // Simple, Live, Map
     private const val STATUS_CHARS = 15 // The least Live's link state and Trends' row count get.
     private const val RESET_CHARS = 13 // Reset session
     private const val RESET_SHORT_CHARS = 5 // Reset
@@ -498,6 +531,12 @@ data class DashLayout(
      * Simple's one layout, whatever the gear: Park's, with the tabs and the MX+ button as tall as Drive
      * wants them, so that shifting moves nothing on the page. Its controls work in every gear.
      */
+    /**
+     * The OBD page's layout: the parked one in every gear, by the owner's choice (2026-11-11), with its status
+     * and buttons in the navigation rail. The page does not change when the truck leaves Park.
+     */
+    fun ofLive(widthDp: Float, heightDp: Float, fontScale: Float = 1f): DashLayout = of(widthDp, heightDp, false, fontScale).withoutHeader()
+
     fun ofSimple(widthDp: Float, heightDp: Float, fontScale: Float = 1f): DashLayout {
       val l = of(widthDp, heightDp, false, fontScale)
       return l.copy(headerDp = max(l.headerDp, MIN_DRIVING_TARGET_DP), drivingTargets = true)
@@ -538,16 +577,17 @@ data class DashLayout(
       windowDp: Int,
     ): Int {
       val segment = type.tab - 2
-      val shown = TAB_CHARS.take(if (restricted) DRIVING_TABS else if (windowDp < TRENDS_MIN_WIDTH_DP) PARKED_TABS_NARROW else TAB_CHARS.size)
-      val tabs = shown.sumOf { max(tabMin, textDp(it, type.tab, scale) + 2 * segmentPad) } + (shown.size - 1) * TAB_GAP_DP
       val reset = if (restricted) 0 else textDp(if (short) RESET_SHORT_CHARS else RESET_CHARS, segment, scale) + 2 * segmentPad
       val mx = textDp(if (short) MX_SHORT_CHARS else MX_CHARS, segment, scale) + 2 * segmentPad
       val status = ceil(STATUS_CHARS * type.title * SUMMARY_EM * scale).toInt()
-      val gaps = if (restricted) 2 else 3 // between the tabs, a status, the MX+ button and, parked, Reset
-      return 2 * pagePad + tabs + reset + mx + status + gaps * gap
+      val gaps = if (restricted) 1 else 2 // between a status, the MX+ button and, parked, Reset (the tabs are in the rail)
+      return 2 * pagePad + reset + mx + status + gaps * gap
     }
   }
 }
+
+/** The navigation rail's sizes: see [DashLayout.navRail]. */
+data class NavRail(val widthDp: Int, val buttonDp: Int, val textSp: Int, val footSp: Int, val padDp: Int)
 
 /** Who keeps what when a card or a row runs out of room: priorities only, no Compose. */
 object FitRules {

@@ -52,6 +52,7 @@ import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -60,7 +61,6 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import dev.silveradostats.R
-import dev.silveradostats.link.UiSettings
 import dev.silveradostats.map.MapController
 import dev.silveradostats.map.MapFilters
 import dev.silveradostats.map.NetworkChoice
@@ -69,7 +69,6 @@ import dev.silveradostats.map.POWER_CHOICES
 import dev.silveradostats.map.Place
 import dev.silveradostats.map.TIER_COLORS
 import dev.silveradostats.map.powerTier
-import dev.silveradostats.ui.Chrome
 import dev.silveradostats.ui.layout.DashLayout
 import dev.silveradostats.ui.layout.FitText
 import dev.silveradostats.ui.live.Units
@@ -77,6 +76,7 @@ import dev.silveradostats.ui.simple.SimpleModel
 import dev.silveradostats.ui.theme.StatusOk
 import dev.silveradostats.ui.theme.TextDim
 import dev.silveradostats.vehicle.SessionState
+import kotlin.math.roundToInt
 
 /** Height of everything meant to be tapped on the map: the car guideline's 76 dp. */
 private val TOUCH = 76.dp
@@ -100,9 +100,7 @@ private enum class Picker { POWER, PLUGS, NETWORKS }
 @Composable
 fun MapScreen(
   session: SessionState,
-  settings: UiSettings,
   layout: DashLayout,
-  chrome: Chrome,
   onRequestPermissions: () -> Unit,
 ) {
   val context = LocalContext.current
@@ -125,8 +123,7 @@ fun MapScreen(
     }
   }
 
-  val estimate = session.rangeEstimate
-  val rangeM = estimate?.m ?: session.rangeM
+  val rangeM = session.rangeEstimate?.m ?: session.rangeM
   LaunchedEffect(rangeM) { controller.setRange(rangeM) }
 
   var query by remember { mutableStateOf("") }
@@ -150,17 +147,6 @@ fun MapScreen(
   BackHandler(enabled = keyboard) { keyboard = false }
 
   Column(Modifier.fillMaxSize()) {
-    chrome(
-      {
-        if (rangeM != null) {
-          Icon(painterResource(R.drawable.map_ic_battery), null, Modifier.size(28.dp), tint = StatusOk)
-          FitText(SimpleModel.distText(rangeM, Units.DIST, 0), sp = layout.type.tab, weight = FontWeight.Bold)
-          val basis = estimate?.let { "at ${SimpleModel.effText(it.mPerWh, Units.DIST)} ${SimpleModel.effUnit(Units.DIST)}, last 15 min" } ?: "truck's estimate"
-          FitText(basis, Modifier.weight(1f), sp = body, color = TextDim)
-        }
-      },
-      {},
-    )
     Box(Modifier.weight(1f).fillMaxWidth()) {
       AndroidView({ controller.mapView }, Modifier.fillMaxSize())
 
@@ -265,6 +251,29 @@ fun MapScreen(
       clearLabel = null,
       onDone = { chosen -> chosen?.firstOrNull()?.let { controller.show(shown[it], moveCamera = true) }; results = emptyList() },
     )
+  }
+}
+
+/**
+ * The Map tab's range, drawn at the foot of the navigation rail: the session's own estimate (the energy
+ * left at the last 15 minutes' efficiency, as on the API tab) once it has one, and the truck's until then.
+ */
+@Composable
+fun MapRangeSummary(session: SessionState, bigSp: Int, sp: Int) {
+  val estimate = session.rangeEstimate
+  val rangeM = estimate?.m ?: session.rangeM ?: return
+  Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(6.dp)) {
+    FitText(SimpleModel.distText(rangeM, Units.DIST, 0), Modifier.fillMaxWidth(), sp = bigSp + 6, weight = FontWeight.Bold, align = TextAlign.Center)
+    // The battery, as wide as the rail: filled to the state of charge.
+    session.socPct?.let { soc ->
+      val shape = RoundedCornerShape(8.dp)
+      Box(Modifier.fillMaxWidth().height(20.dp).background(MaterialTheme.colorScheme.surfaceVariant, shape)) {
+        Box(Modifier.fillMaxWidth((soc / 100.0).coerceIn(0.0, 1.0).toFloat()).height(20.dp).background(StatusOk, shape))
+      }
+      FitText("${soc.roundToInt()}% charged", Modifier.fillMaxWidth(), sp = sp, color = TextDim, align = TextAlign.Center)
+    }
+    val basis = estimate?.let { "${SimpleModel.effText(it.mPerWh, Units.DIST)} ${SimpleModel.effUnit(Units.DIST)}, 15 min" } ?: "truck's estimate"
+    FitText(basis, Modifier.fillMaxWidth(), sp = sp, color = TextDim, align = TextAlign.Center)
   }
 }
 
