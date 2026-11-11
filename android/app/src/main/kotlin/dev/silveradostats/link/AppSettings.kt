@@ -13,10 +13,11 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import java.util.Locale
 
-/** The main screen's tabs, in order. Only Live and Diagnostics need the OBD link (the MX+). */
+/** The main screen's tabs, in order. Only Live and Diagnostics need the OBD link (the MX+). Map uses neither the link nor the car API. */
 enum class AppTab(val label: String, val needsObd: Boolean) {
   SIMPLE("Simple", false),
   LIVE("Live", true),
+  MAP("Map", false),
   DIAGNOSTICS("Diagnostics", true),
   ;
 

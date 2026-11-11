@@ -108,7 +108,7 @@ class AndroidWiringTest {
     }
     // Everything in those two packages, helpers included.
     val main = listOf(File("src/main/kotlin"), File("app/src/main/kotlin")).first { it.isDirectory }
-    val files = main.walkTopDown().filter { it.isFile && it.extension == "kt" && (it.path.contains("/ui/simple/") || it.path.contains("/ui/live/") || it.path.contains("/ui/layout/")) }.toList()
+    val files = main.walkTopDown().filter { it.isFile && it.extension == "kt" && it.invariantSeparatorsPath.let { p -> p.contains("/ui/simple/") || p.contains("/ui/live/") || p.contains("/ui/layout/") } }.toList()
     assertTrue(files.size >= 5)
     for (f in files) assertEquals("${f.name} scrolls", emptyList<String>(), scrolling.findAll(f.readText()).map { it.value }.toList())
     // Diagnostics stays scrollable.

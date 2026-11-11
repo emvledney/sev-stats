@@ -125,6 +125,9 @@ class SourceSafetyTest {
     "android.car.permission.CAR_POWERTRAIN",
     "android.car.permission.CAR_SPEED",
     "android.car.permission.READ_CAR_DISPLAY_UNITS",
+    // Map tab: the truck's position on the map.
+    "android.permission.ACCESS_FINE_LOCATION",
+    "android.permission.ACCESS_COARSE_LOCATION",
     "android.permission.INTERNET",
     "android.permission.ACCESS_NETWORK_STATE",
     "android.permission.ACCESS_WIFI_STATE",
@@ -132,6 +135,25 @@ class SourceSafetyTest {
     "android.permission.CHANGE_NETWORK_STATE",
     "android.permission.BLUETOOTH_SCAN",
     "android.permission.BLUETOOTH_CONNECT",
+  )
+
+  /**
+   * Permissions that Google's Navigation SDK (the Map tab's bundled map view) declares for turn-by-turn
+   * guidance, which this app never starts. The main manifest strips each one with tools:node="remove",
+   * so none reaches the APK; mergedManifestKeepsTheRules proves that.
+   */
+  private val strippedLibraryPermissions = setOf(
+    "android.permission.ACCESS_BACKGROUND_LOCATION",
+    "android.permission.FOREGROUND_SERVICE",
+    "android.permission.FOREGROUND_SERVICE_LOCATION",
+    "android.permission.POST_NOTIFICATIONS",
+    "android.permission.WRITE_EXTERNAL_STORAGE",
+    "android.permission.BLUETOOTH",
+    "android.permission.BLUETOOTH_ADMIN",
+    "android.permission.VIBRATE",
+    "android.permission.RECEIVE_BOOT_COMPLETED",
+    "android.permission.WAKE_LOCK",
+    "com.google.android.providers.gsf.permission.READ_GSERVICES",
   )
 
   private fun srcDir(): File =
@@ -336,7 +358,8 @@ class SourceSafetyTest {
    * link or stream. Adapter sockets (Bluetooth in bt/, TCP in adapter/) only hand their streams to
    * the core's StreamByteLink constructor, so ElmLink.command (reached only through
    * ElmTransport / ElmChannel) stays the one writer. The only other writes in the app are the report
-   * upload (an HTTP body to the laptop) and the crash file.
+   * upload (an HTTP body to the laptop), the Map tab's web lookups (an HTTP body to Google) and the
+   * crash file.
    */
   @Test
   fun noFileOutsideObdWritesToTheAdapter() {
@@ -348,6 +371,8 @@ class SourceSafetyTest {
     val otherWrites = mapOf(
       // HTTP POST of the diagnostics report to the laptop: not an adapter.
       "report/ReportSender.kt" to Regex("""\bconn\.outputStream\.use \{ it\.write\(body\) \}"""),
+      // Map tab: the JSON body of a place search or road-distance lookup, to Google: not an adapter.
+      "map/MapApi.kt" to Regex("""\bconn\.outputStream\.use \{ it\.write\(body\) \}"""),
       // filesDir/last_crash.txt.
       "diag/CrashLog.kt" to Regex("""\bfile\.writeText\("""),
     )
@@ -474,17 +499,26 @@ class SourceSafetyTest {
     val declared = files.flatMap { usesPermissions(it) }
     assertEquals("duplicate <uses-permission>", declared.size, declared.toSet().size)
     assertEquals(expectedPermissions, declared.toSet())
+    // Library permissions are stripped in the main manifest only, and exactly the documented ones.
+    val stripped = files.flatMap { usesPermissions(it, removals = true) }
+    // (The two legacy Bluetooth ones are stripped in both forms the library declares them in.)
+    assertEquals(strippedLibraryPermissions, stripped.toSet())
+    assertEquals(stripped, usesPermissions(File(srcDir(), "main/AndroidManifest.xml"), removals = true))
+    assertTrue("nothing is both declared and stripped", (expectedPermissions intersect strippedLibraryPermissions).isEmpty())
   }
 
-  /** android:name of every <uses-permission> / <uses-permission-sdk-23> (XML comments ignored). */
-  private fun usesPermissions(manifest: File): List<String> {
+  /**
+   * android:name of every <uses-permission> / <uses-permission-sdk-23> (XML comments ignored).
+   * [removals]: the tools:node="remove" markers (which take a library's permission out of the APK)
+   * in place of the real declarations.
+   */
+  private fun usesPermissions(manifest: File, removals: Boolean = false): List<String> {
     val doc = DocumentBuilderFactory.newInstance().apply { isNamespaceAware = true }.newDocumentBuilder().parse(manifest)
     return listOf("uses-permission", "uses-permission-sdk-23").flatMap { tag ->
       val nodes = doc.getElementsByTagName(tag)
-      (0 until nodes.length).map { i ->
-        val e = nodes.item(i) as Element
-        e.getAttributeNS(ANDROID_NS, "name").ifEmpty { error("<$tag> without android:name in $manifest") }
-      }
+      (0 until nodes.length).map { nodes.item(it) as Element }
+        .filter { (it.getAttributeNS(TOOLS_NS, "node") == "remove") == removals }
+        .map { e -> e.getAttributeNS(ANDROID_NS, "name").ifEmpty { error("<$tag> without android:name in $manifest") } }
     }
   }
 
@@ -705,6 +739,7 @@ class SourceSafetyTest {
 
   private companion object {
     const val ANDROID_NS = "http://schemas.android.com/apk/res/android"
+    const val TOOLS_NS = "http://schemas.android.com/tools"
     const val CAR_APP_ACTIVITY = "androidx.car.app.activity.CarAppActivity"
   }
 }

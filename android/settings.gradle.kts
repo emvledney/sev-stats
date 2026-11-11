@@ -20,6 +20,7 @@ dependencyResolutionManagement {
         includeGroupByRegex("androidx.*")
         includeGroupByRegex("com\\.android.*")
         includeGroupByRegex("com\\.google.*")
+        includeGroup("org.chromium.net") // Cronet, which the Navigation SDK (Map tab) depends on
       }
     }
     mavenCentral()

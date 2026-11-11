@@ -48,6 +48,7 @@ import dev.silveradostats.ui.layout.FitColumn
 import dev.silveradostats.ui.layout.FitText
 import dev.silveradostats.ui.live.LiveScreen
 import dev.silveradostats.ui.live.vhalFigures
+import dev.silveradostats.ui.map.MapScreen
 import dev.silveradostats.ui.simple.SimpleScreen
 import dev.silveradostats.ui.theme.DemoBannerColor
 import dev.silveradostats.ui.theme.TextDim
@@ -62,7 +63,7 @@ import kotlinx.coroutines.flow.StateFlow
 typealias Chrome = @Composable (summary: @Composable RowScope.() -> Unit, controls: @Composable RowScope.() -> Unit) -> Unit
 
 /**
- * Top-level layout: the header row (tabs Simple | Live | Diagnostics, the last one remembered) and
+ * Top-level layout: the header row (tabs Simple | Live | Map | Diagnostics, the last one remembered) and
  * the selected screen, sized from the window this composition actually got after insets, never
  * from a known panel. Only Live and Diagnostics use the OBD link (LiveViewModel).
  *
@@ -123,6 +124,10 @@ fun AppShell(
             onDistUnit = liveVm::setDistUnit,
             onOpenDiagnostics = { liveVm.selectTab(AppTab.DIAGNOSTICS) },
           )
+        }
+        AppTab.MAP -> {
+          val session by liveVm.shownSession.collectAsStateWithLifecycle()
+          MapScreen(session = session, settings = settings, layout = layout, chrome = chrome, onRequestPermissions = onRequestPermissions)
         }
         AppTab.DIAGNOSTICS -> Column(Modifier.fillMaxSize()) {
           chrome({}, {})

@@ -27,7 +27,9 @@ object AppPermissions {
     Def(CarPerm.READ_CAR_DISPLAY_UNITS, false, "display units"),
     Def(Manifest.permission.BLUETOOTH_SCAN, true, "find the OBDLink MX+ (Classic discovery); BLE scan"),
     Def(Manifest.permission.BLUETOOTH_CONNECT, true, "pair with and connect to the OBDLink MX+ only"),
-    Def(Manifest.permission.INTERNET, false, "Wi-Fi adapter link test (TCP), report upload"),
+    Def(Manifest.permission.ACCESS_FINE_LOCATION, true, "the truck's position on the Map tab"),
+    Def(Manifest.permission.ACCESS_COARSE_LOCATION, true, "asked together with the precise one, as Android requires"),
+    Def(Manifest.permission.INTERNET, false, "chargers, place search and road distances (Map); Wi-Fi adapter link test (TCP), report upload"),
     Def(Manifest.permission.ACCESS_NETWORK_STATE, false, "network diagnostics"),
     Def(Manifest.permission.ACCESS_WIFI_STATE, false, "Wi-Fi diagnostics"),
     Def(Manifest.permission.CHANGE_WIFI_STATE, false, "reserved for the Wi-Fi transport test"),
@@ -40,14 +42,23 @@ object AppPermissions {
     CarPerm.CAR_SPEED,
     Manifest.permission.BLUETOOTH_SCAN,
     Manifest.permission.BLUETOOTH_CONNECT,
+    Manifest.permission.ACCESS_FINE_LOCATION,
+    Manifest.permission.ACCESS_COARSE_LOCATION,
   )
 
   /**
-   * [missing], one list per system dialog: the two Bluetooth ones share "Nearby devices", and each
+   * [missing], one list per system dialog: the two Bluetooth ones share "Nearby devices", the two
+   * location ones share one dialog (Android ignores a request for the precise one alone), and each
    * car permission gets a dialog of its own (Android groups them under car information and location).
    */
   fun dialogGroups(missing: List<String>): List<List<String>> =
-    missing.groupBy { if (it == Manifest.permission.BLUETOOTH_SCAN || it == Manifest.permission.BLUETOOTH_CONNECT) Manifest.permission.BLUETOOTH_CONNECT else it }.values.toList()
+    missing.groupBy {
+      when (it) {
+        Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.BLUETOOTH_CONNECT -> Manifest.permission.BLUETOOTH_CONNECT
+        Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION -> Manifest.permission.ACCESS_FINE_LOCATION
+        else -> it
+      }
+    }.values.toList()
 
   fun isGranted(context: Context, permission: String): Boolean =
     context.checkSelfPermission(permission) == PackageManager.PERMISSION_GRANTED

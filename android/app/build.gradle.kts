@@ -10,6 +10,14 @@ plugins {
 val silveradoApplicationId: String =
   providers.gradleProperty("silverado.applicationId").getOrElse("dev.silveradostats.app")
 
+// Map tab web-service keys: MAPS_API_KEY (Google) and OCM_API_KEY (Open Charge Map), kept in the
+// untracked android/local.properties. Without them the app still builds; the Map tab stays empty.
+val localProperties: Map<String, String> =
+  providers.fileContents(rootProject.layout.projectDirectory.file("local.properties")).asText.orNull.orEmpty()
+    .lines().filter { "=" in it && !it.trimStart().startsWith("#") }
+    .associate { it.substringBefore("=").trim() to it.substringAfter("=").trim() }
+fun localKey(name: String): String = localProperties[name].orEmpty()
+
 android {
   namespace = "dev.silveradostats"
   compileSdk = 36
@@ -23,8 +31,11 @@ android {
     applicationId = silveradoApplicationId
     minSdk = 32 // Android 12L (GM SQBR builds)
     targetSdk = 35 // Play requirement for Android Automotive OS apps
-    versionCode = 7
-    versionName = "0.4.0"
+    versionCode = 8
+    versionName = "0.5.0"
+    manifestPlaceholders["MAPS_API_KEY"] = localKey("MAPS_API_KEY")
+    buildConfigField("String", "MAPS_API_KEY", "\"${localKey("MAPS_API_KEY")}\"")
+    buildConfigField("String", "OCM_API_KEY", "\"${localKey("OCM_API_KEY")}\"")
   }
 
   buildTypes {
@@ -36,6 +47,7 @@ android {
   compileOptions {
     sourceCompatibility = JavaVersion.VERSION_17
     targetCompatibility = JavaVersion.VERSION_17
+    isCoreLibraryDesugaringEnabled = true // required by the Navigation SDK (Map tab)
   }
   buildFeatures {
     compose = true
@@ -96,6 +108,9 @@ dependencies {
   implementation(libs.androidx.car.app)
   implementation(libs.androidx.car.app.automotive)
   implementation(libs.androidx.fragment) // = app-automotive's own runtime dependency; see libs.versions.toml
+  // Map tab: the bundled Google map view (see libs.versions.toml for why it is not the Maps SDK).
+  implementation(libs.google.navigation)
+  coreLibraryDesugaring(libs.desugar.jdk.libs)
 
   testImplementation(libs.junit)
   testImplementation(libs.kotlinx.coroutines.test)

@@ -1,0 +1,6 @@
+# Tests compare source text and the shipped profile byte for byte, so every checkout uses LF.
+* text=auto eol=lf
+*.bat text eol=crlf
+*.jar binary
+*.png binary
+*.webp binary

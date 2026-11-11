@@ -25,7 +25,11 @@
     <uses-permission android:name="android.car.permission.CAR_SPEED" />
     <uses-permission android:name="android.car.permission.READ_CAR_DISPLAY_UNITS" />
 
-    <!-- Adapter link (TCP client), report upload, network diagnostics. -->
+    <!-- Map tab: the truck's position on the map. Read by the app only; never sent anywhere but as the centre of a charger or place search. -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+
+    <!-- Adapter link (TCP client), report upload, network diagnostics; Map tab web lookups. -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
@@ -41,6 +45,25 @@
         android:usesPermissionFlags="neverForLocation" />
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
 
+    <!--
+      Google's Navigation SDK (the Map tab's bundled map view) declares these for turn-by-turn
+      guidance, background location and its own Bluetooth audio. The app only shows the map, so
+      each one is stripped from the APK. SourceSafetyTest pins this list and checks the result.
+    -->
+    <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" tools:node="remove" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" tools:node="remove" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" tools:node="remove" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" tools:node="remove" />
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" tools:node="remove" />
+    <uses-permission android:name="android.permission.BLUETOOTH" tools:node="remove" />
+    <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" tools:node="remove" />
+    <uses-permission-sdk-23 android:name="android.permission.BLUETOOTH" tools:node="remove" />
+    <uses-permission-sdk-23 android:name="android.permission.BLUETOOTH_ADMIN" tools:node="remove" />
+    <uses-permission android:name="android.permission.VIBRATE" tools:node="remove" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" tools:node="remove" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" tools:node="remove" />
+    <uses-permission android:name="com.google.android.providers.gsf.permission.READ_GSERVICES" tools:node="remove" />
+
     <application
         android:allowBackup="false"
         android:dataExtractionRules="@xml/data_extraction_rules"
@@ -52,6 +75,11 @@
         android:theme="@style/Theme.SilveradoStats">
 
         <uses-library android:name="android.car" android:required="false" />
+
+        <!-- Map tab: key for the bundled Google map (Navigation SDK), from local.properties. -->
+        <meta-data
+            android:name="com.google.android.geo.API_KEY"
+            android:value="${MAPS_API_KEY}" />
 
         <!-- Car App Library: this app is a templated app; lowest Car App API level it needs. -->
         <meta-data
@@ -101,6 +129,8 @@
           Out of Park the activity locks itself down (vehicle/DrivingState, ui/layout/DashLayout):
           Simple and Live with larger figures and no explanations, no Diagnostics, pairing, forms,
           dialogs, toggles or chart details, and values change at most once a second.
+          The Map tab is the owner's deliberate exception (2026-11-10): charger search with the app's
+          own keyboard, the filter pickers and the hand-off to Google Maps stay usable out of Park.
         -->
         <activity
             android:name=".MainActivity"
