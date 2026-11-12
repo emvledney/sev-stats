@@ -10,12 +10,12 @@
     android:viewportWidth="108"
     android:viewportHeight="108">
     <path
-        android:fillColor="#12171C"
+        android:fillColor="#060708"
         android:pathData="M33,36.5H70A6.5,6.5 0 0 1 76.5,43V65A6.5,6.5 0 0 1 70,71.5H33A6.5,6.5 0 0 1 26.5,65V43A6.5,6.5 0 0 1 33,36.5Z"
-        android:strokeColor="#E8EDF2"
+        android:strokeColor="#00E5A0"
         android:strokeWidth="3.2" />
     <path
-        android:fillColor="#E8EDF2"
+        android:fillColor="#00E5A0"
         android:pathData="M80.6,47H81.8A1.6,1.6 0 0 1 83.4,48.6V59.4A1.6,1.6 0 0 1 81.8,61H80.6A1.6,1.6 0 0 1 79,59.4V48.6A1.6,1.6 0 0 1 80.6,47Z" />
     <path
         android:fillColor="#A85A5C"

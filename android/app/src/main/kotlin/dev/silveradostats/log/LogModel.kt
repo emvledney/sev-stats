@@ -82,16 +82,16 @@ enum class LogCol(val key: String) {
   /** Calculated: energy / SoC. */
   IMPLIED_KWH("implied_kwh"),
 
-  /** 4676, only while it fits the pack's voltage (Derive.capacity_ah). A best guess at the DID. */
+  /** 2B44 (4676 before 0.20.0, a wrong guess), only while it fits the pack's voltage (Derive.capacity_ah). */
   CAPACITY_AH("capacity_ah"),
 
-  /** 4676 as read, checked or not. */
+  /** The capacity PID as read, checked or not. The column keeps its old name: rows before 0.20.0 hold 4676 (655.35 = not available), later ones 2B44. */
   BECM_4676_AH("becm_4676_ah"),
 
   /** Calculated from [IMPLIED_KWH] at a nominal cell voltage: not an independent measurement. */
   NOMINAL_AH("nominal_ah"),
 
-  /** Car Scanner's "battery total energy storage capacity deviation" (22 Ah on this truck). DID not identified yet. */
+  /** Car Scanner's "battery total energy storage capacity deviation" (22 Ah on this truck): 2B44, third byte. */
   AH_DEVIATION("ah_deviation"),
   MODULE_TEMP_MIN_C("module_temp_min_c"),
   MODULE_TEMP_MAX_C("module_temp_max_c"),
@@ -346,7 +346,7 @@ object LogRows {
     put(LogCol.BECM_4676_AH, num("pack_capacity_ah"))
     put(LogCol.NOMINAL_AH, derived("ah_nominal_est"))
     put(LogCol.AH_DEVIATION, num(AH_DEVIATION_FIELD))
-    val temps = DashboardModel.moduleTemps(s.values, monoMs)?.takeIf { !it.stale }?.celsius?.filterNotNull().orEmpty()
+    val temps = DashboardModel.moduleTemps(s.values, monoMs)?.takeIf { !it.stale }?.sensors.orEmpty()
     if (temps.isNotEmpty()) {
       v[LogCol.MODULE_TEMP_MIN_C] = temps.min()
       v[LogCol.MODULE_TEMP_MAX_C] = temps.max()

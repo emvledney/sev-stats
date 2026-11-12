@@ -21,7 +21,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import java.io.Closeable
 
-/** What the Diagnostics › OBDLink MX+ link section shows. */
+/** What the Settings › OBDLink MX+ link section shows. */
 data class BtUiState(
   val availability: BtAvailability = BtAvailability.NO_BLUETOOTH,
   val availabilityText: String = "",

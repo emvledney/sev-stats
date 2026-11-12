@@ -29,12 +29,6 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.drawBehind
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
-import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import dev.silveradostats.link.MxAction
@@ -49,10 +43,9 @@ import dev.silveradostats.ui.layout.WindowTooSmall
 import dev.silveradostats.ui.live.Marker
 import dev.silveradostats.ui.live.MxButton
 import dev.silveradostats.ui.live.Units
+import dev.silveradostats.ui.theme.CardEdge
+import dev.silveradostats.ui.theme.CardShape
 import dev.silveradostats.ui.theme.TextDim
-import dev.silveradostats.ui.theme.ToneEfficiency
-import dev.silveradostats.ui.theme.ToneHave
-import dev.silveradostats.ui.theme.ToneSpent
 import dev.silveradostats.vehicle.LastCharge
 import dev.silveradostats.vehicle.SessionState
 
@@ -61,6 +54,7 @@ import dev.silveradostats.vehicle.SessionState
  * the energy left over the state of charge, the capacity over the range, this drive's distance over its energy, and
  * its mi/kWh over the last 15 minutes'. Under all four, the last charge's row, a part under each column: what the
  * charge reached, what has been used since, the mi/kWh since and how far the level has drifted.
+ * The tiles are plain panels, as the Expert page's are: the colour washes went by the owner's choice (2026-11-12).
  * One page in any landscape window: the figures are as large as their tiles allow (see [DashLayout]).
  *
  * The same page in every gear, controls included: [layout] has no driving state ([DashLayout.ofSimple]),
@@ -132,32 +126,16 @@ fun SimpleScreen(
 
 // --- Building blocks --------------------------------------------------------------------------------
 
-/** What a tile is about: a wash of [color] from its corner, and an edge of it. */
-private class TileTone(val color: Color, val wash: Float)
-
-private val TONE_HAVE = TileTone(ToneHave, 0.30f)
-private val TONE_SPENT = TileTone(ToneSpent, 0.22f)
-private val TONE_EFFICIENCY = TileTone(ToneEfficiency, 0.22f)
-private val TONE_CHARGE = TileTone(ToneSpent, 0.14f)
-
-private const val TONE_WASH_ENDS = 0.62f
-private const val TONE_EDGE_DP = 8
-
-private fun Modifier.toned(tone: TileTone, surface: Color): Modifier = drawBehind {
-  drawRect(Brush.linearGradient(0f to lerp(surface, tone.color, tone.wash), TONE_WASH_ENDS to surface, start = Offset.Zero, end = Offset(size.width, size.height)))
-  drawRect(tone.color, size = Size(TONE_EDGE_DP.dp.toPx(), size.height))
-}
-
 @Composable
-private fun Panel(modifier: Modifier, layout: DashLayout, tone: TileTone, content: @Composable FitColumnScope.() -> Unit) {
-  val surface = MaterialTheme.colorScheme.surface
+private fun Panel(modifier: Modifier, layout: DashLayout, content: @Composable FitColumnScope.() -> Unit) {
   Card(
     modifier = modifier,
-    shape = RoundedCornerShape(20.dp),
-    colors = CardDefaults.cardColors(containerColor = surface),
+    shape = CardShape,
+    border = CardEdge,
+    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
   ) {
     FitColumn(
-      Modifier.fillMaxSize().toned(tone, surface).padding(horizontal = layout.cardPadHDp.dp, vertical = layout.cardPadVDp.dp),
+      Modifier.fillMaxSize().padding(horizontal = layout.cardPadHDp.dp, vertical = layout.cardPadVDp.dp),
       spacing = layout.cardGapDp.dp,
       content = content,
     )
@@ -168,7 +146,8 @@ private fun Panel(modifier: Modifier, layout: DashLayout, tone: TileTone, conten
 private fun NoticeCard(n: Notice, layout: DashLayout, driving: Boolean, onGrant: () -> Unit, onOpenDiagnostics: () -> Unit) {
   Card(
     modifier = Modifier.fillMaxWidth().height(layout.noticeDp.dp),
-    shape = RoundedCornerShape(16.dp),
+    shape = CardShape,
+    border = CardEdge,
     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
   ) {
     Row(
@@ -185,7 +164,7 @@ private fun NoticeCard(n: Notice, layout: DashLayout, driving: Boolean, onGrant:
         val controlMin = Modifier.heightIn(min = minOf(layout.controlDp, layout.noticeDp - 4).dp)
         when (n.action) {
           NoticeAction.GRANT -> Button(onClick = onGrant, modifier = controlMin) { FitText("Allow access", sp = layout.type.tab - 2) }
-          NoticeAction.OPEN_DIAGNOSTICS -> OutlinedButton(onClick = onOpenDiagnostics, modifier = controlMin) { FitText("Open Diagnostics", sp = layout.type.tab - 2) }
+          NoticeAction.OPEN_DIAGNOSTICS -> OutlinedButton(onClick = onOpenDiagnostics, modifier = controlMin) { FitText("Open Settings", sp = layout.type.tab - 2) }
           null -> {}
         }
       }
@@ -224,9 +203,9 @@ private fun StatFigure(s: Stat, layout: DashLayout, sp: Int, modifier: Modifier 
  * cell, with or without the line, so that the figures of a row line up; the line goes first when it is short of room.
  */
 @Composable
-private fun StatTile(s: Stat, figureSp: Int, layout: DashLayout, tone: TileTone, modifier: Modifier) {
+private fun StatTile(s: Stat, figureSp: Int, layout: DashLayout, modifier: Modifier) {
   val figureDp = layout.lineDp(figureSp, DashLayout.VALUE_LINE_FACTOR)
-  Panel(modifier, layout, tone) {
+  Panel(modifier, layout) {
     StatHead(s, layout, Modifier.fit(1).fillMaxWidth())
     BoxWithConstraints(Modifier.fill(0, figureDp.dp).fillMaxWidth()) {
       val line = maxHeight.value >= figureDp + layout.simpleLineDp
@@ -252,14 +231,14 @@ private fun Tiles(view: SimpleView, layout: DashLayout, modifier: Modifier) {
   Column(modifier, verticalArrangement = gap) {
     Row(Modifier.fillMaxWidth().weight(1f), horizontalArrangement = gap) {
       listOf(
-        Triple(view.remaining, view.soc, TONE_HAVE),
-        Triple(view.capacity, view.range, TONE_HAVE),
-        Triple(view.trip, view.energyUsed, TONE_SPENT),
-        Triple(view.efficiency, view.efficiencyRecent, TONE_EFFICIENCY),
-      ).forEach { (top, bottom, tone) ->
+        view.remaining to view.soc,
+        view.capacity to view.range,
+        view.trip to view.energyUsed,
+        view.efficiency to view.efficiencyRecent,
+      ).forEach { (top, bottom) ->
         Column(Modifier.weight(1f).fillMaxHeight(), verticalArrangement = gap) {
-          StatTile(top, figureSp, layout, tone, Modifier.weight(1f).fillMaxWidth())
-          StatTile(bottom, figureSp, layout, tone, Modifier.weight(1f).fillMaxWidth())
+          StatTile(top, figureSp, layout, Modifier.weight(1f).fillMaxWidth())
+          StatTile(bottom, figureSp, layout, Modifier.weight(1f).fillMaxWidth())
         }
       }
     }
@@ -276,6 +255,8 @@ private fun Tiles(view: SimpleView, layout: DashLayout, modifier: Modifier) {
 private fun ChargeTile(c: ChargeView, notice: Boolean, layout: DashLayout, modifier: Modifier) {
   val sp = layout.simpleChargeSp(notice)
   val unitSp = layout.simpleChargeUnitSp(sp)
+  // One figure to a tile: larger than the two that share the first.
+  val singleSp = layout.simpleChargeSingleSp(notice)
   val reached = layout.simpleChargeReachedWeights(notice)
   Row(modifier, horizontalArrangement = Arrangement.spacedBy(layout.gapDp.dp)) {
     ChargePart(layout) {
@@ -283,17 +264,16 @@ private fun ChargeTile(c: ChargeView, notice: Boolean, layout: DashLayout, modif
       ChargeFigure(c.toPct, layout, sp, unitSp, Modifier.weight(reached[1]))
     }
     listOf(c.used, c.efficiency, c.drift).forEach { s ->
-      ChargePart(layout) { ChargeFigure(s, layout, sp, unitSp, Modifier.weight(1f)) }
+      ChargePart(layout) { ChargeFigure(s, layout, singleSp, layout.simpleChargeUnitSp(singleSp), Modifier.weight(1f)) }
     }
   }
 }
 
-/** One tile of the last charge's row: as wide as a column above, its figures as far in, and toned like the tiles above. */
+/** One tile of the last charge's row: as wide as a column above, its figures as far in, and plain like the tiles above. */
 @Composable
 private fun RowScope.ChargePart(layout: DashLayout, content: @Composable RowScope.() -> Unit) {
-  val surface = MaterialTheme.colorScheme.surface
-  Card(Modifier.weight(1f).fillMaxHeight(), shape = RoundedCornerShape(20.dp), colors = CardDefaults.cardColors(containerColor = surface)) {
-    Row(Modifier.fillMaxSize().toned(TONE_CHARGE, surface).padding(horizontal = layout.cardPadHDp.dp), content = content)
+  Card(Modifier.weight(1f).fillMaxHeight(), shape = CardShape, border = CardEdge, colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
+    Row(Modifier.fillMaxSize().padding(horizontal = layout.cardPadHDp.dp), content = content)
   }
 }
 

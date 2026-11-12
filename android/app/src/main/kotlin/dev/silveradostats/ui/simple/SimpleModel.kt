@@ -103,7 +103,7 @@ object SimpleModel {
     return when {
       f.kind == FeedKind.NOT_AUTOMOTIVE -> Notice(
         "No car data on this device",
-        "Turn on demo data under Diagnostics › OBDLink MX+ link to see a simulated drive.",
+        "Turn on demo data under Settings › OBDLink MX+ link to see a simulated drive.",
         NoticeAction.OPEN_DIAGNOSTICS,
       )
       f.missingPermissions.isNotEmpty() -> Notice(

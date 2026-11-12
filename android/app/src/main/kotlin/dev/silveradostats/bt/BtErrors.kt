@@ -19,9 +19,9 @@ object BtErrors {
   const val NO_BLUETOOTH = "This device has no Bluetooth, so the MX+ can't be used here (demo data still works)."
   const val BLUETOOTH_OFF = "Bluetooth is off on this screen: turn it on in the system settings."
   const val NO_CONNECT_PERMISSION =
-    "Bluetooth permission (\"Nearby devices\") not granted: Diagnostics › Request runtime permissions."
+    "Bluetooth permission (\"Nearby devices\") not granted: Settings › Request runtime permissions."
   const val NO_SCAN_PERMISSION =
-    "Bluetooth scan permission (\"Nearby devices\") not granted: Diagnostics › Request runtime permissions."
+    "Bluetooth scan permission (\"Nearby devices\") not granted: Settings › Request runtime permissions."
   const val PAIRING_STALE = "Pairing failed or is out of date: remove the MX+ under Bluetooth settings and pair it again."
   const val SERVICE_NOT_FOUND = "The MX+ serial service was not found: is this really the OBDLink MX+? Pair it again."
 

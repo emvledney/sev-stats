@@ -1,0 +1,45 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Simple tab: flat options</title>
+<style>
+body{background:#1a1c20;color:#F5F7FA;font-family:Roboto,"Segoe UI",sans-serif;margin:0;padding:28px;width:1200px}
+.cap{font-size:26px;font-weight:600;margin:0}
+.sub{font-size:18px;color:#8B94A3;margin:2px 0 0}
+.scr{background:#060708;border-radius:14px;padding:14px;display:flex;gap:14px;margin:10px 0 34px}
+.rail{width:104px;display:flex;flex-direction:column;gap:8px}
+.rb{font-size:17px;color:#8B94A3;border:1px solid #1D2127;border-radius:8px;padding:12px 0;text-align:center;background:#0C0E11}
+.rb.on{color:#04140E;background:#00E5A0;border-color:#00E5A0;font-weight:600}
+.g{flex:1;display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}
+.t{background:#0C0E11;border:1px solid #1D2127;border-radius:8px;padding:14px 18px;overflow:hidden}
+.t .l{font-size:18px;color:#8B94A3;display:flex;align-items:center;gap:8px}
+.t .v{font-size:46px;font-weight:700;margin-top:8px;white-space:nowrap}
+.t .v span{font-size:19px;color:#8B94A3;font-weight:400;margin-left:8px}
+.t.c .v{font-size:30px;margin-top:0}
+.dot{width:11px;height:11px;border-radius:50%;display:inline-block}
+</style>
+<div id="out"></div>
+<script>
+const H='#00E5A0',S='#FF5D5D',E='#FFB020';
+const upper=[['Remaining','142.6','kWh',H],['Capacity','204.1','kWh',H],['Trip','48.2','mi',S],['Efficiency','2.06','mi/kWh',E]];
+const bot=[['Charge','70','%',H],['Range','312','mi',H],['Energy used','23.4','kWh',S],['Last 15 min','2.21','mi/kWh',E]];
+const chg=[['Charged to','189.0','kWh · 93%'],['Used since','46.4','kWh'],['Since charge','2.10','mi/kWh'],['Drift','-0.4','%']];
+const opts=[
+ ['Now','Colour wash from the corner and a 4px coloured top edge','now'],
+ ['A · Fully flat','Same plain panels as Expert, no colour at all','flat'],
+ ['B · Flat with a dot','Plain panels, a small coloured dot beside each title','dot'],
+ ['C · Flat with a hairline','Plain panels, a 1px coloured line on top instead of the 4px bar','line']
+];
+function tile(r,m,charge){
+ const col=charge?S:r[3];let st='',dot='';
+ if(m==='now')st=`background:linear-gradient(135deg,${col}${charge?'24':'40'},#0C0E11 62%);border-top:4px solid ${col}`;
+ if(m==='line'&&!charge)st=`border-top:1px solid ${col}`;
+ if(m==='dot'&&!charge)dot=`<i class="dot" style="background:${col}"></i>`;
+ return charge
+  ?`<div class="t c" style="${st}"><div class="v">${r[1]}<span>${r[2]}</span></div><div class="l">${r[0]}</div></div>`
+  :`<div class="t" style="${st}"><div class="l">${dot}${r[0]}</div><div class="v">${r[1]}<span>${r[2]}</span></div></div>`;
+}
+document.getElementById('out').innerHTML=opts.map(o=>`
+<p class="cap">${o[0]}</p><p class="sub">${o[1]}</p>
+<div class="scr"><div class="rail">${['Simple','Expert','Trends','Map','Diag'].map((n,i)=>`<div class="rb${i?'':' on'}">${n}</div>`).join('')}</div>
+<div class="g">${upper.map(r=>tile(r,o[2])).join('')}${bot.map(r=>tile(r,o[2])).join('')}${chg.map(r=>tile(r,o[2],1)).join('')}</div></div>`).join('');
+</script>

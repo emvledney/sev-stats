@@ -11,12 +11,12 @@ import kotlinx.coroutines.flow.update
 
 /**
  * The main screen's tabs, in order. Only Live and Diagnostics show the OBD link's data (the MX+).
- * Map uses neither the link nor the car API. On screen SIMPLE reads "API" (the truck's built-in
- * vehicle API) and LIVE reads "OBD" (the adapter), the owner's names for them (2026-11-11).
+ * Map uses neither the link nor the car API. On screen SIMPLE reads "Simple" (the truck's built-in
+ * vehicle API) and LIVE reads "Expert" (the adapter), the owner's names for them (2026-11-11, after "API" / "OBD").
  */
 enum class AppTab(val label: String, val needsObd: Boolean) {
-  SIMPLE("API", false),
-  LIVE("OBD", true),
+  SIMPLE("Simple", false),
+  LIVE("Expert", true),
   TRENDS("Trends", false),
   MAP("Map", false),
   DIAGNOSTICS("Diagnostics", true),

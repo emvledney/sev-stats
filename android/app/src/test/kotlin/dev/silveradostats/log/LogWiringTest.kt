@@ -56,7 +56,7 @@ class LogWiringTest {
     assertTrue(branch.indexOf("AvailableInParkPanel(") in 0 until branch.indexOf("} else {"))
     assertTrue(branch.indexOf("} else {") < branch.indexOf("TrendsScreen("))
     // Always offered in the rail (the owner's choice, 2026-11-11): restricted, selecting Trends leads only to the panel above.
-    assertTrue(shell.contains("AppTab.entries.forEach { t -> NavButton("))
+    assertTrue(shell.contains("AppTab.entries.filter { it != AppTab.DIAGNOSTICS }.forEach { t -> NavButton("))
     assertEquals(setOf("AppShell.kt"), callers(Regex("""(?<!fun )\bTrendsScreen\(""")))
     assertTrue(src("link/AppSettings.kt").contains("TRENDS(\"Trends\", false)"))
     assertFalse("one page", Regex("""\bverticalScroll\b|\bLazyColumn\b|\bhorizontalScroll\b""").containsMatchIn(src("ui/trends/TrendsScreen.kt")))

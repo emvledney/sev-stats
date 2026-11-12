@@ -1,6 +1,7 @@
 # Silverado Stats: working notes
 
-Android Automotive app for the owner's Silverado EV. Package `com.vincel.silveradoev`, Play **internal
+Android Automotive app for the owner's Silverado EV. Package `com.vincel.silveradoevstats` since 2026-11-11
+(a new Play app starting at 0.1.0, code 1; it was `com.vincel.silveradoev` up to 0.22.0, code 26), Play **internal
 testing only**, never a production track. The app is in `android/`. `PLAN.md` and `docs/` hold the
 background and research; this file is what a new session needs to work here.
 
@@ -10,7 +11,8 @@ background and research; this file is what a new session needs to work here.
   automotive emulator, show the screenshot, and wait for a go-ahead. Conceptual mockups are not enough.
 - **Commit and push only when asked.** Same for building a release bundle.
 - **The owner uploads to Play.** Bundles are about 40 MB, too large for browser upload tools.
-- **Each release bumps both numbers:** `versionCode` by 1 and the minor version by 1 (0.19.0 was code 23).
+- **Each release bumps both numbers:** `versionCode` by 1 and the minor version by 1 (0.2.0 is code 2 on the
+  new package; the old package ended at 0.22.0, code 26).
   Check with the owner what is already on Play before choosing a number.
 - Development also happens on another machine. Pull before working; push when asked.
 
@@ -68,14 +70,21 @@ AVD `Automotive_1408p_landscape`. The app runs its demo data there.
 ## Decisions already made (2026-11-10 and 11)
 
 - **Navigation rail** on the left with five buttons, always all shown, one size in every gear:
-  API, OBD, Trends, Map, Diagnostics. In code the first two are still `AppTab.SIMPLE` and `AppTab.LIVE`.
+  Simple, Expert, Trends, Map, Diag (renamed from API and OBD on 2026-11-11; notes below still say API and
+  OBD for those two pages). In code they are `AppTab.SIMPLE` and `AppTab.LIVE`.
+- **Carbon styling** (2026-11-11), from `docs/mockups/style-2-carbon.html`: near-black panels with hairline
+  edges, green accent. The Simple tiles are plain panels like Expert's (2026-11-12; the green / red / amber
+  washes went). Colours and the card shape live in `ui/theme/Theme.kt`.
+  Not taken from the mockup yet: monospace figures and upper-case tile labels (they change the layout maths).
 - **While driving:** API, OBD and Map are fully usable. Trends and Diagnostics show the
   "Available in Park" panel. System permission dialogs still wait for Park.
 - **API and OBD have no header row.** Their status and buttons are drawn at the foot of the rail
   (`toRail` in `AppShell.kt`, `DashLayout.withoutHeader()`).
 - **OBD page:** five tiles on top (charge, remaining, capacity kWh, capacity Ah, deviation) with no
-  descriptions and no "unverified" tags; a grid of tiles (`DashboardModel.packTiles`) beside the cell-group
-  grid. No current, power, range, 12 V or adapter voltage. Per-battery voltage is the sum of that half's
+  descriptions and no "unverified" tags. Capacity Ah and deviation are BECM `2B44` (Car Scanner's mapping in
+  `carscanner/`); Ah is a dash when the truck does not report it, never a calculation. A grid of tiles (`DashboardModel.packTiles`) beside the cell-group
+  grid. Battery 1 / 2 temperatures are `2AF3` / `2AF4` (min, mean, max); the strip under the grid is one figure
+  per module from the sensor pairs in `2AF1` (battery 1) and `2AF2` (battery 2, an inference). No current, power, range, 12 V or adapter voltage. Per-battery voltage is the sum of that half's
   cell groups, not a reading.
 - **Map tab:** Google's Navigation SDK is used only for its bundled map view, because the Maps SDK from
   Play services does not work on cars with Google built-in. Chargers come from Open Charge Map. The
@@ -88,5 +97,6 @@ AVD `Automotive_1408p_landscape`. The app runs its demo data there.
 ## Checked on the truck, and not
 
 - **Confirmed by the owner:** sending a destination to Google Maps works.
-- **Emulator only so far:** the rail, the reworked API and OBD pages, per-battery voltages and cell
+- **Emulator only so far:** `2B44` capacity and deviation, the `2AF3`/`2AF4` battery temperatures, the simplified
+  icon (meant to fix the generic icon in the truck's sidebar), the car marker on the map, the rail, the reworked API and OBD pages, per-battery voltages and cell
   statistics against real adapter data, the range outline, and the Map tab staying usable while moving.

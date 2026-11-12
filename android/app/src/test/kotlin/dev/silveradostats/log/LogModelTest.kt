@@ -142,7 +142,7 @@ class LogModelTest {
   fun everySingleValuePidOfTheProfileHasAColumn() {
     val special = setOf(
       // Their own columns, in fromLive.
-      "soc", "energy_remaining", "battery_capability", "pack_capacity_ah", "cell_min_a", "cell_min_b", "cell_max_a", "cell_max_b",
+      "soc", "energy_remaining", "battery_capability", "pack_capacity_ah", LogRows.AH_DEVIATION_FIELD, "cell_min_a", "cell_min_b", "cell_max_a", "cell_max_b",
       // The same groups are logged from the 192-cell array.
       "cell_min_index_a", "cell_min_index_b", "cell_min_module_a", "cell_min_module_b", "cell_max_index_a", "cell_max_index_b", "cell_max_module_a", "cell_max_module_b",
     )

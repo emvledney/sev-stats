@@ -68,8 +68,8 @@ class UltiumSim:
                 return _u16(s["soc"] / 100 * 205.4 * 100)
             if did == 0x27AE:
                 return _u16(20520.0)
-            if did == 0x4676:
-                return _u16(59340.0)
+            if did == 0x2B44:
+                return _u16(59340.0) + bytes([22])
             if did == 0x27B9:
                 return bytes.fromhex("001566")
             if did == 0x2984:
@@ -102,8 +102,10 @@ class UltiumSim:
                 return b"".join(_u16((pack_v + d) * 100) for d in (-0.1, -0.2, 0.2, 0.2))
             if did == 0x2AF1:
                 return bytes(int(x) + 80 for x in s["temps"])
-            if did in (0x2AF3, 0x2AF4):
-                return bytes([int(max(s["temps"])) + 80, int(min(s["temps"])) + 80, 0x0E, 0x03])
+            if did == 0x2AF3:
+                return bytes([int(sum(s["temps"]) / MODULES) + 80, int(min(s["temps"])) + 80, int(max(s["temps"])) + 80, 0x0E, 0x03])
+            if did == 0x2AF4:
+                return bytes([int(max(s["temps"])) + 80] * 3 + [0x0E, 0x03])
             if did == 0x2B43:
                 b = int(s["soc"] * 2.55)
                 return bytes([b, b]) + bytes([b + (i % 3) - 1 for i in range(MODULES)])

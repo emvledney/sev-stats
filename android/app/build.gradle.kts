@@ -5,7 +5,8 @@ plugins {
   alias(libs.plugins.compose.compiler)
 }
 
-// Play package name, set in gradle.properties. Published on Play, so it can never change.
+// Play package name, set in gradle.properties. Once published on Play it can never change. The owner moved
+// to com.vincel.silveradoevstats as a new app on 2026-11-11 (com.vincel.silveradoev before, up to 0.22.0).
 val silveradoApplicationId: String =
   providers.gradleProperty("silverado.applicationId").getOrElse("dev.silveradostats.app")
 
@@ -30,8 +31,8 @@ android {
     applicationId = silveradoApplicationId
     minSdk = 32 // Android 12L (GM SQBR builds)
     targetSdk = 35 // Play requirement for Android Automotive OS apps
-    versionCode = 23
-    versionName = "0.19.0"
+    versionCode = 2
+    versionName = "0.2.0"
     manifestPlaceholders["MAPS_API_KEY"] = localKey("MAPS_API_KEY")
     buildConfigField("String", "MAPS_API_KEY", "\"${localKey("MAPS_API_KEY")}\"")
     buildConfigField("String", "OCM_API_KEY", "\"${localKey("OCM_API_KEY")}\"")

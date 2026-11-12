@@ -22,7 +22,7 @@ import java.util.Locale
 import java.util.TimeZone
 
 /**
- * The OBDLink MX+ link part of the report (Diagnostics › OBDLink MX+ link and the live link), plus
+ * The OBDLink MX+ link part of the report (Settings › OBDLink MX+ link and the live link), plus
  * the built-in session of the Simple tab ([session], no adapter involved).
  */
 data class MxReport(val settings: UiSettings, val bt: BtUiState, val live: LiveState, val session: SessionState? = null)

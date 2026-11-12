@@ -1,4 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="window_background">#FF0B1020</color>
+    <color name="window_background">#FF060708</color>
+    <!-- The icon background. A plain colour, not a gradient drawable: the truck sidebar showed the generic Android icon. -->
+    <color name="ic_launcher_background">#FF060708</color>
 </resources>

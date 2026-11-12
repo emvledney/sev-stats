@@ -108,6 +108,9 @@ class MapController(private val context: Context) : LocationListener {
   private val dots by lazy { listOf(dot(TIER_COLORS[0], 22), dot(TIER_COLORS[1], 18), dot(TIER_COLORS[2], 14)) }
   private var pin: Marker? = null
 
+  /** The truck on the map: a small car, turned the way it is heading. Replaces the map's own blue dot. */
+  private var truck: Marker? = null
+
   /** The charger or place the card shows, or null. */
   var target by mutableStateOf<Place?>(null)
     private set
@@ -178,7 +181,6 @@ class MapController(private val context: Context) : LocationListener {
     hasLocationPermission = context.checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
     if (!hasLocationPermission) return
     try {
-      map?.isMyLocationEnabled = true
       (context.getSystemService(Context.LOCATION_SERVICE) as LocationManager)
         .requestLocationUpdates(LocationManager.GPS_PROVIDER, 1000L, 0f, this)
     } catch (_: RuntimeException) {
@@ -190,6 +192,9 @@ class MapController(private val context: Context) : LocationListener {
     val first = here == null
     val pos = LatLng(l.latitude, l.longitude)
     here = pos
+    val car = truck ?: map?.addMarker(MarkerOptions().position(pos).icon(carIcon()).anchor(0.5f, 0.5f).zIndex(20f))?.also { truck = it }
+    car?.position = pos
+    if (l.hasBearing()) car?.rotation = l.bearing // the map is always north-up, so the bearing is the screen angle; a flat marker would sit under the charger dots
     if (following) {
       if (first) showAround(pos) else map?.animateCamera(CameraUpdateFactory.newLatLng(pos))
     }
@@ -280,6 +285,7 @@ class MapController(private val context: Context) : LocationListener {
     m.setOnCameraIdleListener { loadChargers() }
     m.setOnCameraMoveStartedListener { if (it == GoogleMap.OnCameraMoveStartedListener.REASON_GESTURE) following = false }
     m.setOnMarkerClickListener { marker -> (marker.tag as? Charger)?.let { show(place(it)) }; true }
+    m.setOnMapClickListener { show(null) }
     m.setOnMapLongClickListener { show(Place("Dropped pin", "", it.latitude, it.longitude)) }
     startLocation()
     refreshOutline()
@@ -288,6 +294,26 @@ class MapController(private val context: Context) : LocationListener {
   /** Keeps the map's own buttons and the vehicle clear of the search column and the card. */
   fun setPadding(leftPx: Int, topPx: Int) {
     map?.setPadding(leftPx, topPx, 0, 0)
+  }
+
+  /** A little rocket car seen from above, nose up: the app's own drawing, in blue so it stands apart from the charger dots. */
+  private fun carIcon(): BitmapDescriptor {
+    val s = dp(46).toFloat()
+    val bmp = Bitmap.createBitmap(s.toInt(), s.toInt(), Bitmap.Config.ARGB_8888)
+    val c = Canvas(bmp)
+    val p = Paint(Paint.ANTI_ALIAS_FLAG)
+    fun box(l: Float, t: Float, r: Float, b: Float, round: Float, color: Int) {
+      p.color = color
+      c.drawRoundRect(l * s, t * s, r * s, b * s, round * s, round * s, p)
+    }
+    for (y in listOf(0.20f, 0.62f)) for (x in listOf(0.14f, 0.72f)) box(x, y, x + 0.14f, y + 0.20f, 0.04f, Color.rgb(16, 19, 24)) // wheels
+    box(0.22f, 0.08f, 0.78f, 0.92f, 0.16f, Color.WHITE) // outline, so it shows on any map colour
+    box(0.25f, 0.11f, 0.75f, 0.89f, 0.14f, Color.rgb(0, 184, 255)) // body
+    box(0.31f, 0.30f, 0.69f, 0.50f, 0.06f, Color.rgb(12, 14, 17)) // windscreen
+    box(0.33f, 0.56f, 0.67f, 0.68f, 0.04f, Color.rgb(0, 120, 190)) // roof
+    box(0.18f, 0.84f, 0.82f, 0.93f, 0.03f, Color.rgb(12, 14, 17)) // spoiler
+    box(0.42f, 0.93f, 0.58f, 1.00f, 0.03f, Color.rgb(255, 176, 32)) // boost
+    return BitmapDescriptorFactory.fromBitmap(bmp)
   }
 
   private fun dot(color: Int, sizeDp: Int): BitmapDescriptor {

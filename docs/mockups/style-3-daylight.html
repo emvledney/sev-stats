@@ -1,0 +1,381 @@
+<!doctype html><html><head><meta charset="utf-8"><style>
+:root{
+  --bg:#eef1f6; --card:#ffffff; --ink:#1c2434; --dim:#5a6579; --faint:#8b95a8;
+  --accent:#2f6bff; --have:#0077c2; --spent:#e0503c; --eff:#7a4fd6; --ok:#178a50; --warn:#b26a00;
+  --line:#dde3ee; --tint:#f6f8fc;
+  --font:'Segoe UI',system-ui,sans-serif;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:var(--font);background:#000;color:var(--ink);width:1457px}
+.frame{width:1457px;height:576px;position:relative;overflow:hidden}
+/* system chrome (unchanged) */
+.sbar{height:34px;background:#000;display:flex;align-items:center;padding:0 12px;gap:8px;font-size:15px}
+.sbar .ic{width:26px;height:26px;border-radius:50%;background:#20242c;display:grid;place-items:center;font-size:13px;color:#cfd6e4}
+.sbar .time{position:absolute;left:50%;transform:translateX(-50%)}
+.sbar .right{margin-left:auto;background:#20242c;border-radius:14px;padding:4px 12px;font-size:13px}
+.task{height:34px;background:#000;display:flex;align-items:center;padding:0 14px;font-size:15px;color:#e8ecf5}
+.task .mid{margin:0 auto;display:flex;gap:26px;font-size:16px;color:#aeb6c8}
+.task .temp{margin-left:auto;display:flex;align-items:center;gap:8px}
+.task .dot{width:20px;height:20px;border-radius:50%;background:#20242c;display:grid;place-items:center;font-size:10px;color:#8f97aa}
+/* app: light, rounded, soft shadows */
+.app{height:508px;background:
+  radial-gradient(1000px 420px at 85% -10%, rgba(47,107,255,.08), transparent 60%),
+  radial-gradient(800px 400px at 0% 110%, rgba(122,79,214,.06), transparent 60%), var(--bg);
+  display:flex;padding:14px 18px 14px 14px;gap:16px}
+.rail{width:118px;display:flex;flex-direction:column;gap:9px}
+.rail .btn{height:58px;border-radius:16px;display:grid;place-items:center;font-size:19px;font-weight:600;color:var(--dim);
+  background:transparent}
+.rail .btn.on{background:var(--accent);color:#fff;box-shadow:0 6px 16px rgba(47,107,255,.35)}
+.rail .spacer{flex:1}
+.rail .foot{display:flex;flex-direction:column;gap:9px}
+.rail .pill{height:46px;border-radius:13px;display:grid;place-items:center;font-size:14px;font-weight:600;text-align:center;padding:6px;
+  background:var(--card);border:1px solid var(--line);color:var(--dim);box-shadow:0 2px 6px rgba(28,36,52,.05)}
+.rail .pill.demo{color:var(--warn);border-color:#ecd9b8;background:#fffaf0}
+.page{flex:1;display:flex;flex-direction:column;gap:12px;min-width:0}
+.grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;flex:1}
+.tile{border-radius:18px;background:var(--card);border:1px solid var(--line);box-shadow:0 4px 14px rgba(28,36,52,.06);
+  padding:14px 18px 12px;display:flex;flex-direction:column;position:relative;overflow:hidden}
+.tile::before{content:"";position:absolute;left:0;top:16px;bottom:16px;width:4px;border-radius:4px;background:var(--tc,transparent)}
+.tile.have{--tc:var(--have)} .tile.spent{--tc:var(--spent)} .tile.eff{--tc:var(--eff)}
+.tile .lab{font-size:15.5px;font-weight:600;color:var(--dim);display:flex;align-items:center;gap:8px}
+.tile .val{font-size:50px;font-weight:750;letter-spacing:-1px;line-height:1.15;margin-top:4px;font-variant-numeric:tabular-nums}
+.tile .val small{font-size:19px;font-weight:500;color:var(--dim);margin-left:8px;letter-spacing:0}
+.tile .sub{font-size:13.5px;color:var(--faint);margin-top:auto}
+.badge{font-size:11px;font-weight:700;border-radius:7px;padding:2.5px 8px;letter-spacing:.4px}
+.badge.api{background:#e7effc;color:#1d5fd0;border:1px solid #c4d7f5}
+.badge.warnc{background:#fdf3e0;color:var(--warn);border:1px solid #eed9ae}
+/* strip */
+.strip{display:grid;grid-template-columns:1.15fr .95fr 1.05fr .9fr 1fr;gap:10px;align-items:center;
+  border-radius:16px;padding:12px 18px;background:var(--card);border:1px solid var(--line);box-shadow:0 4px 14px rgba(28,36,52,.06)}
+.strip .cell{display:flex;flex-direction:column;gap:1px;padding:0 8px;flex-wrap:nowrap;border-right:1px solid var(--line)}
+.strip .cell:last-child{border-right:none}
+.strip .num{font-size:25px;font-weight:750;font-variant-numeric:tabular-nums;letter-spacing:-.5px}
+.strip .num small{font-size:13.5px;font-weight:500;color:var(--dim);margin-left:5px}
+.strip .lab{font-size:13px;color:var(--faint)}
+/* live */
+.live-top{display:grid;grid-template-columns:1.05fr 1fr 1fr .8fr;gap:12px;flex:0 0 168px}
+.live-bottom{flex:1;display:grid;grid-template-columns:330px 1fr;gap:12px;min-height:0}
+.card{border-radius:18px;background:var(--card);border:1px solid var(--line);box-shadow:0 4px 14px rgba(28,36,52,.06);
+  padding:14px 18px;display:flex;flex-direction:column;min-width:0}
+.card h3{font-size:16.5px;font-weight:700;margin-bottom:10px;display:flex;align-items:center;gap:10px}
+.card h3::after{content:"";flex:1;height:1px;background:var(--line)}
+.kv{display:flex;justify-content:space-between;font-size:14.5px;padding:5px 0;border-bottom:1px solid var(--tint)}
+.kv:last-child{border-bottom:none}
+.kv .k{color:var(--dim)} .kv .v{font-weight:650;font-variant-numeric:tabular-nums}
+.heat{display:grid;grid-template-columns:repeat(24,1fr);gap:3px;flex:1;margin-top:8px;min-height:0}
+.heat .c{border-radius:4px;min-height:10px}
+.mods{display:grid;grid-template-columns:repeat(24,1fr);gap:3px;margin-top:8px}
+.mods .m{font-size:11px;color:var(--faint);text-align:center}
+.modsrow{display:grid;grid-template-columns:repeat(24,1fr);gap:3px;margin-top:5px}
+.modsrow .t{font-size:11.5px;font-weight:650;text-align:center;border-radius:5px;padding:2px 0;color:#3a2a05}
+.legend{display:flex;align-items:center;gap:10px;margin-top:8px;font-size:12.5px;color:var(--faint)}
+.legend .bar{flex:0 0 130px;height:8px;border-radius:4px;background:linear-gradient(90deg,#3987e5,#c9ced8,#e66767)}
+.hint{color:var(--warn);font-size:13px;margin-left:12px;font-weight:500}
+.big2{font-size:44px;font-weight:750;letter-spacing:-1px;margin-top:2px;font-variant-numeric:tabular-nums}
+.big2 small{font-size:19px;color:var(--dim);font-weight:500;margin-left:6px}
+/* trends */
+.trow{display:flex;gap:12px;align-items:center}
+.src{display:flex;gap:8px}
+.src .p{font-size:14px;font-weight:600;border-radius:99px;padding:8px 18px;border:1px solid var(--line);color:var(--dim);background:var(--card)}
+.src .p.on{background:var(--accent);border-color:var(--accent);color:#fff;box-shadow:0 4px 12px rgba(47,107,255,.35)}
+.tsum{flex:1;font-size:14px;color:var(--dim)}
+.btnx{font-size:14px;font-weight:650;border-radius:11px;padding:9px 18px;background:var(--card);border:1px solid var(--line);color:var(--ink);
+  box-shadow:0 2px 6px rgba(28,36,52,.05)}
+.btnx.primary{background:var(--accent);border-color:var(--accent);color:#fff;box-shadow:0 4px 12px rgba(47,107,255,.35)}
+.tgrid{flex:1;display:grid;grid-template-columns:repeat(3,1fr);grid-template-rows:auto 1fr;gap:12px;min-height:0}
+.ttile{padding:12px 16px}
+.ttile .lab{font-size:14px;font-weight:600;color:var(--dim)}
+.ttile .val{font-size:34px;font-weight:750;margin-top:2px;letter-spacing:-.5px;font-variant-numeric:tabular-nums}
+.ttile .val small{font-size:15.5px;color:var(--dim);font-weight:500;margin-left:6px}
+.ttile .sub{font-size:12.5px;color:var(--faint);margin-top:2px}
+.chart{grid-column:1/4;position:relative;display:flex;flex-direction:column}
+.chart .axis{display:flex;justify-content:space-between;font-size:12px;color:var(--faint);padding:0 4px}
+.chart svg{flex:1;width:100%}
+.legrow{display:flex;gap:22px;font-size:13.5px;color:var(--dim);align-items:center}
+.legrow .sw{width:11px;height:11px;border-radius:3px;display:inline-block;margin-right:7px;vertical-align:-1px}
+/* map */
+.mapwrap{flex:1;display:grid;grid-template-columns:1fr 330px;gap:12px;min-height:0}
+.mapbox{position:relative;border-radius:18px;overflow:hidden;border:1px solid var(--line);box-shadow:0 4px 14px rgba(28,36,52,.06);
+  background:linear-gradient(160deg,#e8ecf4,#f3f5fa)}
+.mapbox .road{position:absolute;background:#fff;border-top:1px solid #d8dee9;border-bottom:1px solid #d8dee9}
+.ring{position:absolute;left:42%;top:46%;width:340px;height:220px;transform:translate(-50%,-50%);border-radius:50%;
+  background:radial-gradient(ellipse at center, rgba(47,107,255,.14), rgba(47,107,255,.04) 65%, transparent 72%);
+  border:1.5px dashed #7fa3f2}
+.truckmark{position:absolute;left:42%;top:46%;transform:translate(-50%,-50%);width:46px;height:46px;border-radius:50%;
+  background:var(--accent);display:grid;place-items:center;font-size:22px;box-shadow:0 6px 18px rgba(47,107,255,.45)}
+.rangecard{position:absolute;left:20px;top:18px;border-radius:16px;padding:14px 20px;text-align:center;
+  background:rgba(255,255,255,.92);backdrop-filter:blur(6px);border:1px solid var(--line);box-shadow:0 6px 16px rgba(28,36,52,.12)}
+.rangecard .big{font-size:38px;font-weight:800;letter-spacing:-1px;color:var(--accent)}
+.rangecard .l{font-size:13.5px;color:var(--dim);margin-top:2px}
+.places{border-radius:18px;background:var(--card);border:1px solid var(--line);box-shadow:0 4px 14px rgba(28,36,52,.06);
+  padding:12px;display:flex;flex-direction:column;gap:10px}
+.place{border-radius:13px;padding:10px 14px;background:var(--tint);border:1px solid var(--line)}
+.place .n{font-size:16px;font-weight:650}
+.place .d{font-size:13px;color:var(--dim);margin-top:3px}
+.tag{display:inline-block;font-size:11.5px;font-weight:750;border-radius:8px;padding:3px 10px;margin-bottom:6px;color:#fff}
+.navlink{margin-top:auto;text-align:center;font-size:15px;font-weight:700;padding:11px;border-radius:12px;background:var(--accent);color:#fff;
+  box-shadow:0 4px 12px rgba(47,107,255,.35)}
+/* diagnostics */
+.dhead{display:flex;align-items:center;gap:16px}
+.dhead h2{font-size:26px;font-weight:750;letter-spacing:-.3px}
+.dhead .sub{font-size:13.5px;color:var(--dim);margin-top:2px}
+.dhead .sp{flex:1}
+.conn{font-size:13px;font-weight:700;border-radius:99px;padding:8px 15px;color:var(--ok);background:#e8f6ee;
+  border:1px solid #bfe5d0;display:flex;gap:8px;align-items:center}
+.conn .d{width:8px;height:8px;border-radius:50%;background:var(--ok)}
+.dcard{flex:1;border-radius:18px;background:var(--card);border:1px solid var(--line);box-shadow:0 4px 14px rgba(28,36,52,.06);
+  padding:16px 20px;min-height:0}
+.dcard h3{font-size:18px;font-weight:700}
+.dcard .note{font-size:13.5px;color:var(--dim);margin:3px 0 12px}
+.pgrid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px 26px}
+.prow{display:flex;align-items:center;gap:10px;padding:5.5px 0;border-bottom:1px solid var(--tint)}
+.prow .nm{font-family:ui-monospace,Consolas,monospace;font-size:12.5px;white-space:nowrap}
+.prow .ds{font-size:11.5px;color:var(--faint);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.granted{font-size:11.5px;font-weight:700;color:var(--ok);background:#e8f6ee;border:1px solid #bfe5d0;border-radius:8px;padding:3px 9px}
+.dbtns{display:flex;gap:12px;margin-top:14px}
+.parkcard{flex:1;display:grid;place-items:center}
+.parkbox{width:62%;text-align:center;border-radius:22px;padding:34px 30px;background:var(--card);border:1px solid var(--line);
+  box-shadow:0 10px 26px rgba(28,36,52,.10)}
+.parkbox h2{font-size:34px;font-weight:750;letter-spacing:-.5px}
+.parkbox .a{font-size:16px;color:var(--dim);margin-top:10px}
+.parkbox .b{font-size:13.5px;color:var(--faint);margin-top:8px}
+</style></head><body>
+<!-- API -->
+<div class="frame" id="s-api">
+<div class="sbar"><span class="ic">ᛒ</span><span class="ic">▼</span><span class="ic">☀</span><span class="time">4:09</span><span class="right">👤 Driver</span></div>
+<div class="app">
+  <div class="rail">
+    <div class="btn on">API</div><div class="btn">OBD</div><div class="btn">Trends</div><div class="btn">Map</div><div class="btn">Diagnostics</div>
+    <div class="spacer"></div>
+    <div class="foot"><div class="pill">MX+ · 13.9 V</div><div class="pill">Reset session</div></div>
+  </div>
+  <div class="page">
+    <div class="grid">
+      <div class="tile have"><div class="lab">Remaining</div><div class="val">144.3<small>kWh</small></div><div class="sub">from the truck's API</div></div>
+      <div class="tile have"><div class="lab">Capacity <span class="badge api">API</span></div><div class="val">205.1<small>kWh</small></div><div class="sub">battery capability</div></div>
+      <div class="tile spent"><div class="lab">Trip</div><div class="val">17.8<small>mi</small></div><div class="sub">since ignition on</div></div>
+      <div class="tile eff"><div class="lab">This drive</div><div class="val">2.21<small>mi/kWh</small></div><div class="sub">measured</div></div>
+      <div class="tile have"><div class="lab">State of charge</div><div class="val">70.4<small>%</small></div></div>
+      <div class="tile have"><div class="lab">Range</div><div class="val">315<small>mi</small></div><div class="sub">Truck says 274 mi</div></div>
+      <div class="tile spent"><div class="lab">Used</div><div class="val">8.07<small>kWh</small></div></div>
+      <div class="tile eff"><div class="lab">Last 15 min</div><div class="val">2.18<small>mi/kWh</small></div></div>
+    </div>
+    <div class="strip">
+      <div class="cell"><span class="num">186.4<small>kWh</small></span><span class="lab">last charged to</span></div>
+      <div class="cell"><span class="num">90.9<small>%</small></span><span class="lab">of capacity</span></div>
+      <div class="cell"><span class="num">42.1<small>kWh</small></span><span class="lab">used since</span></div>
+      <div class="cell"><span class="num">2.24<small>mi/kWh</small></span><span class="lab">since</span></div>
+      <div class="cell"><span class="num">0.0<small>kWh</small></span><span class="lab">drift</span></div>
+    </div>
+  </div>
+</div>
+<div class="task"><span class="dot">◀</span><b>63°</b><span class="dot">▶</span><span class="mid">⌂ ☎ ▦ ✳ 🔔 🎙</span><span class="temp"><span class="dot">◀</span><b>63°</b><span class="dot">▶</span></span></div>
+</div>
+
+<!-- OBD -->
+<div class="frame" id="s-obd">
+<div class="sbar"><span class="ic">ᛒ</span><span class="ic">▼</span><span class="ic">☀</span><span class="time">9:16</span><span class="right">👤 Driver</span></div>
+<div class="app">
+  <div class="rail">
+    <div class="btn">API</div><div class="btn on">OBD</div><div class="btn">Trends</div><div class="btn">Map</div><div class="btn">Diagnostics</div>
+    <div class="spacer"></div>
+    <div class="foot"><div class="pill demo">● Demo: simulated truck</div><div class="pill">0 ms old · 13.9 V</div></div>
+  </div>
+  <div class="page">
+    <div class="live-top">
+      <div class="card">
+        <div style="display:flex;justify-content:space-between;font-size:14.5px;font-weight:600;color:var(--dim)">State of charge <span style="color:var(--faint);font-weight:500;font-size:12.5px">348 ms</span></div>
+        <div class="big2">72.0<small>%</small></div>
+        <div style="font-size:13.5px;color:var(--dim);margin-top:auto">147.9 kWh remaining<br>Range 315 mi · truck 317 mi</div>
+      </div>
+      <div class="card">
+        <div style="display:flex;justify-content:space-between;font-size:14.5px;font-weight:600;color:var(--dim)">Capacity <span><span class="badge warnc">unverified</span> <span style="color:var(--faint);font-weight:500;font-size:12.5px">653 ms</span></span></div>
+        <div class="big2">205.20<small>kWh</small></div>
+        <div style="font-size:13.5px;color:var(--dim);margin-top:auto">Battery capability, from the BECM<br>Energy ÷ SoC: 205.4 kWh<br>24 modules · 96 series groups</div>
+      </div>
+      <div class="card">
+        <div style="display:flex;justify-content:space-between;font-size:14.5px;font-weight:600;color:var(--dim)">Capacity (Ah) <span><span class="badge warnc">unverified</span> <span style="color:var(--faint);font-weight:500;font-size:12.5px">653 ms</span></span></div>
+        <div class="big2">593.4<small>Ah</small></div>
+        <div style="font-size:13.5px;color:var(--dim);margin-top:auto">Total energy storage, from the BECM</div>
+      </div>
+      <div class="card">
+        <div style="font-size:14.5px;font-weight:600;color:var(--dim)">Capacity deviation</div>
+        <div class="big2" style="color:var(--faint)">—<small>Ah</small></div>
+        <div style="font-size:13.5px;color:var(--faint);margin-top:auto">PID not identified yet</div>
+      </div>
+    </div>
+    <div class="live-bottom">
+      <div class="card">
+        <h3>Pack, temperatures and 12 V</h3>
+        <div class="kv"><span class="k">Pack voltage</span><span class="v">376.9 V</span></div>
+        <div class="kv"><span class="k">Pack current</span><span class="v">+101.7 A</span></div>
+        <div class="kv"><span class="k">Cell spread</span><span class="v">11.7 mV</span></div>
+        <div class="kv"><span class="k">Modules min · avg · max</span><span class="v"><span class="badge warnc" style="margin-right:6px">likely</span>73 · 76.1 · 79 °F</span></div>
+        <div class="kv"><span class="k">Battery coolant 1</span><span class="v">69.8 °F</span></div>
+        <div class="kv"><span class="k">Battery coolant 2</span><span class="v">76.1 °F</span></div>
+        <div class="kv"><span class="k">Outside (car API)</span><span class="v">77.0 °F</span></div>
+        <div class="kv"><span class="k">12 V system</span><span class="v">12.5 V</span></div>
+      </div>
+      <div class="card">
+        <h3>Cell groups vs pack average <span class="hint">192 groups · pack average 3.9274 V · 653 ms old · read under load · tap a cell for details</span></h3>
+        <div class="mods"><span class="m">mod</span><span class="m">1</span><span class="m">2</span><span class="m">3</span><span class="m">4</span><span class="m">5</span><span class="m">6</span><span class="m">7</span><span class="m">8</span><span class="m">9</span><span class="m">10</span><span class="m">11</span><span class="m">12</span><span class="m">13</span><span class="m">14</span><span class="m">15</span><span class="m">16</span><span class="m">17</span><span class="m">18</span><span class="m">19</span><span class="m">20</span><span class="m">21</span><span class="m">22</span><span class="m">23</span><span class="m">24</span></div>
+        <div class="heat" id="heat"></div>
+        <div class="modsrow" id="modt"></div>
+        <div class="legend"><span>−9.0 mV</span><span class="bar"></span><span>+9.0 mV</span><span style="margin-left:auto">gray = average</span><span style="margin-left:18px">Bottom row: module °F <span class="badge warnc">likely</span></span></div>
+      </div>
+    </div>
+  </div>
+</div>
+<div class="task"><span class="dot">◀</span><b>63°</b><span class="dot">▶</span><span class="mid">⌂ ☎ ▦ ✳ 🔔 🎙</span><span class="temp"><span class="dot">◀</span><b>63°</b><span class="dot">▶</span></span></div>
+</div>
+
+<!-- Trends -->
+<div class="frame" id="s-trends">
+<div class="sbar"><span class="ic">ᛒ</span><span class="ic">▼</span><span class="ic">☀</span><span class="time">9:18</span><span class="right">👤 Driver</span></div>
+<div class="app">
+  <div class="rail">
+    <div class="btn">API</div><div class="btn">OBD</div><div class="btn on">Trends</div><div class="btn">Map</div><div class="btn">Diagnostics</div>
+    <div class="spacer"></div>
+  </div>
+  <div class="page">
+    <div class="trow">
+      <div class="src"><span class="p on">Truck API</span><span class="p">MX+ (OBD)</span></div>
+      <div class="tsum">642 rows · last reading 2 min ago · source: truck's battery service</div>
+      <div class="btnx">Export CSV</div>
+    </div>
+    <div class="tgrid">
+      <div class="card ttile"><div class="lab">Last remaining</div><div class="val">144.3<small>kWh</small></div><div class="sub">70.4 % of charge</div></div>
+      <div class="card ttile"><div class="lab">Total capacity</div><div class="val">205.1<small>kWh</small></div><div class="sub">205.1 kWh logged</div></div>
+      <div class="card ttile"><div class="lab">Range</div><div class="val">315<small>mi</small></div><div class="sub">truck estimate · app 315 mi</div></div>
+      <div class="card chart">
+        <div class="legrow"><span><span class="sw" style="background:var(--accent)"></span>Remaining (kWh)</span><span><span class="sw" style="background:var(--eff)"></span>Range (mi, right axis)</span><span style="margin-left:auto;color:var(--faint)">Tap the chart to read a point</span></div>
+        <svg viewBox="0 0 1000 150" preserveAspectRatio="none">
+          <line x1="0" y1="30" x2="1000" y2="30" stroke="#e2e8f2" stroke-width="1"/>
+          <line x1="0" y1="75" x2="1000" y2="75" stroke="#e2e8f2" stroke-width="1"/>
+          <line x1="0" y1="120" x2="1000" y2="120" stroke="#e2e8f2" stroke-width="1"/>
+          <path d="M0,38 C120,42 200,55 300,60 S480,70 560,84 S760,98 860,104 S960,108 1000,112" fill="none" stroke="#2f6bff" stroke-width="2.5"/>
+          <path d="M0,30 C120,34 200,44 300,50 S480,62 560,74 S760,92 860,100 S960,104 1000,108" fill="none" stroke="#7a4fd6" stroke-width="2" opacity=".85"/>
+        </svg>
+        <div class="axis"><span>Mon</span><span>Tue</span><span>Wed</span><span>Thu</span><span>Fri</span><span>Sat</span><span>Sun</span></div>
+      </div>
+    </div>
+  </div>
+</div>
+<div class="task"><span class="dot">◀</span><b>63°</b><span class="dot">▶</span><span class="mid">⌂ ☎ ▦ ✳ 🔔 🎙</span><span class="temp"><span class="dot">◀</span><b>63°</b><span class="dot">▶</span></span></div>
+</div>
+
+<!-- Map -->
+<div class="frame" id="s-map">
+<div class="sbar"><span class="ic">ᛒ</span><span class="ic">▼</span><span class="ic">☀</span><span class="time">9:20</span><span class="right">👤 Driver</span></div>
+<div class="app">
+  <div class="rail">
+    <div class="btn">API</div><div class="btn">OBD</div><div class="btn">Trends</div><div class="btn on">Map</div><div class="btn">Diagnostics</div>
+    <div class="spacer"></div>
+    <div class="foot"><div class="pill" style="height:auto;padding:8px 10px">315 mi<br><span style="font-size:12px;color:var(--faint);font-weight:500">70 % · 2.24 mi/kWh, 15 min</span></div></div>
+  </div>
+  <div class="page">
+    <div class="mapwrap">
+      <div class="mapbox">
+        <div class="road" style="left:0;right:0;top:38%;height:26px"></div>
+        <div class="road" style="left:0;right:0;top:70%;height:16px"></div>
+        <div class="road" style="top:0;bottom:0;left:28%;width:20px"></div>
+        <div class="road" style="top:0;bottom:0;left:66%;width:14px"></div>
+        <div class="ring"></div><div class="truckmark">🛻</div>
+        <div class="rangecard"><div class="big">315 mi</div><div class="l">70 % charged<br>2.24 mi/kWh, 15 min</div></div>
+      </div>
+      <div class="places">
+        <div class="place"><span class="tag" style="background:var(--accent)">Charge</span><div class="n">Electrify America — I-15</div><div class="d">350 kW DC · 18 mi away</div></div>
+        <div class="place"><span class="tag" style="background:var(--eff)">Home</span><div class="n">Home</div><div class="d">Level 2 · 42 mi away</div></div>
+        <div class="place"><span class="tag" style="background:var(--ok)">Destination</span><div class="n">Silverado Service Center</div><div class="d">29 mi away</div></div>
+        <div class="navlink">Navigate in Google Maps</div>
+      </div>
+    </div>
+  </div>
+</div>
+<div class="task"><span class="dot">◀</span><b>63°</b><span class="dot">▶</span><span class="mid">⌂ ☎ ▦ ✳ 🔔 🎙</span><span class="temp"><span class="dot">◀</span><b>63°</b><span class="dot">▶</span></span></div>
+</div>
+
+<!-- Diagnostics -->
+<div class="frame" id="s-diag">
+<div class="sbar"><span class="ic">ᛒ</span><span class="ic">▼</span><span class="ic">☀</span><span class="time">9:17</span><span class="right">👤 Driver</span></div>
+<div class="app">
+  <div class="rail">
+    <div class="btn">API</div><div class="btn">OBD</div><div class="btn">Trends</div><div class="btn">Map</div><div class="btn on">Diagnostics</div>
+    <div class="spacer"></div>
+  </div>
+  <div class="page">
+    <div class="dhead">
+      <div><h2>Diagnostics</h2><div class="sub">Read-only. Available in Park. Nothing on this screen writes to the vehicle.</div></div>
+      <div class="sp"></div>
+      <div class="conn"><span class="d"></span>Car service connected</div>
+      <div class="btnx primary">Refresh all</div>
+    </div>
+    <div class="dcard">
+      <h3>Permissions</h3>
+      <div class="note">Car energy and speed, and Bluetooth, need a runtime grant. The others are granted at install.</div>
+      <div class="pgrid">
+        <div class="prow"><span class="nm">CAR_INFO</span><span class="ds">make, model, year, nominal capacity</span><span class="granted">GRANTED</span></div>
+        <div class="prow"><span class="nm">CAR_ENERGY</span><span class="ds">battery level, range, charge state</span><span class="granted">GRANTED</span></div>
+        <div class="prow"><span class="nm">CAR_ENERGY_PORTS</span><span class="ds">charge port open / plug connected</span><span class="granted">GRANTED</span></div>
+        <div class="prow"><span class="nm">CAR_EXTERIOR_ENVIRONMENT</span><span class="ds">outside temperature, night mode</span><span class="granted">GRANTED</span></div>
+        <div class="prow"><span class="nm">CAR_POWERTRAIN</span><span class="ds">gear, ignition, parking brake, regen</span><span class="granted">GRANTED</span></div>
+        <div class="prow"><span class="nm">CAR_SPEED</span><span class="ds">vehicle speed</span><span class="granted">GRANTED</span></div>
+        <div class="prow"><span class="nm">READ_CAR_DISPLAY_UNITS</span><span class="ds">display units</span><span class="granted">GRANTED</span></div>
+        <div class="prow"><span class="nm">BLUETOOTH_SCAN</span><span class="ds">find the OBDLink MX+</span><span class="granted">GRANTED</span></div>
+        <div class="prow"><span class="nm">BLUETOOTH_CONNECT</span><span class="ds">pair with and connect to the MX+</span><span class="granted">GRANTED</span></div>
+        <div class="prow"><span class="nm">INTERNET</span><span class="ds">Send to laptop report</span><span class="granted">GRANTED</span></div>
+        <div class="prow"><span class="nm">ACCESS_NETWORK_STATE</span><span class="ds">network diagnostics</span><span class="granted">GRANTED</span></div>
+        <div class="prow"><span class="nm">ACCESS_WIFI_STATE</span><span class="ds">the Wi-Fi enabled row</span><span class="granted">GRANTED</span></div>
+      </div>
+      <div class="dbtns"><div class="btnx primary">Request runtime permissions</div><div class="btnx">Open app settings</div></div>
+    </div>
+  </div>
+</div>
+<div class="task"><span class="dot">◀</span><b>63°</b><span class="dot">▶</span><span class="mid">⌂ ☎ ▦ ✳ 🔔 🎙</span><span class="temp"><span class="dot">◀</span><b>63°</b><span class="dot">▶</span></span></div>
+</div>
+
+<!-- In Park panel -->
+<div class="frame" id="s-park">
+<div class="sbar"><span class="ic">ᛒ</span><span class="ic">▼</span><span class="ic">☀</span><span class="time">9:22</span><span class="right">👤 Driver</span></div>
+<div class="app">
+  <div class="rail">
+    <div class="btn">API</div><div class="btn">OBD</div><div class="btn on">Trends</div><div class="btn">Map</div><div class="btn">Diagnostics</div>
+    <div class="spacer"></div>
+  </div>
+  <div class="page parkcard">
+    <div class="parkbox">
+      <h2>Available in Park</h2>
+      <div class="a">Trends returns when the truck is in Park.</div>
+      <div class="b">Gear: R · speed 0 mi/h · reading 120 ms ago</div>
+    </div>
+  </div>
+</div>
+<div class="task"><span class="dot">◀</span><b>63°</b><span class="dot">▶</span><span class="mid">⌂ ☎ ▦ ✳ 🔔 🎙</span><span class="temp"><span class="dot">◀</span><b>63°</b><span class="dot">▶</span></span></div>
+</div>
+
+<script>
+const mods=[77,77,77,79,79,79,79,79,79,79,77,77,77,75,75,73,73,73,73,73,73,73,73,73];
+const heat=document.getElementById('heat');
+let seed=99; const rnd=()=>{seed=(seed*1103515245+12345)&0x7fffffff;return seed/0x7fffffff};
+function devColor(v){
+  if(v<0){const t=-v;return `rgb(${214-t*120|0},${216-t*40|0},${228-t*8|0})`}
+  const t=v;return `rgb(${232+t*10|0},${196-t*90|0},${168-t*90|0})`}
+for(let g=0;g<8;g++)for(let m=0;m<24;m++){
+  const base=m<12?0.3+rnd()*0.5:-(0.2+rnd()*0.5);
+  const c=document.createElement('div');c.className='c';
+  let col=devColor(base*0.65);
+  if(m===6&&g===6)col='#a8c6ee';
+  c.style.background=col;heat.appendChild(c);
+}
+const modt=document.getElementById('modt');
+mods.forEach(t=>{const d=document.createElement('div');d.className='t';
+  const a=Math.min(1,(t-72)/8);
+  d.style.background=`rgba(240,177,0,${0.35+a*0.6})`;
+  d.textContent=t;modt.appendChild(d);});
+</script>
+<script>
+// mockup only: ?s=<name> shows just that screen, for screenshots
+const m=new URLSearchParams(location.search).get('s');
+if(m)document.querySelectorAll('.frame').forEach(f=>{if(f.id!=='s-'+m)f.style.display='none';});
+</script>
+</body></html>

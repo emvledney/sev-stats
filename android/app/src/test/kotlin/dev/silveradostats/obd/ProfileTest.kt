@@ -24,7 +24,7 @@ class ProfileTest {
   @Test
   fun assetProfileLoads() {
     assertEquals("silverado-ev", prof.name)
-    assertEquals(64, prof.didFields.size)
+    assertEquals(67, prof.didFields.size)
     assertEquals(50, prof.reads().size)
     val soc = prof.didFields.single { it.name == "soc" }
     assertEquals(0x27C6, soc.did)

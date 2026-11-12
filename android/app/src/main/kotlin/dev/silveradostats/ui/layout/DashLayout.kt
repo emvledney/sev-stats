@@ -214,6 +214,19 @@ data class DashLayout(
     return max(LIVE_VALUE_MIN_SP, sp)
   }
 
+  /**
+   * The row's three parts that hold one figure each: their own size, as large as their tile holds, by the owner's
+   * choice (2026-11-12). The first part's two figures side by side kept all four small. Never smaller than those.
+   */
+  fun simpleChargeSingleSp(notice: Boolean): Int {
+    val floor = simpleChargeSp(notice)
+    val room = simpleColumnDp - 2 * cardPadHDp
+    var sp = ((simpleChargeDp(notice) - 2 * cardPadVDp - chargeLabelDp) / (VALUE_LINE_FACTOR * fontScale)).toInt()
+    // Bold digits this large run wider than the estimate: a tenth to spare.
+    while (sp > floor && !CHARGE_SINCE.all { chargeFigureDp(it, sp) <= room * CHARGE_SINGLE_FILL }) sp -= 1
+    return max(floor, sp)
+  }
+
   /** The kWh's and the %'s shares of the first part: what each needs at its widest, so that the % stays put as the figures change. */
   fun simpleChargeReachedWeights(notice: Boolean): List<Float> = chargeReachedDp(simpleChargeSp(notice))
 
@@ -295,10 +308,41 @@ data class DashLayout(
   fun liveFigureSp(tiles: Int): Int = if (tiles <= LIVE_TILES) liveValueSp else max(LIVE_VALUE_MIN_SP, min(liveValueSp, figureSp(tiles)))
 
   /** The largest figure, up to [TypeScale.value], that fits beside its unit with [cols] tiles a row. */
-  private fun figureSp(cols: Int): Int {
+  private fun figureSp(cols: Int): Int = minOf(type.value, figureRoomSp(cols))
+
+  /** The largest figure a tile's width holds beside its unit with [cols] tiles a row, whatever the type scale says. */
+  private fun figureRoomSp(cols: Int): Int {
     val tile = (widthDp - 2 * pagePadHDp - (cols - 1) * gapDp) / cols - 2 * cardPadHDp
     val room = tile - LIVE_FIGURE_GAP_DP - textDp(LIVE_UNIT_CHARS, type.unit, fontScale)
-    return minOf(type.value, (room / (LIVE_VALUE_CHARS * FIGURE_EM * fontScale)).toInt())
+    return (room / (LIVE_VALUE_CHARS * FIGURE_EM * fontScale)).toInt()
+  }
+
+  /**
+   * The OBD page's five tiles in a row: the figure fills the tile's width, by the owner's choice (2026-11-12, text
+   * was small in its boxes), and the row is only as tall as that needs, never taller than the page's budget for it
+   * ([liveTilesDp]). [lines]: a tile has a line of news under its figure, which keeps its room.
+   */
+  fun obdFigureSp(lines: Boolean): Int {
+    val floor = liveFigureSp(OBD_TILES)
+    // Bold digits this large run wider than the estimate: at the full width "205.20 kWh" lost its unit on the emulator.
+    var sp = max(floor, (figureRoomSp(OBD_TILES) * OBD_FIGURE_FILL).toInt())
+    while (sp > floor && tileDp(if (lines) 1 else 0, sp) + TILE_ROUNDING_DP > liveTilesDp) sp -= 1
+    return sp
+  }
+
+  fun obdTilesDp(sp: Int, lines: Boolean): Int = min(liveTilesDp, tileDp(if (lines) 1 else 0, sp) + TILE_ROUNDING_DP)
+
+  /**
+   * The grid of small tiles beside the heatmap: a value's size and its label's, from the row's height ([rowDp], a
+   * label over a value) and the narrowest thing that must hold [chars] characters ([widthDp]). The type scale's
+   * sizes left wide tiles nearly empty on a tall window and cost a short one its labels.
+   */
+  fun packSp(rowDp: Float, widthDp: Float, chars: Int): Pair<Int, Int> {
+    // A bold value's line is taller than asked for (1.4 of its size on the emulator), and each part rounds up.
+    val tall = (rowDp - 2 * PACK_PAD_V_DP - PACK_SPACING_DP - TILE_ROUNDING_DP) / (fontScale * (PACK_VALUE_LINE + LINE_FACTOR * PACK_LABEL_SHARE))
+    val wide = widthDp / (chars * CHAR_EM * fontScale)
+    val value = max(type.axis, minOf(tall, wide).toInt())
+    return value to max(type.axis, (value * PACK_LABEL_SHARE).toInt())
   }
 
   companion object {
@@ -310,6 +354,18 @@ data class DashLayout(
     /** The MX+ button and the tabs are at least this tall while restricted (one tap, eyes on the road). */
     const val MIN_DRIVING_TARGET_DP = 76
     const val LIVE_TILES = 4
+    const val OBD_TILES = 5
+    private const val OBD_FIGURE_FILL = 0.9f
+    const val PACK_PAD_V_DP = 4
+    const val PACK_SPACING_DP = 2
+
+    /** The widest value of a small pack tile: "70 · 76 °F". */
+    const val PACK_VALUE_CHARS = 10
+
+    /** One of five columns in a wide pack tile: "3.913". */
+    const val PACK_PART_CHARS = 5
+    private const val PACK_LABEL_SHARE = 0.66f
+    const val PACK_VALUE_LINE = 1.4f
 
     /** A Live tile's figure is never drawn smaller than this. */
     const val LIVE_VALUE_MIN_SP = 26
@@ -326,6 +382,7 @@ data class DashLayout(
     /** The last charge's row against the height of the tiles. */
     private const val SIMPLE_CHARGE_SHARE = 0.24f
     private const val CHARGE_UNIT_SHARE = 0.42f
+    const val CHARGE_SINGLE_FILL = 0.9f
 
     /** A unit's characters: "kWh" and "mi/kWh" are wide ones, and an end cut off would say nothing. */
     private const val CHARGE_UNIT_CHAR_EM = 0.68f

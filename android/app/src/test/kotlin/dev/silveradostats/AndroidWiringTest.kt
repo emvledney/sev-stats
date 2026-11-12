@@ -68,8 +68,9 @@ class AndroidWiringTest {
     assertTrue(Regex("""combine\(store\.state, restricted\) \{ s, r -> s\.wantsObd\(r\) \}\.distinctUntilChanged\(\)\.collect \{ conn\.setObdWanted\(it\) \}""").containsMatchIn(vm))
     assertEquals(1, Regex("""conn\.setObdWanted\(""").findAll(vm).count())
     val settings = src("link/AppSettings.kt")
-    assertTrue(settings.contains("SIMPLE(\"API\", false)"))
-    assertTrue(settings.contains("LIVE(\"OBD\", true)"))
+    // Owner, 2026-11-11: the rail reads "Simple" and "Expert" (it read "API" and "OBD" in 0.19.0).
+    assertTrue(settings.contains("SIMPLE(\"Simple\", false)"))
+    assertTrue(settings.contains("LIVE(\"Expert\", true)"))
     assertTrue(settings.contains("DIAGNOSTICS(\"Diagnostics\", true)"))
     // Nothing else in the app attaches the engine.
     val main = listOf(File("src/main/kotlin"), File("app/src/main/kotlin")).first { it.isDirectory }
@@ -237,7 +238,10 @@ class AndroidWiringTest {
     val shell = src("ui/AppShell.kt")
     assertTrue(Regex("""if \(layout\.restricted\) \{\s*AvailableInParkPanel\(layout, stateKnown, liveVm\.drivingInputs\)\s*\} else \{\s*DiagnosticsScreen\(diagVm, liveVm,""").containsMatchIn(shell))
     // The rail offers every tab in every gear (the owner's choice, 2026-11-11): restricted, selecting Diagnostics leads only to the panel above.
-    assertTrue(funBody(shell, "NavRailColumn").contains("AppTab.entries.forEach { t -> NavButton(t.label, tab == t, rail) { onSelect(t) } }"))
+    assertTrue(funBody(shell, "NavRailColumn").contains("AppTab.entries.filter { it != AppTab.DIAGNOSTICS }.forEach { t -> NavButton(t.label, tab == t, rail) { onSelect(t) } }"))
+    // The Diagnostics page became the Settings page, a gear at the foot of the rail (owner, 2026-11-12): permissions, MX+ link and report only.
+    assertTrue(funBody(shell, "NavRailColumn").contains("GearButton(tab == AppTab.DIAGNOSTICS, rail)"))
+    assertTrue(funBody(shell, "GearButton").contains(".height(rail.buttonDp.dp)"))
     val panel = funBody(shell, "AvailableInParkPanel")
     assertEquals("the panel has nothing to tap", emptyList<String>(), Regex("""Button|clickable|selectable|TextField|Switch|onClick""").findAll(panel).map { it.value }.toList())
     val main = listOf(File("src/main/kotlin"), File("app/src/main/kotlin")).first { it.isDirectory }
@@ -299,7 +303,6 @@ class AndroidWiringTest {
     val branch = shell.indexOf("if (layout.restricted)")
     assertTrue(branch > 0)
     assertTrue(shell.indexOf("rememberLazyListState()") in 0 until branch)
-    assertTrue(shell.indexOf("diagnosticsShowAll by rememberSaveable") in 0 until branch)
     val screen = funBody(src("ui/DiagnosticsScreen.kt"), "DiagnosticsScreen")
     assertTrue(screen.contains("state = listState"))
     assertTrue("nothing of this kept inside the screen", !screen.contains("rememberLazyListState") && !screen.contains("rememberSaveable"))

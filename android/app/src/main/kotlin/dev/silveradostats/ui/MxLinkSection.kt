@@ -41,7 +41,7 @@ import dev.silveradostats.ui.theme.StatusWarn
 import dev.silveradostats.ui.theme.TextDim
 import kotlinx.coroutines.delay
 
-/** Diagnostics › OBDLink MX+ link: choose / pair the adapter, test the link, demo mode. */
+/** Settings › OBDLink MX+ link: choose / pair the adapter, test the link, demo mode. */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 internal fun MxLinkSection(vm: LiveViewModel, onRequestPermissions: () -> Unit) {

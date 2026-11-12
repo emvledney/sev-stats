@@ -1,5 +1,9 @@
 package dev.silveradostats.ui
 
+import dev.silveradostats.R
+import androidx.compose.foundation.layout.size
+import androidx.compose.ui.res.painterResource
+import androidx.compose.material3.Icon
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -57,10 +61,16 @@ import dev.silveradostats.ui.map.MapScreen
 import dev.silveradostats.ui.simple.SimpleModel
 import dev.silveradostats.ui.simple.SimpleScreen
 import dev.silveradostats.ui.trends.TrendsScreen
+import dev.silveradostats.ui.theme.CardEdge
+import dev.silveradostats.ui.theme.CardShape
 import dev.silveradostats.ui.theme.TextDim
 import dev.silveradostats.vehicle.DrivingInputs
 import dev.silveradostats.vehicle.DrivingPolicy
 import kotlinx.coroutines.flow.StateFlow
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 
 /**
  * The one header row the selected screen draws above itself: its status in [summary], then its buttons.
@@ -94,7 +104,6 @@ fun AppShell(
   val tab = settings.tab
   // Out here, so a trip through the restricted panel (P to R to P) keeps the user's place.
   val diagnosticsList = rememberLazyListState()
-  var diagnosticsShowAll by rememberSaveable { mutableStateOf(false) }
   Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
     BoxWithConstraints(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing)) {
       val fontScale = LocalDensity.current.fontScale
@@ -184,7 +193,7 @@ fun AppShell(
           if (layout.restricted) {
             AvailableInParkPanel(layout, stateKnown, liveVm.drivingInputs)
           } else {
-            DiagnosticsScreen(diagVm, liveVm, diagnosticsList, diagnosticsShowAll, { diagnosticsShowAll = it }, onRequestPermissions, onOpenAppSettings)
+            DiagnosticsScreen(diagVm, liveVm, diagnosticsList, onRequestPermissions, onOpenAppSettings)
           }
         }
       }
@@ -212,7 +221,7 @@ private fun ShellHeader(
   }
 }
 
-private val TAB_BUTTON_SHAPE = RoundedCornerShape(14.dp)
+private val TAB_BUTTON_SHAPE = RoundedCornerShape(10.dp)
 
 /**
  * The rail: every tab, always, in the same place, whichever is selected and whatever the gear. What a
@@ -221,16 +230,37 @@ private val TAB_BUTTON_SHAPE = RoundedCornerShape(14.dp)
 @Composable
 private fun NavRailColumn(rail: NavRail, tab: AppTab, onSelect: (AppTab) -> Unit, foot: @Composable ColumnScope.() -> Unit) {
   Column(
-    Modifier.width(rail.widthDp.dp).fillMaxHeight().background(MaterialTheme.colorScheme.surface).padding(rail.padDp.dp),
+    Modifier.width(rail.widthDp.dp).fillMaxHeight().background(MaterialTheme.colorScheme.background).padding(rail.padDp.dp),
     verticalArrangement = Arrangement.spacedBy(DashLayout.TAB_GAP_DP.dp),
   ) {
-    AppTab.entries.forEach { t -> NavButton(t.label, tab == t, rail) { onSelect(t) } }
+    AppTab.entries.filter { it != AppTab.DIAGNOSTICS }.forEach { t -> NavButton(t.label, tab == t, rail) { onSelect(t) } }
     Spacer(Modifier.weight(1f))
     foot()
+    GearButton(tab == AppTab.DIAGNOSTICS, rail) { onSelect(AppTab.DIAGNOSTICS) }
   }
 }
 
-/** One rail button: filled when selected, outlined when not; [NavRail.buttonDp] tall (76 dp or more while driving). */
+/** The settings page's button: a gear at the foot of the rail, as tall as the other rail buttons. */
+@Composable
+private fun GearButton(selected: Boolean, rail: NavRail, onClick: () -> Unit) {
+  val colors = MaterialTheme.colorScheme
+  Box(
+    Modifier
+      .fillMaxWidth()
+      .height(rail.buttonDp.dp)
+      .selectable(selected = selected, role = Role.Tab, onClick = onClick)
+      .background(if (selected) colors.primary.copy(alpha = 0.12f) else colors.surface, TAB_BUTTON_SHAPE)
+      .border(1.dp, if (selected) colors.primary.copy(alpha = 0.45f) else colors.surfaceVariant, TAB_BUTTON_SHAPE),
+    contentAlignment = Alignment.Center,
+  ) {
+    Icon(painterResource(R.drawable.ic_settings), "Settings", Modifier.size(32.dp), tint = if (selected) colors.primary else TextDim)
+  }
+}
+
+/**
+ * One rail button, Carbon's: upper-case text, and for the selected one a green bar at its left edge over a
+ * faint green wash. Same size and touch target as before: [NavRail.buttonDp] tall (76 dp or more while driving).
+ */
 @Composable
 private fun NavButton(label: String, selected: Boolean, rail: NavRail, onClick: () -> Unit) {
   val colors = MaterialTheme.colorScheme
@@ -239,12 +269,14 @@ private fun NavButton(label: String, selected: Boolean, rail: NavRail, onClick: 
       .fillMaxWidth()
       .height(rail.buttonDp.dp)
       .selectable(selected = selected, role = Role.Tab, onClick = onClick)
-      .background(if (selected) colors.primary else colors.surfaceVariant, TAB_BUTTON_SHAPE)
-      .border(1.dp, if (selected) colors.primary else colors.outline, TAB_BUTTON_SHAPE)
+      .background(if (selected) colors.primary.copy(alpha = 0.12f) else colors.surface, TAB_BUTTON_SHAPE)
+      .border(1.dp, if (selected) colors.primary.copy(alpha = 0.45f) else colors.surfaceVariant, TAB_BUTTON_SHAPE)
+      .drawBehind { if (selected) drawRoundRect(colors.primary, topLeft = Offset(0f, size.height * 0.2f), size = Size(5.dp.toPx(), size.height * 0.6f), cornerRadius = CornerRadius(3.dp.toPx())) }
       .padding(horizontal = DashLayout.NAV_BUTTON_PAD_DP.dp),
     contentAlignment = Alignment.Center,
   ) {
-    FitText(label, sp = rail.textSp, weight = FontWeight.SemiBold, color = if (selected) colors.onPrimary else colors.onSurface)
+    // "DIAGNOSTICS" in capitals does not fit the rail: Carbon's mockup reads "DIAG".
+    FitText(label.uppercase().let { if (it.length > 8) it.take(4) else it }, sp = rail.textSp, weight = FontWeight.Bold, color = if (selected) colors.onSurface else TextDim)
   }
 }
 
@@ -255,10 +287,10 @@ private fun NavButton(label: String, selected: Boolean, rail: NavRail, onClick: 
  * in driving mode in Park (and Diagnostics, the usual way to find out, is the part that is locked).
  */
 @Composable
-private fun AvailableInParkPanel(layout: DashLayout, stateKnown: Boolean, inputs: StateFlow<DrivingInputs>, what: String = "Diagnostics") {
+private fun AvailableInParkPanel(layout: DashLayout, stateKnown: Boolean, inputs: StateFlow<DrivingInputs>, what: String = "Settings") {
   val reading by inputs.collectAsStateWithLifecycle()
   Box(Modifier.fillMaxSize().padding(layout.gapDp.dp), contentAlignment = Alignment.Center) {
-    Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(20.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
+    Card(Modifier.fillMaxWidth(), shape = CardShape, border = CardEdge, colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
       FitColumn(Modifier.fillMaxWidth().padding(horizontal = layout.cardPadHDp.dp, vertical = layout.cardPadVDp.dp), spacing = layout.gapDp.dp) {
         FitText("Available in Park", Modifier.fit(0).fillMaxWidth(), sp = layout.type.value, weight = FontWeight.Bold, lineFactor = DashLayout.VALUE_LINE_FACTOR, align = TextAlign.Center)
         FitText(

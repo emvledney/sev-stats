@@ -60,7 +60,7 @@ class DashboardModelTest {
     assertEquals("%", d.soc.unit)
     assertNull("confirmed: no marker", d.soc.marker)
     assertEquals(listOf("147.9 kWh remaining", "Range 317 mi (BMS)"), d.soc.lines)
-    // Capacity: both read from the BECM (27AE, 4676), each next to what backs it up.
+    // Capacity: both read from the BECM (27AE, 2B44), each next to what backs it up.
     assertEquals("205.20", d.capacity.value)
     assertEquals("kWh", d.capacity.unit)
     assertEquals("unverified", d.capacity.marker)
@@ -70,9 +70,9 @@ class DashboardModelTest {
     assertEquals("593.4", d.capacityAh.value)
     assertEquals("Ah", d.capacityAh.unit)
     assertEquals("unverified", d.capacityAh.marker)
-    // The deviation's DID is unknown: no figure rather than a guess.
-    assertFalse(d.capacityDeviation.hasValue)
-    assertEquals("PID not identified yet", d.capacityDeviation.lines[0])
+    // The deviation is the byte after the capacity in 2B44, where Car Scanner reads it (mapping of 2026-11-11).
+    assertEquals("22", d.capacityDeviation.value)
+    assertEquals("Ah", d.capacityDeviation.unit)
     // Pack: V, A and the kW they make, + = discharge, and the cell spread.
     assertEquals(listOf("Pack voltage", "Pack current", "Pack power", "Cell spread"), d.pack.map { it.label })
     assertEquals("+40.0 A", d.pack[1].value)
@@ -276,8 +276,18 @@ class DashboardModelTest {
   fun moduleTempPaddingIsDropped() {
     val raw = List(24) { i -> if (i < 20) 17.0 else -80.0 }
     val mt = DashboardModel.moduleTemps(mapOf("module_temps" to value("module_temps", raw, status = "unverified", period = 10.0)), NOW)!!
-    assertEquals(20, mt.celsius.size)
+    // Two sensors per module (Car Scanner's mapping of 2AF1, 2026-11-11): 20 sensors are 10 modules.
+    assertEquals(10, mt.celsius.size)
     assertTrue(mt.celsius.all { it == 17.0 })
+    // Battery 2's modules (2AF2) follow battery 1's; a module is the mean of its two sensors.
+    val both = DashboardModel.moduleTemps(
+      mapOf(
+        "module_temps" to value("module_temps", listOf(16.0, 18.0, 20.0, 20.0), status = "unverified", period = 10.0),
+        "module_temps_2" to value("module_temps_2", listOf(30.0, 31.0), status = "unverified", period = 10.0),
+      ),
+      NOW,
+    )!!
+    assertEquals(listOf<Double?>(17.0, 20.0, 30.5), both.celsius)
   }
 
   @Test
@@ -435,8 +445,10 @@ class DashboardModelTest {
     val calc = DashboardModel.build(noRead, VhalFigures(), TempUnit.C, DistUnit.MI, NOW)
     assertEquals("est.", calc.capacity.marker)
     assertEquals("Calculated: energy ÷ SoC", calc.capacity.lines[0])
-    assertEquals("est.", calc.capacityAh.marker)
-    assertEquals("Calculated: kWh ÷ (96 series × 3.6 V)", calc.capacityAh.lines[0])
+    // Owner, 2026-11-11: Ah is the BECM's figure or a dash. The calculation wandered (585-587 against Car Scanner's 599).
+    assertFalse(calc.capacityAh.hasValue)
+    assertEquals(Units.DASH, calc.capacityAh.value)
+    assertEquals(listOf("Not reported by the BECM"), calc.capacityAh.lines)
     val saved = SavedCapacity(208.44, 602.2, atWallMs = 1_000_000L)
     val off = DashboardModel.build(LiveState(status = LinkStatus.DISCONNECTED), VhalFigures(), TempUnit.C, DistUnit.MI, NOW, saved, 1_000_000L + 7_200_000L)
     assertEquals("208.44", off.capacity.value)

@@ -118,7 +118,8 @@ data class HeatmapView(
   val halfAfter: Int? get() = if (modules >= 4 && modules % 2 == 0) modules / 2 else null
 }
 
-data class ModuleTemps(val celsius: List<Double?>, val marker: String?, val stale: Boolean)
+/** [celsius] is one figure per module; [sensors] every sensor reading behind them (two per module). */
+data class ModuleTemps(val celsius: List<Double?>, val marker: String?, val stale: Boolean, val sensors: List<Double> = emptyList(), val pairs: List<List<Double?>> = emptyList())
 
 /**
  * One tile of the parked OBD page's grid: a label over a value, or, with [parts], a wide tile of small
@@ -165,7 +166,7 @@ object DashboardModel {
   const val MIN_VALID_CELL_V = 0.5
 
   const val OBD_HINT = "Pack voltage and current, cell groups and module temperatures come from the OBDLink MX+ " +
-    "(Diagnostics › OBDLink MX+ link). SoC, energy, range and outside temperature below are from the car's own API."
+    "(Settings › OBDLink MX+ link). SoC, energy, range and outside temperature below are from the car's own API."
 
   /** [saved]: the last capacity read, shown while the MX+ is not delivering; [wallNowMs]: for its age. */
   fun build(live: LiveState, vhal: VhalFigures, temp: TempUnit, dist: DistUnit, nowMs: Long, saved: SavedCapacity? = null, wallNowMs: Long = 0L, ownRangeM: Double? = null): Dashboard {
@@ -211,6 +212,7 @@ object DashboardModel {
   }
 
   private val TEMP_PARTS = listOf("min", "mean", "median", "max")
+  private val BATTERY_TEMP_PARTS = listOf("min", "mean", "max")
 
   /**
    * The OBD page's grid, as the owner asked for it (2026-11-11): each battery half's voltage, the cell groups'
@@ -235,15 +237,14 @@ object DashboardModel {
       out += PackTile("Cells", "V", stale = heat?.stale ?: false, parts = TEMP_PARTS.zip(s.map { Units.num(it, 3) }))
     }
     out += PackTile("Cell spread", if (spread.hasValue) "${spread.value} ${spread.unit}" else Units.DASH, spread.marker, spread.stale)
-    // Module temperatures, one tile per battery half (the pack is two halves in series).
-    val mt = moduleTemps(v, nowMs)
-    val all = mt?.celsius.orEmpty()
-    val halves = if (all.size >= 4 && all.size % 2 == 0) listOf("Batt 1" to all.take(all.size / 2), "Batt 2" to all.drop(all.size / 2)) else listOf("Batt" to all) // short: the name shares a row with four figures
-    for ((name, list) in halves) {
-      val stats = minMeanMedianMax(list)
-      val figures = if (stats == null) List(4) { Units.DASH } else listOf(0, 1, 1, 0).mapIndexed { i, decimals -> Units.num(Units.temp(stats[i], temp), decimals) }
-      // For a tile with parts, the value is the unit its figures are in.
-      out += PackTile(name, temp.symbol, mt?.marker ?: marker(v["module_temps"]), mt?.stale ?: false, TEMP_PARTS.zip(figures))
+    // Each battery's own temperature summary, as the BECM reports it (2AF3, 2AF4: average, min, max). Until
+    // 2026-11-11 these tiles split 2AF1 in two, but all of 2AF1 is battery 1 (two sensors per module).
+    for ((i, field) in listOf("battery_temps_a", "battery_temps_b").withIndex()) {
+      val src = v[field]
+      val t = (src?.v as? List<*>)?.map { (it as? Number)?.toDouble()?.takeIf { c -> c > MIN_VALID_MODULE_TEMP_C } }?.takeIf { it.size >= 3 && it.take(3).all { c -> c != null } }
+      val figures = if (t == null) List(3) { Units.DASH } else listOf(t[1], t[0], t[2]).map { Units.num(Units.temp(it!!, temp), 0) }
+      // For a tile with parts, the value is the unit its figures are in. "Batt" is short: the name shares a row with the figures.
+      out += PackTile("Batt ${i + 1}", temp.symbol, marker(src), isStale(src, nowMs), BATTERY_TEMP_PARTS.zip(figures))
     }
     val c1 = v["coolant_temp_1"]
     val c2 = v["coolant_temp_2"]
@@ -385,30 +386,27 @@ object DashboardModel {
     return Kpi(CAPACITY_TITLE, Units.DASH, "kWh", listOfNotNull(NEEDS_MX, api), hasValue = false, shortTitle = CAPACITY_SHORT)
   }
 
-  /** The pack's capacity in Ah: read from the BECM, else worked out from the kWh figure and said so. */
+  /**
+   * The pack's capacity in Ah: read from the BECM (2B44, the PID Car Scanner uses), else a dash. Never worked
+   * out from the kWh figure: that read 585-587 and wandered next to Car Scanner's 599 (owner, 2026-11-11).
+   */
   fun capacityAh(v: Map<String, LiveValue>, derived: Map<String, Any>, nowMs: Long, saved: SavedCapacity? = null, wallNowMs: Long = 0L): Kpi {
     val read = dnum(derived, "capacity_ah")
     if (read != null) {
       val src = v["pack_capacity_ah"]
       return Kpi(AH_TITLE, Units.num(read, 1), "Ah", listOf("Total energy storage, from the BECM"), marker = marker(src), age = ageOf(src, nowMs), stale = isStale(src, nowMs), shortTitle = AH_SHORT)
     }
-    val est = dnum(derived, "ah_nominal_est")
-    if (est != null) {
-      val groups = dnum(derived, "series_groups")?.let { Units.num(it, 0) } ?: Units.DASH
-      val src = v["energy_remaining"]
-      return Kpi(AH_TITLE, Units.num(est, 0), "Ah", listOf("Calculated: kWh ÷ ($groups series × 3.6 V)"), marker = EST, age = ageOf(src, nowMs), stale = isStale(src, nowMs), shortTitle = AH_SHORT)
-    }
     saved?.ah?.let { return lastRead(AH_TITLE, AH_SHORT, Units.num(it, 1), "Ah", saved, wallNowMs) }
-    return Kpi(AH_TITLE, Units.DASH, "Ah", listOf(NEEDS_MX), hasValue = false, shortTitle = AH_SHORT)
+    return Kpi(AH_TITLE, Units.DASH, "Ah", listOf(if (v.isEmpty()) NEEDS_MX else PID_UNKNOWN), hasValue = false, shortTitle = AH_SHORT)
   }
 
   /**
-   * "Battery total energy storage capacity deviation", an integer Ah. Its DID has not been identified:
-   * a field named capacity_deviation in the profile lights this up. No guess: any 0-50 would look right.
+   * "Battery total energy storage capacity deviation", an integer Ah: the profile's capacity_deviation,
+   * the byte after the capacity in 2B44 (where Car Scanner reads it).
    */
   fun capacityDeviation(v: Map<String, LiveValue>, nowMs: Long): Kpi {
     val src = v["capacity_deviation"]
-    val ah = num(v, "capacity_deviation") ?: return Kpi(DEVIATION_TITLE, Units.DASH, "Ah", listOf("PID not identified yet"), hasValue = false, shortTitle = DEVIATION_SHORT)
+    val ah = num(v, "capacity_deviation") ?: return Kpi(DEVIATION_TITLE, Units.DASH, "Ah", listOf(PID_UNKNOWN), hasValue = false, shortTitle = DEVIATION_SHORT)
     return Kpi(DEVIATION_TITLE, Units.num(ah, 0), "Ah", listOf("Total energy storage capacity deviation"), marker = marker(src), age = ageOf(src, nowMs), stale = isStale(src, nowMs), shortTitle = DEVIATION_SHORT)
   }
 
@@ -420,6 +418,7 @@ object DashboardModel {
   const val LAST_READ = "last read"
   private const val EST = "est."
   private const val NEEDS_MX = "Needs the OBDLink MX+"
+  private const val PID_UNKNOWN = "Not reported by the BECM"
   private const val CAPACITY_TITLE = "Capacity"
   private const val CAPACITY_SHORT = "Capacity"
   private const val AH_TITLE = "Capacity (Ah)"
@@ -650,13 +649,26 @@ object DashboardModel {
 
   // --- Temperatures -----------------------------------------------------------------------------
 
+  /**
+   * One temperature per module. 2AF1 holds two sensors for each of battery 1's modules (Car Scanner's
+   * mapping, 2026-11-11), and 2AF2 is taken to hold battery 2's the same way: a module's figure is the mean
+   * of its two sensors. Battery 2's modules follow battery 1's.
+   */
   fun moduleTemps(v: Map<String, LiveValue>, nowMs: Long): ModuleTemps? {
     val x = v["module_temps"] ?: return null
-    val list = (x.v as? List<*>) ?: return null
-    val temps = list.map { (it as? Number)?.toDouble()?.takeIf { t -> t > MIN_VALID_MODULE_TEMP_C } }
+    val temps = (sensorPairs(x) ?: return null) + sensorPairs(v["module_temps_2"]).orEmpty()
     if (temps.all { it == null }) return null
     val trimmed = temps.dropLastWhile { it == null }
-    return ModuleTemps(trimmed, marker(x), isStale(x, nowMs))
+    val sensors = listOfNotNull(x, v["module_temps_2"]).flatMap { (it.v as? List<*>).orEmpty() }.mapNotNull { (it as? Number)?.toDouble()?.takeIf { t -> t > MIN_VALID_MODULE_TEMP_C } }
+    val pairs = listOfNotNull(x, v["module_temps_2"]).flatMap { s ->
+      (s.v as? List<*>).orEmpty().chunked(2) { p -> p.map { (it as? Number)?.toDouble()?.takeIf { t -> t > MIN_VALID_MODULE_TEMP_C } } }
+    }.take(trimmed.size)
+    return ModuleTemps(trimmed, marker(x), isStale(x, nowMs), sensors, pairs)
+  }
+
+  /** The mean of each pair of sensors; null for a pair that is all padding. */
+  private fun sensorPairs(x: LiveValue?): List<Double?>? = (x?.v as? List<*>)?.chunked(2) { pair ->
+    pair.mapNotNull { (it as? Number)?.toDouble()?.takeIf { t -> t > MIN_VALID_MODULE_TEMP_C } }.takeIf { it.isNotEmpty() }?.average()
   }
 
   fun temps(v: Map<String, LiveValue>, vhal: VhalFigures, live: LiveState, u: TempUnit, nowMs: Long): List<TempLine> {

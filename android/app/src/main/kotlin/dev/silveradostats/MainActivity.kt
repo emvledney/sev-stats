@@ -1,5 +1,6 @@
 package dev.silveradostats
 
+import android.app.ActivityManager
 import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.net.Uri
@@ -10,6 +11,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
+import androidx.core.graphics.drawable.toBitmap
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
@@ -66,6 +68,11 @@ class MainActivity : ComponentActivity() {
     // No logcat on the truck: keep the last crash in a file the next launch shows and reports.
     CrashLog.install(this, BuildConfig.VERSION_NAME, BuildConfig.VERSION_CODE)
     super.onCreate(savedInstanceState)
+    // The truck's dock drew the generic Android icon for this app (0.21.0, owner's photo of 2026-11-11), with
+    // the icon itself declared like the apps that show theirs. A guess: the dock cannot look the icon up, so
+    // hand it over with the task as a bitmap. Untested off the truck; harmless if the dock ignores it.
+    @Suppress("DEPRECATION")
+    setTaskDescription(ActivityManager.TaskDescription(getString(R.string.app_name), packageManager.getApplicationIcon(applicationInfo).toBitmap(192, 192)))
     enableEdgeToEdge()
     setContent {
       SilveradoStatsTheme {

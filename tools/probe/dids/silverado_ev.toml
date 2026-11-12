@@ -15,6 +15,7 @@
 #   S6 hacs_gm_ultium (BrightDrop)                     https://github.com/Coldarn/hacs_gm_ultium
 #   S7 = this truck (2024 Silverado EV, 24 modules), session 1, 2026-11-03
 #   S8 WiCAN #606 attachment: the raw Car Scanner log behind S1 (20-module truck)  https://github.com/user-attachments/files/23725634/log.txt
+#   S10 Car Scanner 2.2.42's GM Ultium 2021-2025 profile, as mapped in carscanner/ (2026-11-11): what that app reads, not yet matched on this truck
 #   S9 this truck's Car Scanner screen, owner's screenshot, 2026-11-04: Battery Capability 208.44 kWh, Total Energy Storage 602.2 Ah
 
 [meta]
@@ -89,16 +90,29 @@ note = "S8: 173.86-175.62 kWh next to energy / SoC of about 175, read together w
 
 [[did]]
 module = "becm"
-id = 0x4676
+id = 0x2B44
 name = "pack_capacity_ah"
-label = "Pack capacity (candidate)"
+label = "Total energy storage capacity"
 unit = "Ah"
 type = "u16"
 scale = 0.01
 period = 60
 status = "unverified"
-source = "S8 (E254 = 579.4 at this scale), guess for S9's 602.2 Ah"
-note = "the only near-600 value in S8. Derive shows it only if it fits the pack's voltage; if it does not match Car Scanner the real DID is still to be found"
+source = "S10"
+note = "Car Scanner's Battery Total Energy Storage Capacity. Replaces the 4676 guess: 4676 is a discharge power limit in S10 and answered FFFF on this truck. Derive shows it only if it fits the pack's voltage. Compare with Car Scanner on this truck, then mark confirmed"
+
+[[did]]
+module = "becm"
+id = 0x2B44
+name = "capacity_deviation"
+label = "Total energy storage capacity deviation"
+unit = "Ah"
+type = "u8"
+start = 2
+period = 60
+status = "unverified"
+source = "S10"
+note = "Car Scanner's capacity deviation (22 on the owner's screen, S9): the byte after the capacity. Compare with Car Scanner on this truck, then mark confirmed"
 
 [[did]]
 module = "becm"
@@ -319,7 +333,7 @@ offset = -80
 period = 10
 status = "unverified"
 source = "S2 (24 bytes on a Sierra EV), S6; S7"
-note = "16-17 C on this truck with x-80 while coolant read 19.6-21.6 C; (x-40)/2 would give 28 C. Likely x-80; confirm against outside temp"
+note = "16-17 C on this truck with x-80 while coolant read 19.6-21.6 C; (x-40)/2 would give 28 C. Likely x-80; confirm against outside temp. S10: x-80, and the 24 bytes are two sensors for each of modules 1-12 (battery 1), not one for each of 24 modules"
 
 [[did]]
 module = "becm"
@@ -333,6 +347,7 @@ offset = -80
 period = 10
 status = "unverified"
 source = "S7 (24 bytes, all 0x61 = 17 C with x-80 while 2AF1 read 16-17 C)"
+note = "not in S10. Taken as two sensors for each of modules 13-24 (battery 2), by analogy with 2AF1: an inference"
 
 [[did]]
 module = "becm"
@@ -428,6 +443,34 @@ type = "hex"
 period = 10
 status = "unverified"
 source = "S2"
+
+[[did]]
+module = "becm"
+id = 0x2AF3
+name = "battery_temps_a"
+label = "Battery 1 temperature: average, min, max"
+unit = "C"
+type = "u8"
+count = 3
+offset = -80
+period = 10
+status = "unverified"
+source = "S10"
+note = "Car Scanner's Battery 1 Average / Min / Max Temperature, bytes 0-2. Not yet matched on this truck"
+
+[[did]]
+module = "becm"
+id = 0x2AF4
+name = "battery_temps_b"
+label = "Battery 2 temperature: average, min, max"
+unit = "C"
+type = "u8"
+count = 3
+offset = -80
+period = 10
+status = "unverified"
+source = "S10"
+note = "Car Scanner's Battery 2 Average / Min / Max Temperature, bytes 0-2. Not yet matched on this truck"
 
 [[did]]
 module = "becm"

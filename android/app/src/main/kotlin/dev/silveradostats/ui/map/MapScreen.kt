@@ -174,7 +174,9 @@ fun MapScreen(
 
       // The GPS button: back to the truck at the standard radius.
       Surface(
-        Modifier.align(Alignment.TopEnd).padding(EDGE).size(TOUCH).clickable(onClick = controller::locate),
+        Modifier.align(Alignment.BottomStart)
+          .padding(start = if (controller.target != null && !keyboard) EDGE + COLUMN_WIDTH + EDGE else EDGE, bottom = EDGE)
+          .size(TOUCH).clickable(onClick = controller::locate),
         shape = RoundedCornerShape(50),
         color = MaterialTheme.colorScheme.surface,
         shadowElevation = 4.dp,

@@ -186,6 +186,14 @@ class DashLayoutTest {
         assertTrue("$name: ${reached.sum()} in $room", reached.sum() <= room + 1)
         // Under each of the other three, one figure.
         listOf(figure(5, 3, 10), figure(4, 6, 5), figure(5, 3, 5)).forEachIndexed { i, w -> assertTrue("$name: part ${i + 2}, $w in $room", w <= room + 1) }
+        // The three single figures have their own size (the owner, 2026-11-12): no smaller, and still inside their tile.
+        val single = l.simpleChargeSingleSp(notice)
+        assertTrue("$name: single $single < $sp", single >= sp)
+        if (single > sp) {
+          val singleUnit = l.simpleChargeUnitSp(single)
+          assertTrue("$name: single $single tall", 2 * l.cardPadVDp + l.lineDp(single, DashLayout.VALUE_LINE_FACTOR) + l.cardGapDp + l.lineDp(words) <= l.simpleChargeDp(notice) + 1)
+          listOf(5 to 3, 4 to 6).forEach { (c, u) -> assertTrue("$name: single $single wide", c * single * 0.54f + u * singleUnit * 0.68f + 8 + DashLayout.CHARGE_ROUNDING_DP <= room * DashLayout.CHARGE_SINGLE_FILL + 1) }
+        }
         // Each of the first two gets what it needs, so the % never moves with the kWh.
         val weights = l.simpleChargeReachedWeights(notice)
         assertEquals(2, weights.size)
@@ -297,6 +305,29 @@ class DashLayoutTest {
       assertTrue("${l.name()}: seven rows", l.cardPadVDp * 2 + l.lineDp(l.type.title) + l.trendChipDp + 2 * l.cardGapDp + DashLayout.TREND_MAX_ROWS * l.trendRowDp <= l.trendBodyDp)
       assertTrue("${l.name()}: L and R stay in their row", l.trendAxisButtonDp < l.trendRowDp)
     }
+  }
+
+  /**
+   * The OBD page's five figures fill their tiles (the owner, 2026-11-12: text was small in its boxes): never smaller
+   * than the type scale gave them, never wider than a tile, and the row never taller than the page's budget for it.
+   */
+  @Test
+  fun theObdFiguresFillTheirTiles() {
+    forEachWindow { l ->
+      for (lines in listOf(false, true)) {
+        val sp = l.obdFigureSp(lines)
+        assertTrue(l.name(), sp >= l.liveFigureSp(DashLayout.OBD_TILES))
+        assertTrue(l.name(), l.obdTilesDp(sp, lines) <= l.liveTilesDp)
+        val tile = (l.widthDp - 2 * l.pagePadHDp - 4 * l.gapDp) / 5 - 2 * l.cardPadHDp
+        if (sp > DashLayout.LIVE_VALUE_MIN_SP) assertTrue("${l.name()}: $sp sp in $tile", 6 * 0.54f * sp + 8 + 3 * 0.58f * l.type.unit <= tile + 1)
+      }
+    }
+    // The truck's page beside the rail: well above the type scale's 56.
+    assertTrue(DashLayout.ofLive(1861f, 602f).obdFigureSp(false) >= 70)
+    // A small pack tile on that page: its label and value fit its row, and "70 · 76 °F" its width.
+    val (value, label) = DashLayout.ofLive(1861f, 602f).packSp(63f, 213f, DashLayout.PACK_VALUE_CHARS)
+    assertTrue("$value over $label", value * DashLayout.PACK_VALUE_LINE + label * 1.3f + 2 * DashLayout.PACK_PAD_V_DP + DashLayout.PACK_SPACING_DP <= 63f)
+    assertTrue(value >= 20 && label >= 14)
   }
 
   @Test

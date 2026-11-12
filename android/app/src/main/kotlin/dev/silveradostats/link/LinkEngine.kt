@@ -68,7 +68,7 @@ class RetryPolicy(val minMs: Long = MIN_AUTO_RETRY_MS, val maxMs: Long = 60_000)
 /** User-facing texts for link problems (pure, unit tested). */
 object LinkMessages {
   const val DISCONNECTED = "The MX+ is disconnected and free for your phone or laptop. Tap Connect to read it again."
-  const val NO_ADAPTER = "Choose your OBDLink MX+ under Diagnostics › OBDLink MX+ link, or turn on demo data there."
+  const val NO_ADAPTER = "Choose your OBDLink MX+ under Settings › OBDLink MX+ link, or turn on demo data there."
   const val IDLE = "Connects while the app is on screen."
   const val ASLEEP_SILENT = "Truck asleep: nothing is sent on the bus. The adapter's own voltage is checked once a minute; " +
     "polling resumes when the truck wakes."
@@ -813,7 +813,7 @@ class LinkEngine(
   }
 
   private fun effective(s: LiveState): LiveState =
-    if (pairing && s.status in PAIRING_OVERRIDES) s.copy(status = LinkStatus.PAIRING, message = "Pairing with the adapter… (Diagnostics › OBDLink MX+ link)") else s
+    if (pairing && s.status in PAIRING_OVERRIDES) s.copy(status = LinkStatus.PAIRING, message = "Pairing with the adapter… (Settings › OBDLink MX+ link)") else s
 
   companion object {
     /** The error of a link test ended by [cancelChecks]. */

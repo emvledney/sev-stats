@@ -46,7 +46,7 @@ class UltiumSim(private val clock: () -> Double = Monotonic::seconds) {
         0x27C6 -> return u16(s.soc * 655.35)
         0x27AF -> return u16(s.soc / 100 * 205.4 * 100)
         0x27AE -> return u16(20520.0)
-        0x4676 -> return u16(59340.0)
+        0x2B44 -> return u16(59340.0) + byteArrayOf(22)
         0x27B9 -> return bytesFromHex("001566")
         0x2984 -> return bytesFromHex("2041")
         0x270D -> return bytesFromHex("0fa0")
@@ -68,7 +68,8 @@ class UltiumSim(private val clock: () -> Double = Monotonic::seconds) {
         0x2AF9 -> return bytesFromHex("222222222222111111111111")
         0x2AF7 -> return listOf(-0.1, -0.2, 0.2, 0.2).fold(ByteArray(0)) { acc, d -> acc + u16((packV + d) * 100) }
         0x2AF1 -> return ByteArray(MODULES) { (s.temps[it].toInt() + 80).toByte() }
-        0x2AF3, 0x2AF4 -> return bytesOf(s.temps.max().toInt() + 80, s.temps.min().toInt() + 80, 0x0E, 0x03)
+        0x2AF3 -> return bytesOf((Py.sum(s.temps.toList()).toDouble() / MODULES).toInt() + 80, s.temps.min().toInt() + 80, s.temps.max().toInt() + 80, 0x0E, 0x03)
+        0x2AF4 -> return (s.temps.max().toInt() + 80).let { bytesOf(it, it, it, 0x0E, 0x03) }
         0x2B43 -> {
           val b = (s.soc * 2.55).toInt()
           return bytesOf(b, b) + ByteArray(MODULES) { (b + (it % 3) - 1).toByte() }

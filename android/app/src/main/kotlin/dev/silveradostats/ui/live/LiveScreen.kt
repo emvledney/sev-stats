@@ -62,6 +62,8 @@ import dev.silveradostats.ui.layout.FitText
 import dev.silveradostats.ui.layout.PriorityRow
 import dev.silveradostats.ui.layout.SizeTier
 import dev.silveradostats.ui.layout.WindowTooSmall
+import dev.silveradostats.ui.theme.CardEdge
+import dev.silveradostats.ui.theme.CardShape
 import dev.silveradostats.ui.theme.DivergingHigh
 import dev.silveradostats.ui.theme.DivergingLow
 import dev.silveradostats.ui.theme.DivergingMid
@@ -205,7 +207,8 @@ internal fun toneColor(t: Tone): Color = when (t) {
 private fun DashCard(modifier: Modifier, layout: DashLayout, content: @Composable FitColumnScope.() -> Unit) {
   Card(
     modifier = modifier,
-    shape = RoundedCornerShape(20.dp),
+    shape = CardShape,
+    border = CardEdge,
     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
   ) {
     FitColumn(
@@ -276,18 +279,25 @@ private fun ColumnScope.KpiTiles(dash: Dashboard, layout: DashLayout) {
   // One row of all five where the page has its tiles in a row; two to a row on a window too narrow for that.
   val across = if (layout.liveTileCols >= DashLayout.LIVE_TILES) tiles.size else 2
   val rows = tiles.chunked(across)
-  val figureSp = layout.liveFigureSp(across)
-  val size = if (layout.liveCards) Modifier.height(layout.liveTilesDp.dp) else Modifier.weight(1f)
+  // The capacity tiles carry no description of what they are, by the owner's choice (2026-11-11): only
+  // the marker beside the title says read, estimated or last read. Their lines stay where they are
+  // news: a figure that is a saved one (how old it is), or missing because there is no adapter.
+  // The charge is alone in its tile: what is left has the tile beside it, and this page shows no range.
+  fun hasLines(k: Kpi) = k !== dash.soc && k !== dash.remaining && (k.marker == DashboardModel.LAST_READ || (!k.hasValue && k !== dash.capacityDeviation))
+  // All five in a row: the figures fill their tiles, and the row is no taller than they need.
+  val fill = across == tiles.size && layout.liveCards
+  val anyLines = tiles.any(::hasLines)
+  val figureSp = if (fill) layout.obdFigureSp(anyLines) else layout.liveFigureSp(across)
+  val size = when {
+    !layout.liveCards -> Modifier.weight(1f)
+    fill -> Modifier.height(layout.obdTilesDp(figureSp, anyLines).dp)
+    else -> Modifier.height(layout.liveTilesDp.dp)
+  }
   Column(Modifier.fillMaxWidth().then(size), verticalArrangement = Arrangement.spacedBy(layout.gapDp.dp)) {
     rows.forEach { row ->
       Row(Modifier.fillMaxWidth().weight(1f), horizontalArrangement = Arrangement.spacedBy(layout.gapDp.dp)) {
         row.forEach { k ->
-          // The capacity tiles carry no description of what they are, by the owner's choice (2026-11-11): only
-          // the marker beside the title says read, estimated or last read. Their lines stay where they are
-          // news: a figure that is a saved one (how old it is), or missing because there is no adapter.
-          // The charge is alone in its tile: what is left has the tile beside it, and this page shows no range.
-          val lines = k !== dash.soc && k !== dash.remaining && (k.marker == DashboardModel.LAST_READ || (!k.hasValue && k !== dash.capacityDeviation))
-          KpiTile(k, lines, figureSp, layout, Modifier.weight(1f).fillMaxHeight())
+          KpiTile(k, hasLines(k), figureSp, layout, Modifier.weight(1f).fillMaxHeight())
         }
       }
     }
@@ -366,7 +376,9 @@ private fun tag(marker: String?): String? = marker?.takeUnless { it == "unverifi
 @Composable
 private fun PackTiles(tiles: List<PackTile>, layout: DashLayout, modifier: Modifier) {
   val type = layout.type
-  val gap = Arrangement.spacedBy(layout.gapDp.dp)
+  // Six rows share the height: the gaps between them stay small, so the text has it.
+  val gapDp = minOf(layout.gapDp, 8)
+  val gap = Arrangement.spacedBy(gapDp.dp)
   val rows = mutableListOf<List<PackTile>>()
   var waiting: PackTile? = null
   for (t in tiles) {
@@ -385,36 +397,44 @@ private fun PackTiles(tiles: List<PackTile>, layout: DashLayout, modifier: Modif
     }
   }
   waiting?.let { rows += listOf(it) }
-  Column(modifier, verticalArrangement = gap) {
-    rows.forEach { row ->
-      Row(Modifier.fillMaxWidth().weight(1f), horizontalArrangement = gap) {
-        row.forEach { t ->
-          Card(
-            modifier = Modifier.weight(1f).fillMaxHeight(),
-            shape = RoundedCornerShape(16.dp),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-          ) {
-            val ink = if (t.stale) StatusWarn else MaterialTheme.colorScheme.onSurface
-            FitColumn(Modifier.fillMaxSize().padding(horizontal = layout.cardPadHDp.dp, vertical = 6.dp), spacing = 2.dp) {
+  BoxWithConstraints(modifier) {
+    val rowDp = (maxHeight.value - (rows.size - 1) * gapDp) / rows.size.coerceAtLeast(1)
+    val inner = maxWidth.value - 2 * layout.cardPadHDp
+    // One size for every small tile, from the half-width ones, and one for every wide tile's five columns.
+    val (valueSp, labelSp) = layout.packSp(rowDp, (inner - gapDp) / 2 - layout.cardPadHDp, DashLayout.PACK_VALUE_CHARS)
+    val (partSp, captionSp) = layout.packSp(rowDp, inner / 5 - 4, DashLayout.PACK_PART_CHARS)
+    Column(Modifier.fillMaxSize(), verticalArrangement = gap) {
+      rows.forEach { row ->
+        Row(Modifier.fillMaxWidth().weight(1f), horizontalArrangement = gap) {
+          row.forEach { t ->
+            Card(
+              modifier = Modifier.weight(1f).fillMaxHeight(),
+              shape = CardShape,
+              border = CardEdge,
+              colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+            ) {
+              val ink = if (t.stale) StatusWarn else MaterialTheme.colorScheme.onSurface
+              val pad = Modifier.fillMaxSize().padding(horizontal = layout.cardPadHDp.dp, vertical = DashLayout.PACK_PAD_V_DP.dp)
               if (t.parts.isEmpty()) {
-                PriorityRow(Modifier.fit(1).fillMaxWidth()) {
-                  FitText(t.label, Modifier.slot(1, minWidth = layout.labelMinDp(type.label).dp), sp = type.label, color = TextDim)
-                  tag(t.marker)?.let { Marker(it, type.label, Modifier.slot(0, end = true)) }
+                FitColumn(pad, spacing = DashLayout.PACK_SPACING_DP.dp) {
+                  PriorityRow(Modifier.fit(1).fillMaxWidth()) {
+                    FitText(t.label, Modifier.slot(1, minWidth = layout.labelMinDp(labelSp).dp), sp = labelSp, color = TextDim)
+                    tag(t.marker)?.let { Marker(it, type.label, Modifier.slot(0, end = true)) }
+                  }
+                  FitText(t.value, Modifier.fit(0).fillMaxWidth(), sp = valueSp, weight = FontWeight.Bold, color = ink)
                 }
-                FitText(t.value, Modifier.fit(0).fillMaxWidth(), sp = type.cardTitle, weight = FontWeight.Bold, color = ink)
               } else {
-                // A wide tile: its name and unit lead the row, so a short tile cannot lose them, then the figures.
-                Row(Modifier.fit(0).fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
+                // A wide tile: its name and unit lead the row, then the figures side by side over their captions.
+                Row(pad, horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
                   Column(Modifier.weight(1f)) {
-                    FitText(t.label, sp = type.body, weight = FontWeight.SemiBold)
+                    FitText(t.label, sp = captionSp + 2, weight = FontWeight.SemiBold)
                     // Under the name: the unit only. There is no room here for a tag such as "likely".
-                    FitText(t.value, sp = type.label, color = TextDim)
+                    FitText(t.value, sp = captionSp, color = TextDim)
                   }
                   t.parts.forEach { (caption, figure) ->
                     Column(Modifier.weight(1f)) {
-                      // Five figures share the row with the name: a size that leaves room for "3.913".
-                      FitText(figure, sp = type.title, weight = FontWeight.Bold, color = ink)
-                      FitText(caption, sp = type.label, color = TextDim)
+                      FitText(figure, sp = partSp, weight = FontWeight.Bold, color = ink)
+                      FitText(caption, sp = captionSp, color = TextDim)
                     }
                   }
                 }
@@ -446,7 +466,7 @@ private fun NoCellDataCard(noAdapter: Boolean, hint: String?, temps: ModuleTemps
     FitText(if (noAdapter) "No OBD adapter chosen" else "Cell groups vs pack average", Modifier.fit(0), sp = type.cardTitle, weight = FontWeight.SemiBold)
     FitText(
       if (noAdapter) {
-        "Pair and choose your OBDLink MX+ under Diagnostics › OBDLink MX+ link (or turn on demo data there)."
+        "Pair and choose your OBDLink MX+ under Settings › OBDLink MX+ link (or turn on demo data there)."
       } else {
         "Cell-group voltages (192 on this truck: 24 modules × 8 groups) need the OBDLink MX+."
       },
@@ -460,7 +480,7 @@ private fun NoCellDataCard(noAdapter: Boolean, hint: String?, temps: ModuleTemps
         onClick = onOpenDiagnostics,
         modifier = Modifier.fit(1).heightIn(min = layout.controlDp.dp),
         contentPadding = PaddingValues(horizontal = layout.segmentPadDp.dp),
-      ) { FitText("Open Diagnostics", sp = type.tab - 2) }
+      ) { FitText("Open Settings", sp = type.tab - 2) }
     }
     hint?.let { FitText(it, Modifier.fit(4), sp = type.label, color = TextDim, maxLines = 4) }
     if (temps != null) {
@@ -482,31 +502,43 @@ private fun HeatmapCard(
 ) {
   val type = layout.type
   DashCard(modifier, layout) {
-    val info = if (layout.liveShort) {
-      "${heat.read} groups · average ${Units.num(heat.avgV, 4)} V"
-    } else {
-      "${heat.read} groups · pack average ${Units.num(heat.avgV, 4)} V" + (heat.age?.let { a -> " · $a old" } ?: "")
-    } +
-      // Shading mixes reads ~2 s apart while current flows: the spread tile uses the BMS halves.
-      (if (heat.underLoad) " · read ${DashboardModel.UNDER_LOAD}" else "")
-    val infoColor = if (heat.stale || heat.underLoad) StatusWarn else TextDim
     val sel = selectedGroup?.let { g -> heat.cells.getOrNull(g - 1) }
-    // The tapped cell's details replace the summary line (no extra row).
+    // Owner's request (2026-11-12): flip the grid between cell voltages and temperatures. The truck reports
+    // temperatures per module (two sensors each), not per cell, so that view is one tall cell per module.
+    var showTemps by rememberSaveable { mutableStateOf(false) }
+    val tempView = showTemps && temps != null
+    // The summary caption ("192 groups · average … · read under load") was removed on the owner's request
+    // (2026-11-12); only a tapped cell's details show here.
     Row(Modifier.fit(2).fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(layout.gapDp.dp)) {
-      FitText(if (layout.liveShort) "Cell groups" else "Cell groups vs pack average", sp = type.cardTitle, weight = FontWeight.SemiBold)
       FitText(
-        sel?.let { DashboardModel.cellDetail(it) } ?: if (layout.liveShort) info else "$info · tap a cell for details",
-        Modifier.weight(1f),
-        sp = if (sel != null) type.title else type.body,
-        color = if (sel != null) MaterialTheme.colorScheme.onSurface else infoColor,
+        if (tempView) "Module temperatures" else if (layout.liveShort) "Cell groups" else "Cell groups vs pack average",
+        sp = type.cardTitle,
+        weight = FontWeight.SemiBold,
       )
+      FitText(
+        if (tempView) "" else sel?.let { DashboardModel.cellDetail(it) } ?: "",
+        Modifier.weight(1f),
+        sp = type.title,
+        color = MaterialTheme.colorScheme.onSurface,
+      )
+      if (temps != null) {
+        OutlinedButton(
+          onClick = { showTemps = !showTemps },
+          contentPadding = PaddingValues(horizontal = layout.segmentPadDp.dp),
+        ) { FitText(if (tempView) "Voltage" else "Temperature", sp = type.tab - 2) }
+      }
     }
-    Heatmap(heat, selectedGroup, onSelect, layout, Modifier.fill(0, (layout.heatHeadDp + DashLayout.HEAT_ROWS * DashLayout.HEAT_ROW_MIN_DP).dp).fillMaxWidth())
-    if (temps != null) {
-      ModuleTempStrip(temps, heat.modules, heat.halfAfter, unit, layout, Modifier.fit(1).fillMaxWidth().height(layout.heatStripDp.dp))
+    val gridMod = Modifier.fill(0, (layout.heatHeadDp + DashLayout.HEAT_ROWS * DashLayout.HEAT_ROW_MIN_DP).dp).fillMaxWidth()
+    if (tempView) {
+      ModuleTempBlocks(temps!!, heat.modules, heat.halfAfter, unit, layout, gridMod)
+    } else {
+      Heatmap(heat, selectedGroup, onSelect, layout, gridMod)
+      if (temps != null) {
+        ModuleTempStrip(temps, heat.modules, heat.halfAfter, unit, layout, Modifier.fit(1).fillMaxWidth().height(layout.heatStripDp.dp))
+      }
     }
     Row(Modifier.fit(3).fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-      Legend(heat, layout, Modifier.weight(1f))
+      if (tempView) Spacer(Modifier.weight(1f)) else Legend(heat, layout, Modifier.weight(1f))
       temps?.let { ModuleTempLabel(it, unit, layout) }
     }
   }
@@ -515,7 +547,6 @@ private fun HeatmapCard(
 @Composable
 private fun ModuleTempLabel(temps: ModuleTemps, unit: TempUnit, layout: DashLayout, modifier: Modifier = Modifier) {
   Row(modifier, verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-    if (!layout.liveShort) FitText("Bottom row: module ${unit.symbol}", sp = layout.type.label, color = TextDim)
     temps.marker?.let { Marker(it, layout.type.label) }
   }
 }
@@ -582,6 +613,39 @@ private fun Heatmap(heat: HeatmapView, selectedGroup: Int?, onSelect: (Int?) -> 
   }
 }
 
+/** Temperature view: a block per module, one row per battery half, the module's two sensors stacked with their figures. */
+@Composable
+private fun ModuleTempBlocks(temps: ModuleTemps, modules: Int, halfAfter: Int?, unit: TempUnit, layout: DashLayout, modifier: Modifier) {
+  val rows = (1..modules).chunked(halfAfter ?: modules)
+  Column(modifier, verticalArrangement = Arrangement.spacedBy(layout.gapDp.dp)) {
+    for (row in rows) {
+      Row(Modifier.weight(1f).fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+        for (m in row) {
+          Column(Modifier.weight(1f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            FitText("$m", Modifier.fillMaxWidth(), sp = layout.type.axis, color = TextDim, align = TextAlign.Center)
+            for (c in temps.pairs.getOrNull(m - 1) ?: listOf(null, null)) {
+              val bg = if (c != null) tempColor(c) else Color.Transparent
+              Box(
+                Modifier.weight(1f).fillMaxWidth().clip(RoundedCornerShape(4.dp)).background(bg).then(if (c == null) Modifier.border(1.dp, GridLine, RoundedCornerShape(4.dp)) else Modifier),
+                contentAlignment = Alignment.Center,
+              ) {
+                if (c != null) {
+                  FitText(
+                    Units.num(Units.temp(c, unit), 1),
+                    sp = layout.type.title,
+                    color = if (bg.luminance() > 0.4f) Color(0xFF14110A) else Ink,
+                    weight = FontWeight.SemiBold,
+                  )
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
 @Composable
 private fun ModuleTempStrip(temps: ModuleTemps, columns: Int, halfAfter: Int?, unit: TempUnit, layout: DashLayout, modifier: Modifier) {
   BoxWithConstraints(modifier) {
@@ -626,6 +690,5 @@ private fun Legend(heat: HeatmapView, layout: DashLayout, modifier: Modifier) {
         .background(Brush.horizontalGradient(listOf(DivergingLow, DivergingMid, DivergingHigh))),
     )
     FitText("+${Units.num(heat.scaleMv, 1)} mV", sp = sp, color = TextDim)
-    FitText("gray = average", Modifier.weight(1f, fill = false), sp = sp, color = TextDim)
   }
 }

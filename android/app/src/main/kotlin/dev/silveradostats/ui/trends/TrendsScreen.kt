@@ -78,6 +78,8 @@ import dev.silveradostats.ui.layout.Segmented
 import dev.silveradostats.ui.layout.inspectTap
 import dev.silveradostats.ui.live.Marker
 import dev.silveradostats.ui.live.Units
+import dev.silveradostats.ui.theme.CardEdge
+import dev.silveradostats.ui.theme.CardShape
 import dev.silveradostats.ui.theme.GridLine
 import dev.silveradostats.ui.theme.Ink
 import dev.silveradostats.ui.theme.TextDim
@@ -230,7 +232,7 @@ private class TrendPrefs(context: Context) {
 @Composable
 private fun TileCard(t: TrendTile, layout: DashLayout, modifier: Modifier) {
   val type = layout.type
-  Card(modifier, shape = RoundedCornerShape(14.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
+  Card(modifier, shape = CardShape, border = CardEdge, colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
     FitColumn(Modifier.fillMaxSize().padding(horizontal = layout.cardPadHDp.dp, vertical = layout.cardPadVDp.dp), spacing = layout.cardGapDp.dp) {
       PriorityRow(Modifier.fit(1).fillMaxWidth(), gap = 6.dp) {
         FitText(if (layout.liveShort) t.measure.shortLabel else t.title, Modifier.slot(1, minWidth = layout.labelMinDp(type.body).dp), sp = type.body, color = TextDim)
@@ -250,14 +252,13 @@ private fun TileCard(t: TrendTile, layout: DashLayout, modifier: Modifier) {
 private fun ChartCard(chart: TrendChart, layout: DashLayout, modifier: Modifier) {
   var tappedAt by remember(chart) { mutableStateOf<Long?>(null) }
   val short = layout.liveShort
-  Card(modifier, shape = RoundedCornerShape(14.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
+  Card(modifier, shape = CardShape, border = CardEdge, colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
     Column(Modifier.fillMaxSize().padding(horizontal = layout.cardPadHDp.dp, vertical = layout.cardPadVDp.dp)) {
       // The keys say which line is which, so they claim the width first.
       PriorityRow(Modifier.fillMaxWidth(), gap = layout.gapDp.dp) {
         LegendKey(chart, chart.left, LeftColor, dashed = false, tappedAt, layout, Modifier.slot(0, minWidth = layout.labelMinDp(layout.type.body).dp))
         LegendKey(chart, chart.right, RightColor, dashed = true, tappedAt, layout, Modifier.slot(1, minWidth = layout.labelMinDp(layout.type.body).dp))
-        val hint = tappedAt?.let { timeText(it) } ?: "Tap the chart to read a point"
-        FitText(hint, Modifier.slot(2, end = true), sp = layout.type.label, color = TextDim)
+        tappedAt?.let { FitText(timeText(it), Modifier.slot(2, end = true), sp = layout.type.label, color = TextDim) }
       }
       TrendCanvas(chart, tappedAt, layout, Modifier.weight(1f).fillMaxWidth().padding(top = 4.dp)) { tappedAt = it }
       // Side by side only where both fit whole: the change is the part that must not be cut.
@@ -303,7 +304,7 @@ private fun PidCard(p: TrendPage, group: TrendGroup, layout: DashLayout, modifie
   val source = p.data.source
   val rows = remember(p, group) { TrendsModel.pidRows(p.data, group, Units.TEMP, Units.DIST) }
   val all = TrendMeasure.of(source)
-  Card(modifier, shape = RoundedCornerShape(14.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
+  Card(modifier, shape = CardShape, border = CardEdge, colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
     Column(Modifier.fillMaxSize().padding(horizontal = layout.cardPadHDp.dp, vertical = layout.cardPadVDp.dp), verticalArrangement = Arrangement.spacedBy(layout.cardGapDp.dp)) {
       Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         FitText("${source.label} PIDs", sp = layout.type.title, weight = FontWeight.SemiBold)
