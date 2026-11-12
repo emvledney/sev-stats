@@ -1,0 +1,3 @@
+# Supplied application and intermediate reverse-engineering files stay local.
+*.apk
+/work/
