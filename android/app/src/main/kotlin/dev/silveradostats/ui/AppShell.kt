@@ -275,16 +275,15 @@ private fun NavButton(label: String, selected: Boolean, rail: NavRail, onClick: 
       .padding(horizontal = DashLayout.NAV_BUTTON_PAD_DP.dp),
     contentAlignment = Alignment.Center,
   ) {
-    // "DIAGNOSTICS" in capitals does not fit the rail: Carbon's mockup reads "DIAG".
-    FitText(label.uppercase().let { if (it.length > 8) it.take(4) else it }, sp = rail.textSp, weight = FontWeight.Bold, color = if (selected) colors.onSurface else TextDim)
+    FitText(label.uppercase(), sp = rail.textSp, weight = FontWeight.Bold, color = if (selected) colors.onSurface else TextDim)
   }
 }
 
 /**
- * All the Diagnostics tab is while restricted: text only, nothing to tap. When the state is merely
+ * All the Settings page is while restricted: text only, nothing to tap. When the state is merely
  * unknown it says so, or a truck really in Park would show an unexplained message. The last line says
  * what the app is going by, because this is the one place the driver can read it when the app stays
- * in driving mode in Park (and Diagnostics, the usual way to find out, is the part that is locked).
+ * in driving mode in Park (and Settings, the usual way to find out, is the part that is locked).
  */
 @Composable
 private fun AvailableInParkPanel(layout: DashLayout, stateKnown: Boolean, inputs: StateFlow<DrivingInputs>, what: String = "Settings") {

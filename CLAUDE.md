@@ -67,16 +67,18 @@ AVD `Automotive_1408p_landscape`. The app runs its demo data there.
 - Find buttons by label with `uiautomator dump` (write to `//sdcard/u.xml` in Git Bash); positions change with the layout.
 - The emulator has no Google Maps app, so the navigation hand-off cannot be tested there.
 
-## Decisions already made (2026-11-10 and 11)
+## Decisions already made (2026-11-10 to 12)
 
-- **Navigation rail** on the left with five buttons, always all shown, one size in every gear:
-  Simple, Expert, Trends, Map, Diag (renamed from API and OBD on 2026-11-11; notes below still say API and
+- **Navigation rail** on the left, always all shown, one size in every gear: Simple, Expert, Trends, Map,
+  and a gear at the foot for Settings (renamed from API and OBD on 2026-11-11; notes below still say API and
   OBD for those two pages). In code they are `AppTab.SIMPLE` and `AppTab.LIVE`.
+- **Settings page** (2026-11-12, was Diagnostics; still `AppTab.DIAGNOSTICS` so the saved tab survives):
+  permissions (one line when all granted), last crash, OBDLink MX+ link, report. Park only.
 - **Carbon styling** (2026-11-11), from `docs/mockups/style-2-carbon.html`: near-black panels with hairline
   edges, green accent. The Simple tiles are plain panels like Expert's (2026-11-12; the green / red / amber
   washes went). Colours and the card shape live in `ui/theme/Theme.kt`.
   Not taken from the mockup yet: monospace figures and upper-case tile labels (they change the layout maths).
-- **While driving:** API, OBD and Map are fully usable. Trends and Diagnostics show the
+- **While driving:** API, OBD and Map are fully usable. Trends and Settings show the
   "Available in Park" panel. System permission dialogs still wait for Park.
 - **API and OBD have no header row.** Their status and buttons are drawn at the foot of the rail
   (`toRail` in `AppShell.kt`, `DashLayout.withoutHeader()`).
@@ -85,12 +87,13 @@ AVD `Automotive_1408p_landscape`. The app runs its demo data there.
   `carscanner/`); Ah is a dash when the truck does not report it, never a calculation. A grid of tiles (`DashboardModel.packTiles`) beside the cell-group
   grid. Battery 1 / 2 temperatures are `2AF3` / `2AF4` (min, mean, max); the strip under the grid is one figure
   per module from the sensor pairs in `2AF1` (battery 1) and `2AF2` (battery 2, an inference). No current, power, range, 12 V or adapter voltage. Per-battery voltage is the sum of that half's
-  cell groups, not a reading.
+  cell groups, not a reading. The cell grid toggles between voltage and module temperature; no captions.
 - **Map tab:** Google's Navigation SDK is used only for its bundled map view, because the Maps SDK from
   Play services does not work on cars with Google built-in. Chargers come from Open Charge Map. The
   SDK's guidance permissions are stripped in the manifest and pinned in `SourceSafetyTest`;
   `FOREGROUND_SERVICE` and `RECEIVE_BOOT_COMPLETED` are the app's own and must stay.
-- **Map behaviour:** north-up, no zoom buttons, GPS button shows about 50 miles around the truck, search
+- **Map behaviour:** north-up, no zoom buttons, GPS button bottom-left (beside the destination card when
+  one shows) shows about 50 miles around the truck, tapping the map closes the card, search
   uses the app's own keyboard (the system keyboard refuses input while driving), and "Navigate in
   Google Maps" hands the destination to the car's navigation app.
 
