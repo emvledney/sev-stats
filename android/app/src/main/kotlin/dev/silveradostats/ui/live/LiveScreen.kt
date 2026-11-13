@@ -170,12 +170,13 @@ fun LiveScreen(
 @Composable
 private fun LiveParked(dash: Dashboard, noAdapter: Boolean, unit: TempUnit, layout: DashLayout, onOpenDiagnostics: () -> Unit, modifier: Modifier) {
   var selectedGroup by rememberSaveable { mutableStateOf<Int?>(null) }
+  // The cell grid is a quarter narrower than it was (2.4 of 3.4 shares), by the owner's request (2026-11-13): the tiles have the rest.
   Row(modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(layout.gapDp.dp)) {
-    PackTiles(dash.packTiles, layout, Modifier.weight(1f).fillMaxHeight())
+    PackTiles(dash.packTiles, layout, Modifier.weight(DashLayout.PACK_SHARE).fillMaxHeight())
     if (dash.heatmap == null) {
-      NoCellDataCard(noAdapter, dash.obdHint, dash.moduleTemps, unit, layout, onOpenDiagnostics, Modifier.weight(2.4f).fillMaxHeight())
+      NoCellDataCard(noAdapter, dash.obdHint, dash.moduleTemps, unit, layout, onOpenDiagnostics, Modifier.weight(DashLayout.HEAT_SHARE).fillMaxHeight())
     } else {
-      HeatmapCard(dash.heatmap, dash.moduleTemps, unit, selectedGroup, { selectedGroup = it }, layout, Modifier.weight(2.4f).fillMaxHeight())
+      HeatmapCard(dash.heatmap, dash.moduleTemps, unit, selectedGroup, { selectedGroup = it }, layout, Modifier.weight(DashLayout.HEAT_SHARE).fillMaxHeight())
     }
   }
 }
@@ -369,39 +370,22 @@ private fun TempsCard(title: String, lines: List<TempLine>, layout: DashLayout, 
 private fun tag(marker: String?): String? = marker?.takeUnless { it == "unverified" }
 
 /**
- * The parked page's grid of small tiles ([Dashboard.packTiles]): two to a row, each a label over its value; a
- * tile with parts (a battery half's temperatures) takes a whole row, its figures side by side over their
- * captions. A list of rows ran out of height and read as a table, not as figures.
+ * The parked page's grid of small tiles ([Dashboard.packTiles]), row by row as the model gives them: up to three
+ * small tiles, each a label over its value, or one tile with parts (a battery's temperatures), its figures side
+ * by side over their captions. A list of rows ran out of height and read as a table, not as figures.
  */
 @Composable
-private fun PackTiles(tiles: List<PackTile>, layout: DashLayout, modifier: Modifier) {
+private fun PackTiles(rows: List<List<PackTile>>, layout: DashLayout, modifier: Modifier) {
   val type = layout.type
   // Six rows share the height: the gaps between them stay small, so the text has it.
   val gapDp = minOf(layout.gapDp, 8)
   val gap = Arrangement.spacedBy(gapDp.dp)
-  val rows = mutableListOf<List<PackTile>>()
-  var waiting: PackTile? = null
-  for (t in tiles) {
-    val first = waiting
-    when {
-      t.parts.isNotEmpty() -> {
-        if (first != null) rows += listOf(first)
-        waiting = null
-        rows += listOf(t)
-      }
-      first == null -> waiting = t
-      else -> {
-        rows += listOf(first, t)
-        waiting = null
-      }
-    }
-  }
-  waiting?.let { rows += listOf(it) }
   BoxWithConstraints(modifier) {
     val rowDp = (maxHeight.value - (rows.size - 1) * gapDp) / rows.size.coerceAtLeast(1)
     val inner = maxWidth.value - 2 * layout.cardPadHDp
-    // One size for every small tile, from the half-width ones, and one for every wide tile's five columns.
-    val (valueSp, labelSp) = layout.packSp(rowDp, (inner - gapDp) / 2 - layout.cardPadHDp, DashLayout.PACK_VALUE_CHARS)
+    // One size for every small tile, from the narrowest (three to a row), and one for every wide tile's five columns.
+    val across = rows.filter { r -> r.all { it.parts.isEmpty() } }.maxOfOrNull { it.size } ?: 1
+    val (valueSp, labelSp) = layout.packSp(rowDp, (inner - (across - 1) * gapDp) / across - layout.cardPadHDp, DashLayout.PACK_VALUE_CHARS)
     val (partSp, captionSp) = layout.packSp(rowDp, inner / 5 - 4, DashLayout.PACK_PART_CHARS)
     Column(Modifier.fillMaxSize(), verticalArrangement = gap) {
       rows.forEach { row ->
@@ -484,7 +468,6 @@ private fun NoCellDataCard(noAdapter: Boolean, hint: String?, temps: ModuleTemps
     }
     hint?.let { FitText(it, Modifier.fit(4), sp = type.label, color = TextDim, maxLines = 4) }
     if (temps != null) {
-      ModuleTempLabel(temps, unit, layout, Modifier.fit(3))
       ModuleTempStrip(temps, temps.celsius.size, null, unit, layout, Modifier.fit(2).fillMaxWidth().height(layout.heatStripDp.dp))
     }
   }
@@ -532,22 +515,10 @@ private fun HeatmapCard(
     if (tempView) {
       ModuleTempBlocks(temps!!, heat.modules, heat.halfAfter, unit, layout, gridMod)
     } else {
+      // No module temperatures under the voltages, and no "likely" tag (owner, 2026-11-13): the Temperature view has them.
       Heatmap(heat, selectedGroup, onSelect, layout, gridMod)
-      if (temps != null) {
-        ModuleTempStrip(temps, heat.modules, heat.halfAfter, unit, layout, Modifier.fit(1).fillMaxWidth().height(layout.heatStripDp.dp))
-      }
     }
-    Row(Modifier.fit(3).fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-      if (tempView) Spacer(Modifier.weight(1f)) else Legend(heat, layout, Modifier.weight(1f))
-      temps?.let { ModuleTempLabel(it, unit, layout) }
-    }
-  }
-}
-
-@Composable
-private fun ModuleTempLabel(temps: ModuleTemps, unit: TempUnit, layout: DashLayout, modifier: Modifier = Modifier) {
-  Row(modifier, verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-    temps.marker?.let { Marker(it, layout.type.label) }
+    if (!tempView) Legend(heat, layout, Modifier.fit(3).fillMaxWidth())
   }
 }
 

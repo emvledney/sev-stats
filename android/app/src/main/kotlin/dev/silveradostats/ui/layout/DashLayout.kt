@@ -236,7 +236,7 @@ data class DashLayout(
     val tempRows = if (restricted) TEMP_SUMMARY_LINES else TEMP_LINES
     val temps = 2 * cardPadVDp + cardHeadDp + tempRows * (cardGapDp + lineDp(type.body))
     val heat = if (heatmap) {
-      2 * cardPadVDp + cardHeadDp + cardGapDp + heatHeadDp + HEAT_ROWS * HEAT_ROW_MIN_DP + cardGapDp + heatStripDp + cardGapDp + lineDp(type.label)
+      2 * cardPadVDp + cardHeadDp + cardGapDp + heatHeadDp + HEAT_ROWS * HEAT_ROW_MIN_DP + cardGapDp + lineDp(type.label)
     } else {
       0
     }
@@ -359,8 +359,12 @@ data class DashLayout(
     const val PACK_PAD_V_DP = 4
     const val PACK_SPACING_DP = 2
 
-    /** The widest value of a small pack tile: "70 · 76 °F". */
-    const val PACK_VALUE_CHARS = 10
+    /** The widest value of a small pack tile: "377.1 V" (the coolants have a tile each since 2026-11-13). */
+    const val PACK_VALUE_CHARS = 7
+
+    /** The Expert page's tile grid and cell grid share its width 1.6 : 1.8; the cell grid had 2.4 : 1 until 2026-11-13. */
+    const val PACK_SHARE = 1.6f
+    const val HEAT_SHARE = 1.8f
 
     /** One of five columns in a wide pack tile: "3.913". */
     const val PACK_PART_CHARS = 5

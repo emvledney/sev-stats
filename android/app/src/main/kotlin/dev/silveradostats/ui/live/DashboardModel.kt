@@ -150,8 +150,8 @@ data class Dashboard(
   val moduleTemps: ModuleTemps?,
   /** Shown when OBD data is missing: what is needed to get it. */
   val obdHint: String?,
-  /** The OBD page's grid of tiles. */
-  val packTiles: List<PackTile> = emptyList(),
+  /** The OBD page's grid of tiles, row by row: up to three small tiles, or one with parts. */
+  val packTiles: List<List<PackTile>> = emptyList(),
   /** The energy left, a tile of its own beside the charge. */
   val remaining: Kpi = Kpi("Remaining", Units.DASH, "kWh", emptyList(), hasValue = false),
 )
@@ -219,8 +219,16 @@ object DashboardModel {
    * voltages as min, mean, median and max, the cell spread, each half's module temperatures as min, mean,
    * median and max, the two coolant temperatures in one tile, and the outside temperature. No current, power,
    * range or 12 V figure; the energy left is a tile of the top row ([remaining]).
+   *
+   * Owner's request (2026-11-13): each battery's state of charge on top (2B43 bytes 0 and 1), and up to three
+   * small tiles to a row, so the grid stays six rows and its figures grow into the room the cell grid gave up.
    */
-  fun packTiles(v: Map<String, LiveValue>, vhal: VhalFigures, temp: TempUnit, nowMs: Long, spread: Kpi, heat: HeatmapView? = null): List<PackTile> {
+  fun packTiles(v: Map<String, LiveValue>, vhal: VhalFigures, temp: TempUnit, nowMs: Long, spread: Kpi, heat: HeatmapView? = null): List<List<PackTile>> {
+    val rows = mutableListOf<List<PackTile>>()
+    rows += listOf("bms_soc_layer", "soc_pack_2").mapIndexed { i, f ->
+      val src = v[f]
+      PackTile("Batt ${i + 1} charge", num(v, f)?.let { "${Units.num(it, 1)} %" } ?: Units.DASH, marker(src), isStale(src, nowMs))
+    }
     val out = mutableListOf<PackTile>()
     // A half's voltage is the sum of its cell groups: the BECM reports the pack's, not each half's. Only a
     // complete half is summed; without the cell groups the pack's own figure stands in.
@@ -229,14 +237,15 @@ object DashboardModel {
       listOf(heat.cells.take(split), heat.cells.drop(split)).map { cells -> cells.mapNotNull { it.volts }.takeIf { it.isNotEmpty() && it.size == cells.size }?.sum() }
     }
     if (heat != null && halfVolts != null && halfVolts.all { it != null }) {
-      halfVolts.forEachIndexed { i, sum -> out += PackTile("Battery ${i + 1}", "${Units.num(sum ?: 0.0, 1)} V", stale = heat.stale) }
+      halfVolts.forEachIndexed { i, sum -> out += PackTile("Batt ${i + 1} voltage", "${Units.num(sum ?: 0.0, 1)} V", stale = heat.stale) }
     } else {
       pack(v, nowMs).first().let { out += PackTile(it.shortLabel, it.value, it.marker, it.stale) }
     }
-    minMeanMedianMax(heat?.cells.orEmpty().map { it.volts })?.let { s ->
-      out += PackTile("Cells", "V", stale = heat?.stale ?: false, parts = TEMP_PARTS.zip(s.map { Units.num(it, 3) }))
-    }
     out += PackTile("Cell spread", if (spread.hasValue) "${spread.value} ${spread.unit}" else Units.DASH, spread.marker, spread.stale)
+    rows += out.toList()
+    minMeanMedianMax(heat?.cells.orEmpty().map { it.volts })?.let { s ->
+      rows += listOf(PackTile("Cells", "V", stale = heat?.stale ?: false, parts = TEMP_PARTS.zip(s.map { Units.num(it, 3) })))
+    }
     // Each battery's own temperature summary, as the BECM reports it (2AF3, 2AF4: average, min, max). Until
     // 2026-11-11 these tiles split 2AF1 in two, but all of 2AF1 is battery 1 (two sensors per module).
     for ((i, field) in listOf("battery_temps_a", "battery_temps_b").withIndex()) {
@@ -244,19 +253,13 @@ object DashboardModel {
       val t = (src?.v as? List<*>)?.map { (it as? Number)?.toDouble()?.takeIf { c -> c > MIN_VALID_MODULE_TEMP_C } }?.takeIf { it.size >= 3 && it.take(3).all { c -> c != null } }
       val figures = if (t == null) List(3) { Units.DASH } else listOf(t[1], t[0], t[2]).map { Units.num(Units.temp(it!!, temp), 0) }
       // For a tile with parts, the value is the unit its figures are in. "Batt" is short: the name shares a row with the figures.
-      out += PackTile("Batt ${i + 1}", temp.symbol, marker(src), isStale(src, nowMs), BATTERY_TEMP_PARTS.zip(figures))
+      rows += listOf(PackTile("Batt ${i + 1}", temp.symbol, marker(src), isStale(src, nowMs), BATTERY_TEMP_PARTS.zip(figures)))
     }
-    val c1 = v["coolant_temp_1"]
-    val c2 = v["coolant_temp_2"]
-    val coolant = listOf(num(v, "coolant_temp_1"), num(v, "coolant_temp_2"))
-    out += PackTile(
-      "Coolant 1 · 2",
-      if (coolant.all { it == null }) Units.DASH else coolant.joinToString(" · ") { c -> c?.let { Units.num(Units.temp(it, temp), 0) } ?: Units.DASH } + " ${temp.symbol}",
-      marker(c1) ?: marker(c2),
-      isStale(c1, nowMs) || isStale(c2, nowMs),
-    )
-    out += PackTile("Outside", Units.tempText(vhal.outsideC, temp, 0))
-    return out
+    // The two coolant circuits in tiles of their own (one shared tile until 2026-11-13): short values, bigger figures.
+    rows += listOf("coolant_temp_1", "coolant_temp_2").mapIndexed { i, f ->
+      PackTile("Coolant ${i + 1}", Units.tempText(num(v, f), temp, 0), marker(v[f]), isStale(v[f], nowMs))
+    } + PackTile("Outside", Units.tempText(vhal.outsideC, temp, 0))
+    return rows
   }
 
   // --- Status -----------------------------------------------------------------------------------

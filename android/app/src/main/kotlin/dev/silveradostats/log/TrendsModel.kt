@@ -119,7 +119,8 @@ enum class TrendMeasure(
   AH_CALC(LogSource.MX, TrendGroup.CAPACITY, "Ah at 3.6 V per cell group", "Nominal", "Ah", LogCol.NOMINAL_AH, "Energy ÷ SoC rescaled", badge = TrendBadge.CALCULATED),
   AH_DEVIATION(LogSource.MX, TrendGroup.CAPACITY, "Capacity deviation", "Deviation", "Ah", LogCol.AH_DEVIATION, "Profile field ${LogRows.AH_DEVIATION_FIELD}", decimals = 0),
   SOC(LogSource.MX, TrendGroup.ENERGY, "State of charge", "SoC", "%", LogCol.SOC_PCT, "BECM 27C6"),
-  BMS_SOC(LogSource.MX, TrendGroup.ENERGY, "BMS-internal SoC", "BMS SoC", "%", LogCol.BMS_SOC_PCT, "BECM 2B43"),
+  BMS_SOC(LogSource.MX, TrendGroup.ENERGY, "Battery 1 charge", "Batt 1", "%", LogCol.BMS_SOC_PCT, "BECM 2B43"),
+  BMS_SOC_2(LogSource.MX, TrendGroup.ENERGY, "Battery 2 charge", "Batt 2", "%", LogCol.BMS_SOC_2_PCT, "BECM 2B43"),
   ENERGY(LogSource.MX, TrendGroup.ENERGY, "Energy remaining", "Energy", "kWh", LogCol.ENERGY_KWH, "BECM 27AF"),
   BMS_RANGE(LogSource.MX, TrendGroup.ENERGY, "Range, BMS", "Range", "", LogCol.BMS_RANGE_KM, "BECM 27C7", decimals = 0, scale = TrendScale.DISTANCE, minSpan = 10.0),
   SINCE_FULL(LogSource.MX, TrendGroup.ENERGY, "Distance since full", "Since full", "", LogCol.SINCE_FULL_KM, "BECM 27C0", decimals = 0, scale = TrendScale.DISTANCE, minSpan = 10.0),
@@ -550,6 +551,7 @@ object DemoLog {
             mapOf(
               LogCol.SOC_PCT to soc,
               LogCol.BMS_SOC_PCT to soc + 1.2,
+              LogCol.BMS_SOC_2_PCT to soc + 0.8,
               LogCol.ENERGY_KWH to energy,
               LogCol.BMS_RANGE_KM to rangeKm + 3,
               LogCol.SINCE_FULL_KM to (80 - soc) * 6.0,

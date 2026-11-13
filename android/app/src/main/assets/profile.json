@@ -627,7 +627,7 @@
    "module": "becm",
    "did": 11075,
    "name": "bms_soc_layer",
-   "label": "BMS-internal SoC-like value",
+   "label": "Battery pack 1 state of charge",
    "unit": "%",
    "type": "u8",
    "start": 0,
@@ -637,8 +637,25 @@
    "count": 1,
    "period": 10.0,
    "status": "confirmed",
-   "source": "S1, S2 (does NOT equal dash SoC; BMS-internal); S7",
-   "note": ""
+   "source": "S1, S2 (does NOT equal dash SoC; BMS-internal); S7; S10",
+   "note": "Car Scanner's Battery Pack 1 State of Charge (byte 0)"
+  },
+  {
+   "module": "becm",
+   "did": 11075,
+   "name": "soc_pack_2",
+   "label": "Battery pack 2 state of charge",
+   "unit": "%",
+   "type": "u8",
+   "start": 1,
+   "stride": 0,
+   "scale": 0.39215686274509803,
+   "offset": 0.0,
+   "count": 1,
+   "period": 10.0,
+   "status": "unverified",
+   "source": "S10 (inference)",
+   "note": "Byte 1, beside Car Scanner's pack 1 byte; 0x6B (42 %) like byte 0 in the truck capture. Car Scanner has no pack 2 entry"
   },
   {
    "module": "becm",

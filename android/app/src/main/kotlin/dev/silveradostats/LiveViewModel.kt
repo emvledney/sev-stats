@@ -117,7 +117,7 @@ class LiveViewModel(app: Application) : AndroidViewModel(app) {
 
   /**
    * The MX+ button, given the action it showed so a tap does what its label said. Cancel and Disconnect
-   * leave the MX+ free for other devices until Connect, app restarts included. Allowed while driving:
+   * leave the MX+ free for other devices until Connect or the app starts again. Allowed while driving:
    * the phone may need Bluetooth back on the road, and a dropped link can be brought back.
    */
   fun onMxAction(action: MxAction) {

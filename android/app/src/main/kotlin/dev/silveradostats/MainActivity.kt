@@ -68,6 +68,9 @@ class MainActivity : ComponentActivity() {
     // No logcat on the truck: keep the last crash in a file the next launch shows and reports.
     CrashLog.install(this, BuildConfig.VERSION_NAME, BuildConfig.VERSION_CODE)
     super.onCreate(savedInstanceState)
+    // A fresh start of the screen reconnects the MX+ even if it was disconnected before (owner, 2026-11-13);
+    // a screen only re-created (savedInstanceState) keeps the user's Disconnect.
+    if (savedInstanceState == null) AppSettings.get(this).setMxOff(false)
     // The truck's dock drew the generic Android icon for this app (0.21.0, owner's photo of 2026-11-11), with
     // the icon itself declared like the apps that show theirs. A guess: the dock cannot look the icon up, so
     // hand it over with the task as a bitmap. Untested off the truck; harmless if the dock ignores it.

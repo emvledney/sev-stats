@@ -35,7 +35,10 @@ data class UiSettings(
   val mxName: String?,
   /** The last selected tab (the app reopens on it). */
   val tab: AppTab = AppTab.SIMPLE,
-  /** The user disconnected the MX+: the app leaves it alone until they tap Connect. */
+  /**
+   * The user disconnected the MX+: the app leaves it alone until they tap Connect or the app starts again. Not kept
+   * across starts since 2026-11-13: the owner wants the app to reconnect to the MX+ on its own whenever it starts.
+   */
   val mxOff: Boolean = false,
   val savedCapacity: SavedCapacity? = null,
 ) {
@@ -63,7 +66,7 @@ class AppSettings private constructor(context: Context) {
       mxAddress = prefs.getString(KEY_MX_ADDRESS, null),
       mxName = prefs.getString(KEY_MX_NAME, null),
       tab = prefs.getString(KEY_TAB, null)?.let { runCatching { AppTab.valueOf(it) }.getOrNull() } ?: AppTab.SIMPLE,
-      mxOff = prefs.getBoolean(KEY_MX_OFF, false),
+      mxOff = false,
       savedCapacity = prefs.getLong(KEY_CAPACITY_AT, 0L).takeIf { it > 0 }?.let { at ->
         SavedCapacity(prefs.getString(KEY_CAPACITY_KWH, null)?.toDoubleOrNull(), prefs.getString(KEY_CAPACITY_AH, null)?.toDoubleOrNull(), at)
       },
@@ -71,7 +74,6 @@ class AppSettings private constructor(context: Context) {
   }
 
   fun setMxOff(off: Boolean) {
-    prefs.edit { putBoolean(KEY_MX_OFF, off) }
     _state.update { it.copy(mxOff = off) }
   }
 

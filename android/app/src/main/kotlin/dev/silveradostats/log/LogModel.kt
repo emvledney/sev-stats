@@ -132,6 +132,9 @@ enum class LogCol(val key: String) {
 
   // MX+, every single-value PID of the profile. Rows from before these columns have no value in them.
   BMS_SOC_PCT("bms_soc_pct"),
+
+  /** 2B43 byte 1, battery 2's charge beside battery 1's byte 0 (an inference, 2026-11-13). */
+  BMS_SOC_2_PCT("bms_soc_2_pct"),
   BMS_RANGE_KM("bms_range_km"),
   SINCE_FULL_KM("since_full_km"),
   CELL_SPREAD_MV("cell_spread_mv"),
@@ -238,6 +241,7 @@ object LogRows {
   /** Profile fields logged exactly as read. */
   val MX_FIELDS: Map<String, LogCol> = mapOf(
     "bms_soc_layer" to LogCol.BMS_SOC_PCT,
+    "soc_pack_2" to LogCol.BMS_SOC_2_PCT,
     "cell_avg_a" to LogCol.CELL_AVG_A_V,
     "cell_avg_b" to LogCol.CELL_AVG_B_V,
     "coolant_temp_1" to LogCol.COOLANT_1_C,

@@ -324,7 +324,7 @@ class DashLayoutTest {
     }
     // The truck's page beside the rail: well above the type scale's 56.
     assertTrue(DashLayout.ofLive(1861f, 602f).obdFigureSp(false) >= 70)
-    // A small pack tile on that page: its label and value fit its row, and "70 · 76 °F" its width.
+    // A small pack tile on that page: its label and value fit its row, and "377.1 V" its width.
     val (value, label) = DashLayout.ofLive(1861f, 602f).packSp(63f, 213f, DashLayout.PACK_VALUE_CHARS)
     assertTrue("$value over $label", value * DashLayout.PACK_VALUE_LINE + label * 1.3f + 2 * DashLayout.PACK_PAD_V_DP + DashLayout.PACK_SPACING_DP <= 63f)
     assertTrue(value >= 20 && label >= 14)
