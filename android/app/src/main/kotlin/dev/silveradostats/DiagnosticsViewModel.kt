@@ -9,9 +9,12 @@ import dev.silveradostats.diag.AppPermissions
 import dev.silveradostats.diag.CrashLog
 import dev.silveradostats.diag.KV
 import dev.silveradostats.diag.SystemInfo
+import dev.silveradostats.log.UploadPolicy
 import dev.silveradostats.report.MxReport
 import dev.silveradostats.report.Report
 import dev.silveradostats.report.ReportSender
+import dev.silveradostats.upload.UploadState
+import dev.silveradostats.upload.Uploader
 import dev.silveradostats.vehicle.CarPerm
 import dev.silveradostats.vehicle.VehicleReader
 import kotlinx.coroutines.Dispatchers
@@ -173,6 +176,31 @@ class DiagnosticsViewModel(app: Application) : AndroidViewModel(app) {
       val msg = "${if (res.ok) "Sent" else "Failed"}: ${res.message} (${json.length / 1024} KiB, ${res.durationMs} ms)"
       _state.update { it.copy(reportSending = false, reportStatus = msg) }
     }
+  }
+
+  // Upload -----------------------------------------------------------------------------------
+
+  private val uploader = Uploader.get(app)
+
+  /** The upload of the log to the owner's server, for the Settings page. */
+  val upload: StateFlow<UploadState> = uploader.state
+
+  /** Pairs with the code the server's dashboard shows. */
+  fun pairUpload(code: String) {
+    if (restricted) return
+    if (uploader.state.value.busy || !UploadPolicy.codeComplete(code)) return
+    viewModelScope.launch { uploader.pair(code) }
+  }
+
+  fun uploadNow() {
+    if (restricted) return
+    if (uploader.state.value.busy) return
+    viewModelScope.launch { uploader.run() }
+  }
+
+  fun unpairUpload() {
+    if (restricted) return
+    uploader.unpair()
   }
 
   override fun onCleared() {

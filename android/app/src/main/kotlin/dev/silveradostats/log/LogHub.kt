@@ -50,7 +50,11 @@ import java.util.TimeZone
  *    screens, for one poll cycle.
  */
 class LogHub private constructor(private val app: Context) {
-  private val store: LogStore = SqliteLogStore(app)
+  private val sqlite = SqliteLogStore(app)
+  private val store: LogStore = sqlite
+
+  /** The same table, as the upload reads it (upload/Uploader.kt). */
+  val uploadQueue: UploadQueue get() = sqlite
 
   @OptIn(ExperimentalCoroutinesApi::class)
   private val io = Dispatchers.IO.limitedParallelism(1)

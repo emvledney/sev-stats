@@ -19,3 +19,7 @@ local.properties
 release/
 # Upload-key passwords
 *-upload.properties
+
+# Stats server
+server/data/
+server/.env

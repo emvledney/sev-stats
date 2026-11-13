@@ -36,6 +36,9 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -43,6 +46,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -50,6 +54,7 @@ import dev.silveradostats.DiagState
 import dev.silveradostats.DiagnosticsViewModel
 import dev.silveradostats.LiveViewModel
 import dev.silveradostats.diag.KV
+import dev.silveradostats.log.UploadPolicy
 import dev.silveradostats.ui.theme.CardEdge
 import dev.silveradostats.ui.theme.CardShape
 import dev.silveradostats.ui.theme.StatusError
@@ -88,6 +93,7 @@ fun DiagnosticsScreen(
       s.lastCrash?.let { crash -> item(key = "crash") { CrashSection(crash, vm::clearLastCrash) } }
       item(key = "permissions") { PermissionsSection(s, onRequestPermissions, onOpenAppSettings) }
       item(key = "mxlink") { MxLinkSection(liveVm, onRequestPermissions) }
+      item(key = "upload") { UploadSection(vm) }
       item(key = "report") { ReportSection(s, vm, liveVm) }
     }
   }
@@ -231,6 +237,48 @@ private fun PermissionsSection(s: DiagState, onRequest: () -> Unit, onSettings: 
       BigButton("Request runtime permissions", onClick = onRequest)
       OutlinedButton(onClick = onSettings, modifier = Modifier.heightIn(min = 60.dp)) { Text("Open app settings") }
     }
+  }
+}
+
+/** The log's upload to the owner's server: a code to pair once, then how it is going. */
+@Composable
+private fun UploadSection(vm: DiagnosticsViewModel) {
+  val u by vm.upload.collectAsStateWithLifecycle()
+  val subtitle = when {
+    !u.configured -> "This build was not given a server (UPLOAD_URL in local.properties)."
+    u.paired -> "The battery log is sent to ${u.host} every hour, and every few minutes while the app is open."
+    else -> "Sends the battery log to ${u.host}. Enter the pairing code from the dashboard's Trucks page."
+  }
+  Section("Upload", subtitle) {
+    if (!u.configured) return@Section
+    if (u.paired) {
+      KvTable(
+        listOf(
+          KV("Truck", u.device?.takeIf { it.isNotBlank() } ?: "paired"),
+          KV("Rows waiting", u.waiting?.toString() ?: "…"),
+          KV("Last upload", u.lastOkMs?.let { SimpleDateFormat("MMM d, HH:mm", Locale.US).format(Date(it)) } ?: "none yet"),
+        ),
+      )
+      Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+        BigButton(if (u.busy) "Sending…" else "Upload now", enabled = !u.busy, onClick = vm::uploadNow)
+        OutlinedButton(onClick = vm::unpairUpload, enabled = !u.busy, modifier = Modifier.heightIn(min = 60.dp)) { Text("Unpair") }
+      }
+    } else {
+      var code by remember { mutableStateOf("") }
+      Row(horizontalArrangement = Arrangement.spacedBy(16.dp), verticalAlignment = Alignment.CenterVertically) {
+        OutlinedTextField(
+          value = code,
+          onValueChange = { typed -> code = typed.uppercase().filter { it.isLetterOrDigit() || it == ' ' }.take(UploadPolicy.CODE_LENGTH + 1) },
+          label = { Text("Pairing code") },
+          singleLine = true,
+          textStyle = MaterialTheme.typography.headlineSmall.copy(fontFamily = FontFamily.Monospace),
+          keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Characters, autoCorrectEnabled = false, keyboardType = KeyboardType.Ascii),
+          modifier = Modifier.width(360.dp),
+        )
+        BigButton(if (u.busy) "Pairing…" else "Pair", enabled = !u.busy && UploadPolicy.codeComplete(code), onClick = { vm.pairUpload(code) })
+      }
+    }
+    u.status?.let { Text(it, color = if (u.failed) StatusError else StatusOk) }
   }
 }
 

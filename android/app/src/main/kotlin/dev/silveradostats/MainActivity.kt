@@ -20,6 +20,7 @@ import dev.silveradostats.diag.CrashLog
 import dev.silveradostats.diag.SystemInfo
 import dev.silveradostats.link.AppSettings
 import dev.silveradostats.log.LogHub
+import dev.silveradostats.upload.Uploader
 import dev.silveradostats.ui.AppShell
 import dev.silveradostats.ui.theme.SilveradoStatsTheme
 import dev.silveradostats.vehicle.CarPerm
@@ -98,6 +99,10 @@ class MainActivity : ComponentActivity() {
     }
     lifecycleScope.launch {
       repeatOnLifecycle(Lifecycle.State.STARTED) { logs.whileOnScreen() }
+    }
+    // The log's upload to the owner's server: tried every few minutes while a screen is up.
+    lifecycleScope.launch {
+      repeatOnLifecycle(Lifecycle.State.STARTED) { Uploader.get(this@MainActivity).whileOnScreen() }
     }
     // From a visible screen, as Android asks, and again when demo data goes off (with it on, there is nothing to watch).
     lifecycleScope.launch {

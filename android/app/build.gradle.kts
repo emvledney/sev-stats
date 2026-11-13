@@ -36,6 +36,9 @@ android {
     manifestPlaceholders["MAPS_API_KEY"] = localKey("MAPS_API_KEY")
     buildConfigField("String", "MAPS_API_KEY", "\"${localKey("MAPS_API_KEY")}\"")
     buildConfigField("String", "OCM_API_KEY", "\"${localKey("OCM_API_KEY")}\"")
+    // The owner's stats server (server/ in this repository), e.g. https://example.com/sev. Without it the
+    // app builds and the Settings page says that this build has no server.
+    buildConfigField("String", "UPLOAD_URL", "\"${localKey("UPLOAD_URL")}\"")
   }
 
   buildTypes {

@@ -1,0 +1,38 @@
+# Silverado Stats server. See README.md.
+#
+#   ingest: what the truck talks to. Reached only through nginx (https://<host>/sev/v1/...).
+#   dash:   the dashboard. Published on the LAN address only; nginx never proxies it.
+name: sev-stats
+
+x-common: &common
+  build: .
+  image: sev-stats:local
+  restart: unless-stopped
+  read_only: true
+  tmpfs: [/tmp]
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+  volumes:
+    - ${SEV_DATA_DIR:-./data}:/data
+
+services:
+  ingest:
+    <<: *common
+    command: ingest
+    ports:
+      - "${SEV_INGEST_BIND:-127.0.0.1:8790}:8790"
+
+  dash:
+    <<: *common
+    command: dash
+    ports:
+      - "${SEV_DASH_BIND:-127.0.0.1:8791}:8791"
+
+  test:
+    build: .
+    image: sev-stats:local
+    profiles: [test]
+    user: root
+    entrypoint: ["sh", "-c", "pip install -q --root-user-action=ignore pytest httpx && python -m pytest -q -p no:cacheprovider /srv/tests"]
+    volumes:
+      - ./tests:/srv/tests:ro

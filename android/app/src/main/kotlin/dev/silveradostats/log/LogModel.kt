@@ -176,6 +176,8 @@ enum class LogCol(val key: String) {
 
 /**
  * [atMs]: wall clock. [tzMinutes]: the local offset then, so a row keeps the time of day it was taken.
+ * [arrays]: what was read position by position with the row (LogRows.ARRAY_CELL_V, ARRAY_MODULE_T), for
+ * the upload (owner, 2026-11-13); null = that position gave no reading. Not in the CSV, not drawn by Trends.
  */
 data class LogRow(
   val atMs: Long,
@@ -183,6 +185,7 @@ data class LogRow(
   val source: LogSource,
   val trigger: LogTrigger,
   val values: Map<LogCol, Double>,
+  val arrays: Map<String, List<Double?>> = emptyMap(),
 ) {
   operator fun get(c: LogCol): Double? = values[c]
 }
@@ -237,6 +240,12 @@ object LogRows {
 
   /** The profile field DashboardModel also reads. It exists once a truck scan finds the DID; until then the column stays empty. */
   const val AH_DEVIATION_FIELD = "capacity_deviation"
+
+  /** Every cell group's voltage, in the order of the cell grid (group 1 first). */
+  const val ARRAY_CELL_V = "cell_v"
+
+  /** One temperature per module, as the strip under the cell grid shows them (battery 1's modules, then battery 2's). */
+  const val ARRAY_MODULE_T = "module_t"
 
   /** Profile fields logged exactly as read. */
   val MX_FIELDS: Map<String, LogCol> = mapOf(
@@ -371,7 +380,14 @@ object LogRows {
       put(LogCol.CELL_MIN_GROUP, derived("array_min_group"))
       put(LogCol.CELL_MAX_GROUP, derived("array_max_group"))
     }
-    return LogRow(atMs, tzMinutes, LogSource.MX, trigger, v)
+    val arrays = LinkedHashMap<String, List<Double?>>()
+    if (fresh("cells_001_012") != null) {
+      val cells = DashboardModel.cellArray(s.values).map { x -> x?.takeIf { it.isFinite() && it > DashboardModel.MIN_VALID_CELL_V } }.dropLastWhile { it == null }
+      if (cells.isNotEmpty()) arrays[ARRAY_CELL_V] = cells
+    }
+    val modules = DashboardModel.moduleTemps(s.values, monoMs)?.takeIf { !it.stale }?.celsius.orEmpty()
+    if (modules.any { it != null }) arrays[ARRAY_MODULE_T] = modules
+    return LogRow(atMs, tzMinutes, LogSource.MX, trigger, v, arrays)
   }
 }
 

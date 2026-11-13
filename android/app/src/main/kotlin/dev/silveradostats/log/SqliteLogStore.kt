@@ -13,8 +13,11 @@ import android.database.sqlite.SQLiteOpenHelper
  *
  * A column added to [LogCol] later is added to the table when the database opens: older rows simply
  * have no value in it.
+ *
+ * A row's arrays (every cell group, every module) are in a table of their own, by the row's id, as text:
+ * about 1.5 KB for each MX+ row that read them.
  */
-class SqliteLogStore(context: Context) : SQLiteOpenHelper(context.applicationContext, FILE, null, VERSION), LogStore {
+class SqliteLogStore(context: Context) : SQLiteOpenHelper(context.applicationContext, FILE, null, VERSION), LogStore, UploadQueue {
   override fun onCreate(db: SQLiteDatabase) {
     val cols = LogCol.entries.joinToString("") { ", ${it.key} REAL" }
     db.execSQL("CREATE TABLE $TABLE (at_ms INTEGER NOT NULL, tz_min INTEGER NOT NULL, source TEXT NOT NULL, trigger_code TEXT NOT NULL$cols)")
@@ -25,6 +28,7 @@ class SqliteLogStore(context: Context) : SQLiteOpenHelper(context.applicationCon
 
   override fun onOpen(db: SQLiteDatabase) {
     if (db.isReadOnly) return
+    db.execSQL("CREATE TABLE IF NOT EXISTS $ARRAYS (row_id INTEGER NOT NULL, kind TEXT NOT NULL, vals TEXT NOT NULL, PRIMARY KEY (row_id, kind))")
     val have = HashSet<String>()
     db.rawQuery("PRAGMA table_info($TABLE)", null).use { c -> while (c.moveToNext()) have += c.getString(1) }
     for (col in LogCol.entries) if (col.key !in have) db.execSQL("ALTER TABLE $TABLE ADD COLUMN ${col.key} REAL")
@@ -42,8 +46,46 @@ class SqliteLogStore(context: Context) : SQLiteOpenHelper(context.applicationCon
     cv.put("source", row.source.code)
     cv.put("trigger_code", row.trigger.code)
     for ((c, v) in row.values) cv.put(c.key, v)
-    writableDatabase.insert(TABLE, null, cv)
+    val db = writableDatabase
+    if (row.arrays.isEmpty()) {
+      db.insert(TABLE, null, cv)
+      return
+    }
+    db.beginTransaction()
+    try {
+      val id = db.insert(TABLE, null, cv)
+      if (id >= 0) {
+        for ((kind, vals) in row.arrays) {
+          val a = ContentValues()
+          a.put("row_id", id)
+          a.put("kind", kind)
+          a.put("vals", UploadWire.packArray(vals))
+          db.insert(ARRAYS, null, a)
+        }
+      }
+      db.setTransactionSuccessful()
+    } finally {
+      db.endTransaction()
+    }
   }
+
+  override fun after(rowId: Long, limit: Int): List<QueuedRow> {
+    val db = readableDatabase
+    val rows = db.rawQuery("SELECT rowid AS row_id, * FROM $TABLE WHERE rowid > ? ORDER BY rowid LIMIT ?", arrayOf(rowId.toString(), limit.toString())).use { c ->
+      val out = ArrayList<QueuedRow>(c.count)
+      while (c.moveToNext()) out += QueuedRow(c.getLong(c.getColumnIndexOrThrow("row_id")), rowAt(c, LogCol.entries))
+      out
+    }
+    if (rows.isEmpty()) return rows
+    val arrays = HashMap<Long, LinkedHashMap<String, List<Double?>>>()
+    db.rawQuery("SELECT row_id, kind, vals FROM $ARRAYS WHERE row_id > ? AND row_id <= ? ORDER BY row_id, kind", arrayOf(rowId.toString(), rows.last().id.toString())).use { c ->
+      while (c.moveToNext()) arrays.getOrPut(c.getLong(0)) { LinkedHashMap() }[c.getString(1)] = UploadWire.unpackArray(c.getString(2))
+    }
+    return rows.map { q -> arrays[q.id]?.let { q.copy(row = q.row.copy(arrays = it)) } ?: q }
+  }
+
+  override fun waiting(rowId: Long): Long =
+    readableDatabase.rawQuery("SELECT COUNT(*) FROM $TABLE WHERE rowid > ?", arrayOf(rowId.toString())).use { c -> if (c.moveToFirst()) c.getLong(0) else 0L }
 
   override fun lastAt(source: LogSource): Long? =
     readableDatabase.rawQuery("SELECT MAX(at_ms) FROM $TABLE WHERE source = ?", arrayOf(source.code)).use { c ->
@@ -95,6 +137,7 @@ class SqliteLogStore(context: Context) : SQLiteOpenHelper(context.applicationCon
   private companion object {
     const val FILE = "battery_log.db"
     const val TABLE = "log"
+    const val ARRAYS = "log_arrays"
     const val VERSION = 1
   }
 }

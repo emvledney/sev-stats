@@ -27,8 +27,11 @@ export JAVA_HOME="/c/Program Files/Android/Android Studio/jbr"
 - Do **not** set `MSYS_NO_PATHCONV` when running `./gradlew`: the wrapper then fails to find its main class.
 - Line endings are LF everywhere (`.gitattributes`). Tests compare source text and the shipped
   `profile.json` byte for byte.
-- `android/local.properties` (untracked) holds `sdk.dir`, `MAPS_API_KEY` and `OCM_API_KEY`. The Google
+- `android/local.properties` (untracked) holds `sdk.dir`, `MAPS_API_KEY`, `OCM_API_KEY` and `UPLOAD_URL`
+  (the stats server, `https://api.vl-development.com/sev`; without it the build has no upload). The Google
   project needs Navigation SDK, Places API (New) and Routes API enabled.
+- The Unraid server has Docker but no JDK, SDK or emulator: `android/scripts/docker-test.sh` runs the unit
+  tests and a debug build there. Screenshots still need this PC's emulator.
 
 ## Tests are part of the design
 
@@ -49,6 +52,13 @@ Never weaken the vehicle-safety rules (no vehicle writes, read-only car API, per
 4. Verify with `jarsigner -verify`, then tell the owner where the signed bundle is.
 
 `android/scripts/release-bundle.sh` does the same on the Linux machine.
+
+## Stats server (`server/`, 2026-11-13)
+
+Runs on the owner's Unraid server as compose project `sev-stats`; `server/README.md` has the layout and the
+upload protocol. The truck posts to `https://api.vl-development.com/sev/v1/` (nginx to the `ingest`
+container); the dashboard is `http://10.0.0.15:8791`, LAN only, and must never be proxied.
+Tests: `docker compose --profile test run --rm test` in `server/`.
 
 ## Automotive emulator
 
@@ -97,9 +107,18 @@ AVD `Automotive_1408p_landscape`. The app runs its demo data there.
   uses the app's own keyboard (the system keyboard refuses input while driving), and "Navigate in
   Google Maps" hands the destination to the car's navigation app.
 
+- **Upload (2026-11-13):** the log's rows go to the owner's server over HTTPS, from the hourly job after its
+  rows and every 5 minutes while a screen is up (`upload/Uploader.kt`, pure logic in `log/UploadModel.kt`).
+  It keeps the id of the newest row the server answered for and sends what is after it; the server ignores
+  repeats. Paired once with a code from the dashboard, typed on Settings (Park only). MX+ rows also carry
+  every cell group's voltage and every module's temperature (`log_arrays` table), for the upload only: not
+  in the CSV, not on Trends. No position, no VIN, never demo data.
+
 ## Checked on the truck, and not
 
 - **Confirmed by the owner:** sending a destination to Google Maps works.
 - **Emulator only so far:** `2B44` capacity and deviation, the `2AF3`/`2AF4` battery temperatures, the simplified
   icon (meant to fix the generic icon in the truck's sidebar), the car marker on the map, the rail, the reworked API and OBD pages, per-battery voltages and cell
   statistics against real adapter data, the range outline, and the Map tab staying usable while moving.
+- **Not even on the emulator yet:** the Upload block on Settings and a real upload from the app (written on
+  the Unraid server, unit tests only).

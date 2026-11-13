@@ -290,7 +290,8 @@ class AndroidWiringTest {
   @Test
   fun diagnosticsStartersRefuseWhileRestricted() {
     val diag = src("DiagnosticsViewModel.kt")
-    for (start in listOf("sendReport")) {
+    // Pairing and the upload's buttons joined the Settings page on 2026-11-13 (owner): parked-only like the report.
+    for (start in listOf("sendReport", "pairUpload", "uploadNow", "unpairUpload")) {
       assertTrue("$start refuses", Regex("""fun $start\([^)]*\) \{\s*if \(restricted\) return""").containsMatchIn(diag))
     }
     assertTrue(diag.contains("private val restricted: Boolean get() = restriction.value"))

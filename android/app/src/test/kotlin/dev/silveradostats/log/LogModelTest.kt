@@ -36,6 +36,22 @@ class LogModelTest {
 
   private fun row(s: LiveState) = LogRows.fromLive(s, mono, at, -300, LogTrigger.MX_SCREEN)
 
+  /** For the upload (owner, 2026-11-13): every cell group and every module, position by position. */
+  @Test
+  fun mxRowCarriesEveryCellGroupAndModule() {
+    val cells = mapOf(
+      value("cells_001_012", listOf(3.701, 3.702, 0.0, 3.704), 30.0),
+      value("cells_013_024", listOf(3.705, "x", 0.0, 0.0), 30.0),
+    )
+    val r = row(live(extra = cells))!!
+    assertEquals("padding is no reading, and none trails", listOf(3.701, 3.702, null, 3.704, 3.705), r.arrays[LogRows.ARRAY_CELL_V])
+    assertEquals("one figure per module: the mean of its two sensors", listOf(16.5, 18.0), r.arrays[LogRows.ARRAY_MODULE_T])
+    // Without a fresh read there is no array, never an old one.
+    val stale = row(live(extra = mapOf(value("cells_001_012", listOf(3.7, 3.7), 30.0, ageMs = 10 * 60_000L))))!!
+    assertNull(stale.arrays[LogRows.ARRAY_CELL_V])
+    assertTrue(LogRows.fromCar(CarReading(levelWh = 1.0), at, 0, LogTrigger.JOB)!!.arrays.isEmpty())
+  }
+
   @Test
   fun carRowComputesSocFromTheCapacityAndSaysWhichCapacity() {
     val nominal = LogRows.fromCar(CarReading(levelWh = 85_000.0, nominalWh = 205_000.0, outsideC = 11.5, plugged = true), at, -300, LogTrigger.JOB)!!

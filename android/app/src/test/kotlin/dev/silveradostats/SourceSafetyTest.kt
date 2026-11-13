@@ -377,8 +377,8 @@ class SourceSafetyTest {
    * link or stream. The adapter socket (Bluetooth, in bt/) only hands its streams to
    * the core's StreamByteLink constructor, so ElmLink.command (reached only through
    * ElmTransport / ElmChannel) stays the one writer. The only other writes in the app are the report
-   * upload (an HTTP body to the laptop), the Map tab's web lookups (an HTTP body to Google) and the
-   * crash file.
+   * upload (an HTTP body to the laptop), the Map tab's web lookups (an HTTP body to Google), the log's
+   * upload to the owner's own server (an HTTPS body, owner's decision 2026-11-13) and the crash file.
    */
   @Test
   fun noFileOutsideObdWritesToTheAdapter() {
@@ -392,6 +392,8 @@ class SourceSafetyTest {
       "report/ReportSender.kt" to Regex("""\bconn\.outputStream\.use \{ it\.write\(body\) \}"""),
       // Map tab: the JSON body of a place search or road-distance lookup, to Google: not an adapter.
       "map/MapApi.kt" to Regex("""\bconn\.outputStream\.use \{ it\.write\(body\) \}"""),
+      // The log's rows, or a pairing code, to the owner's server over HTTPS: not an adapter.
+      "upload/UploadClient.kt" to Regex("""\bconn\.outputStream\.use \{ it\.write\(body\) \}"""),
       // filesDir/last_crash.txt.
       "diag/CrashLog.kt" to Regex("""\bfile\.writeText\("""),
       // The CSV export, to the file the user picked: not an adapter.

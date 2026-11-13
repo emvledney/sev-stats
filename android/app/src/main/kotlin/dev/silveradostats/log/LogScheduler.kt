@@ -7,6 +7,7 @@ import android.app.job.JobService
 import android.content.ComponentName
 import android.content.Context
 import android.net.Uri
+import dev.silveradostats.upload.Uploader
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -39,7 +40,8 @@ object LogScheduler {
 
 /**
  * The hourly job: one row of the built-in data, then, if the truck reports it is on and an MX+ is
- * chosen, one row from the MX+ (LogHub.visit). Never keeps anything running after it returns.
+ * chosen, one row from the MX+ (LogHub.visit). Last, with a server paired, the rows the server does not
+ * have yet are sent to it (owner, 2026-11-13). Never keeps anything running after it returns.
  */
 class LogJobService : JobService() {
   private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -50,6 +52,7 @@ class LogJobService : JobService() {
     running = scope.launch {
       try {
         hub.visit(hub.logCar(LogTrigger.JOB))
+        Uploader.get(this@LogJobService).run()
       } finally {
         jobFinished(params, false)
       }

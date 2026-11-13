@@ -71,6 +71,36 @@ class LogWiringTest {
     assertFalse("the only place rows are read", Regex("""\.trendData\(""").findAll(screen.replace(load, "")).any())
   }
 
+  /**
+   * The upload to the owner's server (owner, 2026-11-13) sends rows the log already holds and nothing
+   * else: it reads no car property and never touches the MX+, and it talks to one https address.
+   */
+  @Test
+  fun theUploadOnlyReadsTheLogAndOnlySpeaksHttps() {
+    for (name in listOf("upload/Uploader.kt", "upload/UploadClient.kt", "log/UploadModel.kt")) {
+      val text = src(name)
+      assertFalse(name, Regex("""\b(LinkConnection|LinkService|VehicleReader|CarPropertyManager|BluetoothSocket|ElmTransport|ElmLink|Poller|LinkEngine|UdsClient|LocationManager|FusedLocation\w*)\b""").containsMatchIn(text))
+      assertFalse("$name: no plain http", text.contains("http://"))
+    }
+    // Every address comes from UploadWire.endpoint, which hands out https only; the client checks again and follows no redirect.
+    val uploader = src("upload/Uploader.kt")
+    assertEquals(2, Regex("""UploadWire\.endpoint\(base, "(rows|pair)"\)""").findAll(uploader).count())
+    assertEquals("the only addresses", 2, Regex("""UploadClient\.post\((url), """).findAll(uploader).count())
+    assertEquals(setOf("Uploader.kt"), callers(Regex("""\bUploadClient\.post\(""")))
+    val client = src("upload/UploadClient.kt")
+    assertTrue(client.contains("""if (u.protocol != "https") return"""))
+    assertTrue(client.contains("conn.instanceFollowRedirects = false"))
+    assertTrue(src("log/UploadModel.kt").contains("""if (!b.startsWith("https://")"""))
+    // The token stays in the upload's own preferences: the report and the CSV export never read them.
+    assertEquals(setOf("Uploader.kt"), callers(Regex("""getSharedPreferences\("upload\"""")))
+    assertFalse(src("report/Report.kt").contains("Uploader"))
+    // It runs from the hourly job after its rows are in, and while a screen is up; pairing only from Settings.
+    val job = src("log/LogScheduler.kt")
+    assertTrue(job.indexOf("hub.visit(hub.logCar(LogTrigger.JOB))") in 0 until job.indexOf("Uploader.get(this@LogJobService).run()"))
+    assertTrue(src("MainActivity.kt").contains("repeatOnLifecycle(Lifecycle.State.STARTED) { Uploader.get(this@MainActivity).whileOnScreen() }"))
+    assertEquals(setOf("DiagnosticsViewModel.kt"), callers(Regex("""\buploader\.pair\(""")))
+  }
+
   @Test
   fun demoDataStaysOutOfTheStore() {
     val hub = src("log/LogHub.kt")
