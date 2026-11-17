@@ -1,5 +1,6 @@
 package dev.silveradostats.ui.simple
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -7,12 +8,15 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -29,6 +33,8 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import dev.silveradostats.link.MxAction
@@ -45,14 +51,20 @@ import dev.silveradostats.ui.live.MxButton
 import dev.silveradostats.ui.live.Units
 import dev.silveradostats.ui.theme.CardEdge
 import dev.silveradostats.ui.theme.CardShape
+import dev.silveradostats.ui.theme.DivergingLow
+import dev.silveradostats.ui.theme.GridLine
+import dev.silveradostats.ui.theme.StatusOk
 import dev.silveradostats.ui.theme.TextDim
+import dev.silveradostats.vehicle.EnergySplit
 import dev.silveradostats.vehicle.LastCharge
 import dev.silveradostats.vehicle.SessionState
 
 /**
  * The Simple tab: four columns of two cells alike, by the owner's choice (2026-11-07, when the battery ring went):
  * the energy left over the state of charge, the capacity over the range, this drive's distance over its energy, and
- * its mi/kWh over the last 15 minutes'. Under all four, the last charge's row, a part under each column: what the
+ * its mi/kWh over the last 15 minutes'. Trip and Used each hold two figures, this drive's over the last 15 minutes'
+ * (the owner, 2026-11-16). Under the columns, the energy band (same day): driving, climate and the rest for this
+ * drive, the last 15 minutes and since the last charge, from the MX+. Under all of it, the last charge's row, a part under each column: what the
  * charge reached, what has been used since, the mi/kWh since and how far the level has drifted.
  * The tiles are plain panels, as the Expert page's are: the colour washes went by the owner's choice (2026-11-12).
  * One page in any landscape window: the figures are as large as their tiles allow (see [DashLayout]).
@@ -67,6 +79,7 @@ fun SimpleScreen(
   session: SessionState,
   mxCapacityKwh: Double?,
   lastCharge: LastCharge?,
+  energy: EnergySplit?,
   settings: UiSettings,
   layout: DashLayout,
   driving: Boolean,
@@ -77,8 +90,8 @@ fun SimpleScreen(
   onRequestPermissions: () -> Unit,
   onOpenDiagnostics: () -> Unit,
 ) {
-  val view = remember(session, mxCapacityKwh, lastCharge) {
-    SimpleModel.build(session, Units.DIST, mxCapacityKwh, lastCharge)
+  val view = remember(session, mxCapacityKwh, lastCharge, energy) {
+    SimpleModel.build(session, Units.DIST, mxCapacityKwh, lastCharge, energy)
   }
   var confirmReset by rememberSaveable { mutableStateOf(false) }
   // Asked in every gear: one stray tap must not cost a drive's figures.
@@ -221,6 +234,57 @@ private fun StatTile(s: Stat, figureSp: Int, layout: DashLayout, modifier: Modif
   }
 }
 
+/**
+ * A tile with two figures: this drive's over the last 15 minutes', each with its words at the end of its row.
+ * The second row is the first to go where the tile is short.
+ */
+@Composable
+private fun SplitTile(drive: Stat, recent: Stat, sp: Int, layout: DashLayout, modifier: Modifier) {
+  val rowDp = layout.lineDp(sp, DashLayout.VALUE_LINE_FACTOR).dp
+  Panel(modifier, layout) {
+    StatHead(drive, layout, Modifier.fit(1).fillMaxWidth())
+    SplitRow(drive, SimpleModel.THIS_DRIVE, sp, layout, Modifier.fill(0, rowDp).fillMaxWidth())
+    SplitRow(recent, recent.title, sp, layout, Modifier.fill(2, rowDp).fillMaxWidth())
+  }
+}
+
+@Composable
+private fun SplitRow(s: Stat, words: String, sp: Int, layout: DashLayout, modifier: Modifier) {
+  Row(modifier, verticalAlignment = Alignment.CenterVertically) {
+    StatFigure(s, layout, sp)
+    Spacer(Modifier.weight(1f))
+    FitText(words, sp = layout.type.label, color = TextDim)
+  }
+}
+
+/** Driving, climate, the rest: the same colour for each in the bar and beside its name. */
+private val EnergyColors = listOf(StatusOk, DivergingLow, TextDim)
+
+/** One window of the energy band: what it covers and its total, a bar of the three parts, then each part's kWh over its name. */
+@Composable
+private fun EnergyPanel(w: EnergyWindow, layout: DashLayout, modifier: Modifier) {
+  Panel(modifier, layout) {
+    Row(Modifier.fit(1).fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+      FitText(w.title, Modifier.weight(1f), sp = layout.type.title, color = TextDim)
+      FitText(w.total, sp = layout.type.title, color = TextDim)
+    }
+    Row(Modifier.fit(2).fillMaxWidth().height(DashLayout.ENERGY_BAR_DP.dp).clip(CircleShape).background(GridLine), horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+      w.parts.forEachIndexed { i, p -> if (p.share > 0f) Box(Modifier.weight(p.share).fillMaxHeight().background(EnergyColors[i])) }
+    }
+    Row(Modifier.fit(0).fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+      w.parts.forEachIndexed { i, p ->
+        Column(Modifier.weight(1f)) {
+          FitText(p.value, sp = layout.simpleEnergySp, lineFactor = DashLayout.VALUE_LINE_FACTOR, weight = FontWeight.Bold, color = if (w.hasValue) MaterialTheme.colorScheme.onSurface else TextDim)
+          Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            Box(Modifier.size(8.dp).clip(CircleShape).background(EnergyColors[i]))
+            FitText(p.label, sp = layout.type.label, color = TextDim)
+          }
+        }
+      }
+    }
+  }
+}
+
 // --- The page ---------------------------------------------------------------------------------------
 
 @Composable
@@ -228,18 +292,28 @@ private fun Tiles(view: SimpleView, layout: DashLayout, modifier: Modifier) {
   val notice = view.notice != null
   val gap = Arrangement.spacedBy(layout.gapDp.dp)
   val figureSp = layout.simpleFigureSp(notice)
+  val splitSp = layout.simpleSplitSp(notice)
+  val energyDp = layout.simpleEnergyDp(notice)
   Column(modifier, verticalArrangement = gap) {
     Row(Modifier.fillMaxWidth().weight(1f), horizontalArrangement = gap) {
-      listOf(
-        view.remaining to view.soc,
-        view.capacity to view.range,
-        view.trip to view.energyUsed,
-        view.efficiency to view.efficiencyRecent,
-      ).forEach { (top, bottom) ->
+      listOf(view.remaining to view.soc, view.capacity to view.range).forEach { (top, bottom) ->
         Column(Modifier.weight(1f).fillMaxHeight(), verticalArrangement = gap) {
           StatTile(top, figureSp, layout, Modifier.weight(1f).fillMaxWidth())
           StatTile(bottom, figureSp, layout, Modifier.weight(1f).fillMaxWidth())
         }
+      }
+      Column(Modifier.weight(1f).fillMaxHeight(), verticalArrangement = gap) {
+        SplitTile(view.trip, view.tripRecent, splitSp, layout, Modifier.weight(1f).fillMaxWidth())
+        SplitTile(view.energyUsed, view.energyUsedRecent, splitSp, layout, Modifier.weight(1f).fillMaxWidth())
+      }
+      Column(Modifier.weight(1f).fillMaxHeight(), verticalArrangement = gap) {
+        StatTile(view.efficiency, figureSp, layout, Modifier.weight(1f).fillMaxWidth())
+        StatTile(view.efficiencyRecent, figureSp, layout, Modifier.weight(1f).fillMaxWidth())
+      }
+    }
+    if (energyDp > 0) {
+      Row(Modifier.fillMaxWidth().height(energyDp.dp), horizontalArrangement = gap) {
+        view.energy.forEach { EnergyPanel(it, layout, Modifier.weight(1f).fillMaxHeight()) }
       }
     }
     ChargeTile(view.charge, notice, layout, Modifier.fillMaxWidth().height(layout.simpleChargeDp(notice).dp))

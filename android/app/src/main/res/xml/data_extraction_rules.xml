@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Nothing to back up or transfer: the app only keeps a few UI settings (adapter address, report URL). -->
+<!-- Nothing to back up or transfer: the app only keeps a few UI settings (adapter address, the chosen tab). -->
 <data-extraction-rules>
     <cloud-backup>
         <exclude domain="root" />

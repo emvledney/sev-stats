@@ -5,6 +5,8 @@ import dev.silveradostats.link.LiveState
 import dev.silveradostats.ui.live.DistUnit
 import dev.silveradostats.ui.live.Units
 import dev.silveradostats.vehicle.EffUnits
+import dev.silveradostats.vehicle.EnergyParts
+import dev.silveradostats.vehicle.EnergySplit
 import dev.silveradostats.vehicle.FeedKind
 import dev.silveradostats.vehicle.LastCharge
 import dev.silveradostats.vehicle.SessionState
@@ -35,6 +37,12 @@ data class Stat(
  */
 data class ChargeView(val to: Stat, val toPct: Stat, val used: Stat, val efficiency: Stat, val drift: Stat)
 
+/** One part of an energy window: its name, its kWh, and its share of the bar (0..1). */
+data class EnergyPart(val label: String, val value: String, val share: Float)
+
+/** One window of the energy band: what it covers, its total (or why there is none), and driving, climate and the rest. */
+data class EnergyWindow(val title: String, val total: String, val parts: List<EnergyPart>, val hasValue: Boolean)
+
 enum class NoticeAction { GRANT, OPEN_DIAGNOSTICS }
 
 /** A problem with the data feed, shown above the tiles. */
@@ -51,29 +59,38 @@ data class SimpleView(
   val range: Stat,
   /** This drive's distance. */
   val trip: Stat,
+  /** The same over the last 15 minutes, its words as its title: under [trip] in one tile. */
+  val tripRecent: Stat,
   /** This drive's net energy, regen included. */
   val energyUsed: Stat,
+  /** The same over the last 15 minutes: under [energyUsed] in one tile. */
+  val energyUsedRecent: Stat,
   /** This drive's distance over its energy: [trip] over [energyUsed], no warm-up. */
   val efficiency: Stat,
   /** The same over the last 15 minutes: the whole drive until it is that long. */
   val efficiencyRecent: Stat,
   val charge: ChargeView,
+  /** This drive, the last 15 minutes and since the last charge, in that order. */
+  val energy: List<EnergyWindow>,
 )
 
 object SimpleModel {
   private val DASH = Units.DASH
 
-  fun build(s: SessionState, dist: DistUnit, mxCapacityKwh: Double? = null, lastCharge: LastCharge? = null): SimpleView = SimpleView(
+  fun build(s: SessionState, dist: DistUnit, mxCapacityKwh: Double? = null, lastCharge: LastCharge? = null, energy: EnergySplit? = null): SimpleView = SimpleView(
     notice = notice(s),
     remaining = remaining(s),
     soc = soc(s),
     capacity = capacity(s, mxCapacityKwh),
     range = range(s, dist),
     trip = trip(s, dist),
+    tripRecent = tripRecent(s, dist),
     energyUsed = energyUsed(s),
+    energyUsedRecent = energyUsedRecent(s),
     efficiency = efficiency(s.plainEfficiency.driveMPerWh, EFF_DRIVE, dist),
     efficiencyRecent = efficiency(s.plainEfficiency.recentMPerWh, EFF_RECENT, dist),
     charge = charge(s, lastCharge, dist),
+    energy = energy(energy),
   )
 
   // --- Units ------------------------------------------------------------------------------------
@@ -184,6 +201,38 @@ object SimpleModel {
 
   /** This drive's net energy, regen included. */
   fun energyUsed(s: SessionState): Stat = Stat("Used", kwhValue(s.usedWh), "kWh", emptyList(), hasValue = s.hasData)
+
+  /** The words beside each of the two figures Trip and Used hold (the owner, 2026-11-16). */
+  const val THIS_DRIVE = "this drive"
+  const val LAST_15_MIN = "last 15 min"
+
+  /** The last 15 minutes' distance: the whole drive until it is that long. */
+  fun tripRecent(s: SessionState, d: DistUnit): Stat {
+    val m = s.recentDistanceM.takeIf { Signal.SPEED !in s.feed.missing }
+    return Stat(LAST_15_MIN, m?.let { Units.num(distValue(it, d), 1) } ?: DASH, d.symbol, emptyList(), hasValue = m != null)
+  }
+
+  /** The last 15 minutes' net energy. */
+  fun energyUsedRecent(s: SessionState): Stat =
+    Stat(LAST_15_MIN, s.recentUsedWh?.let { kwhValue(it) } ?: DASH, "kWh", emptyList(), hasValue = s.recentUsedWh != null)
+
+  // --- Where the energy went --------------------------------------------------------------------
+
+  const val NEEDS_MX = "needs the MX+"
+  const val NO_READING = "no reading"
+  private val ENERGY_PARTS = listOf("Driving", "Climate", "Other")
+
+  /** The band's three windows. [split] null: no MX+ link, and the car's API has nothing to fill them with. */
+  fun energy(split: EnergySplit?): List<EnergyWindow> =
+    listOf("This drive" to split?.drive, "Last 15 min" to split?.recent, "Since charge" to split?.charge).map { (title, parts) -> energyWindow(title, parts, linked = split != null) }
+
+  private fun energyWindow(title: String, p: EnergyParts?, linked: Boolean): EnergyWindow {
+    if (p == null) return EnergyWindow(title, if (linked) NO_READING else NEEDS_MX, ENERGY_PARTS.map { EnergyPart(it, DASH, 0f) }, hasValue = false)
+    val wh = listOf(p.drivingWh, p.climateWh, p.otherWh)
+    // The bar shows what was used: a part that regen has taken below zero has its figure, and no length.
+    val used = wh.sumOf { it.coerceAtLeast(0.0) }
+    return EnergyWindow(title, "${kwhValue(p.totalWh)} kWh", ENERGY_PARTS.indices.map { EnergyPart(ENERGY_PARTS[it], kwhValue(wh[it]), if (used > 0) (wh[it].coerceAtLeast(0.0) / used).toFloat() else 0f) }, hasValue = true)
+  }
 
   // --- mi/kWh -----------------------------------------------------------------------------------
 

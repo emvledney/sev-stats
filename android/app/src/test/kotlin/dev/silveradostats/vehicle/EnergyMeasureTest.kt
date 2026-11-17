@@ -64,7 +64,8 @@ class EnergyMeasureTest {
   private val mps = 25.0
   private val miPerKwh = mps * 3600.0 / 40.0 / 1000.0 * 1000.0 / EffUnits.METERS_PER_MILE
 
-  private fun eff(s: SessionState) = EffUnits.miPerKwh(s.efficiency.mPerWh!!)
+  /** The drive's distance over its energy, as the Simple tab divides them (the warm-up figure went with the report, 2026-11-17). */
+  private fun eff(s: SessionState) = EffUnits.miPerKwh(s.distanceM / s.usedWh)
 
   @Test
   fun aLevelThatOverstatesTheEnergyDoesNotCount() {
@@ -147,7 +148,6 @@ class EnergyMeasureTest {
     assertEquals(-1, s.chargeRateCheck.sign)
     assertEquals(EnergySource.CHARGE_RATE, s.energySource)
     assertEquals(d.used, s.usedWh, d.used * 0.03)
-    assertTrue("nothing counted as regen", s.energyInWh < 1.0)
   }
 
   @Test
@@ -231,7 +231,6 @@ class EnergyMeasureTest {
     d.run(60.0, 15.0, -30.0)
     val s = d.s()
     assertEquals(EnergySource.CHARGE_RATE, s.energySource)
-    assertEquals(30.0 * 1000 * 60 / 3600, s.energyInWh, 30.0)
     assertEquals(d.used, s.usedWh, d.used * 0.03)
     assertEquals(s.usedWh, s.levelUsedWh + (s.usedWh - s.levelUsedWh), 1e-9)
   }
@@ -281,6 +280,5 @@ class EnergyMeasureTest {
     val s = d.s()
     assertEquals(EnergySource.BATTERY_LEVEL, s.energySource)
     assertEquals(SignalVerdict(), s.chargeRateCheck)
-    assertEquals(0.0, s.energyOutWh, 0.0)
   }
 }

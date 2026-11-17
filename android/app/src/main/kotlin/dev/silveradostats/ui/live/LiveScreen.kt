@@ -260,12 +260,12 @@ private fun RowScope.LiveSummary(s: StatusView, layout: DashLayout) {
   } else if (layout.inRail) {
     // In the rail: narrow, so the message wraps and each detail has its own line.
     Column(Modifier.fillMaxWidth()) {
-      FitText(s.message, sp = layout.type.label, maxLines = 3)
+      if (s.message.isNotEmpty()) FitText(s.message, sp = layout.type.label, maxLines = 3)
       listOfNotNull(s.dataAge, s.retryIn).forEach { FitText(it, sp = layout.type.label, color = if (s.dataStale) StatusWarn else TextDim) }
     }
   } else {
     Column(Modifier.weight(1f)) {
-      FitText(s.message, sp = layout.type.body)
+      if (s.message.isNotEmpty()) FitText(s.message, sp = layout.type.body)
       val meta = listOfNotNull(s.dataAge, s.adapterVolts, s.retryIn).joinToString("  ·  ")
       if (meta.isNotEmpty()) FitText(meta, sp = layout.type.label, color = if (s.dataStale) StatusWarn else TextDim)
     }

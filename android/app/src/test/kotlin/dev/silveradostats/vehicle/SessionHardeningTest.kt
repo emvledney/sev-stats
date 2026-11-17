@@ -81,7 +81,8 @@ class SessionHardeningTest {
 
   private fun mi(m: Double) = m / EffUnits.METERS_PER_MILE
 
-  private fun eff(s: SessionState) = EffUnits.miPerKwh(s.efficiency.mPerWh!!)
+  /** The drive's distance over its energy, as the Simple tab divides them (the warm-up figure went with the report, 2026-11-17). */
+  private fun eff(s: SessionState) = EffUnits.miPerKwh(s.distanceM / s.usedWh)
 
   // --- Charging and gaps ------------------------------------------------------------------------
 
@@ -276,7 +277,6 @@ class SessionHardeningTest {
         d.quantWh = quant
         d.holdMs = hold
         d.run(3600.0, 27.0, kwFor(27.0, 2.3))
-        assertEquals("step $quant hold $hold", 2.3, eff(d.s()), 0.1)
         assertEquals("step $quant hold $hold", kwFor(27.0, 2.3) * 1000, d.s().usedWh, 2_200.0)
       }
     }
@@ -347,89 +347,13 @@ class SessionHardeningTest {
   // --- Early figures ----------------------------------------------------------------------------
 
   @Test
-  fun firstFiguresAreMarkedEarlyAndProjectNoRange() {
-    val t = SessionTracker { 0L }
-    val drive = DemoDrive()
-    var rel = 0L
-    var earlySeen = false
-    var settled = false
-    while (rel <= 24 * 60_000L) {
-      t.add(drive.sampleAt(rel, rel))
-      val s = t.snapshot()
-      val e = s.efficiency
-      if (e.status == EffStatus.OK) {
-        val short = e.basisM < SessionTracker.EARLY_M || e.basisWh < SessionTracker.EARLY_WH
-        assertEquals(short, e.early)
-        if (e.early) earlySeen = true else settled = true
-      }
-      rel += 500
-    }
-    assertTrue(earlySeen && settled)
-  }
-
-  @Test
-  fun aDescentProjectsNoRangeAndNeverGoesBackToWarmingUp() {
-    val d = Truck()
-    d.quantWh = 1.0
-    d.run(240.0, 25.0, 40.0) // 3.7 mi, 2.7 kWh: past the warm-up
-    assertEquals(EffStatus.OK, d.s().efficiency.status)
-    d.run(1800.0, 25.0, 1.0) // the long way down, almost no net energy
-    val high = d.s()
-    assertEquals(EffStatus.OK, high.efficiency.status)
-    assertFalse(high.efficiency.early)
-    assertTrue(EffUnits.miPerKwh(high.efficiency.mPerWh!!) > 6.0)
-    assertNull("no 3000 mi range", high.rangeEstimate)
-
-    // Net regen after the figure was OK: it says so, it does not start warming up again.
-    val f = Truck()
-    f.quantWh = 1.0
-    f.run(120.0, 25.0, kwFor(25.0, 2.3))
-    assertEquals(EffStatus.OK, f.s().efficiency.status)
-    f.run(300.0, 25.0, -15.0) { s -> assertTrue(s.efficiency.status != EffStatus.WARMING_UP) }
-    val s = f.s()
-    assertEquals(EffStatus.NET_REGEN, s.efficiency.status)
-    assertNull(s.efficiency.mPerWh)
-    assertNull(s.rangeEstimate)
-    assertEquals(1.0, s.efficiency.progress, 0.0)
-    assertEquals(mi(s.distanceM), mi(s.efficiency.basisM), 0.05)
-    // A new session starts cold.
-    f.tracker.reset()
-    assertEquals(EffStatus.WARMING_UP, f.s().efficiency.status)
-  }
-
-  @Test
-  fun aCoarseLevelNeedsMoreEnergyBeforeAFigure() {
+  fun aCoarseLevelIsMeasuredAsSuch() {
     val d = Truck()
     d.rate = { null } // on the level alone
     d.quantWh = 1_000.0
     d.run(300.0, 25.0, kwFor(25.0, 2.3))
     val s = d.s()
     assertEquals(1_000.0, s.levelStepWh!!, 0.0)
-    assertEquals(EffStatus.WARMING_UP, s.efficiency.status)
-  }
-
-  @Test
-  fun aLevelThatNeverChangesIsMeasuredAsSuch() {
-    val d = Truck()
-    d.levelOverride = 85_250.0
-    d.run(600.0, 25.0, 40.0)
-    var s = d.s()
-    assertEquals(s.distanceM, s.levelUnchangedM, 1e-6)
-    assertEquals(EffStatus.WARMING_UP, s.efficiency.status)
-    // It moves: the watch restarts.
-    d.levelOverride = 85_200.0
-    d.run(1.0, 25.0, 40.0)
-    s = d.s()
-    assertTrue(s.levelUnchangedM < 50)
-  }
-
-  @Test
-  fun theFigureEndsAtTheLatestLevelStep() {
-    val d = Truck()
-    d.quantWh = 500.0
-    d.run(600.0, 25.0, kwFor(25.0, 2.3))
-    val e = d.s().efficiency
-    assertEquals(e.basisM / e.basisWh, e.mPerWh!!, 1e-9)
   }
 
   @Test

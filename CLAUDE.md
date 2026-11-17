@@ -79,16 +79,33 @@ AVD `Automotive_1408p_landscape`. The app runs its demo data there.
 
 ## Decisions already made (2026-11-10 to 12)
 
-- **Navigation rail** on the left, always all shown, one size in every gear: Simple, Expert, Trends, Map,
+- **Navigation rail** on the left, always all shown, one size in every gear: Simple, Expert, Map,
   and a gear at the foot for Settings (renamed from API and OBD on 2026-11-11; notes below still say API and
   OBD for those two pages). In code they are `AppTab.SIMPLE` and `AppTab.LIVE`.
+- **No Trends tab** (2026-11-15): the log is reviewed on the stats server; the app only writes and uploads it.
+  A saved "TRENDS" tab falls back to Simple. The rail's MX+ status has no text while it works: the chip and
+  the data age are enough (demo mode keeps its "Simulated truck" warning).
 - **Settings page** (2026-11-12, was Diagnostics; still `AppTab.DIAGNOSTICS` so the saved tab survives):
-  permissions (one line when all granted), last crash, OBDLink MX+ link, report. Park only.
+  permissions (one line when all granted), last crash, OBDLink MX+ link, upload. Park only.
+- **No report (2026-11-17):** "Send to laptop" and everything only it used went: the owner reads the truck's data
+  on the stats server. With it went the all-properties read, the system and display info, the warm-up
+  ("measured") efficiency in `SessionTracker`, and plain HTTP: `network_security_config.xml` is HTTPS only.
+  `./probe receive` on the laptop has nothing left to receive.
+- **Negatives are shown (2026-11-17):** net regen gives a negative mi/kWh and a negative kWh, on Simple and in the
+  energy band, not a dash or a zero. Range stays a dash then, and "Other" in the band never goes below zero.
 - **Carbon styling** (2026-11-11), from `docs/mockups/style-2-carbon.html`: near-black panels with hairline
   edges, green accent. The Simple tiles are plain panels like Expert's (2026-11-12; the green / red / amber
   washes went). Colours and the card shape live in `ui/theme/Theme.kt`.
   Not taken from the mockup yet: monospace figures and upper-case tile labels (they change the layout maths).
-- **While driving:** API, OBD and Map are fully usable. Trends and Settings show the
+- **Energy breakdown on Simple (2026-11-16):** a band of three panels between the tiles and the last charge's row
+  (this drive, last 15 min, since charge), each with driving, climate and other in kWh (`docs/mockups/simple-energy-breakdown.html`,
+  option B). From the MX+ only: the BECM's totals since its last full charge (`27B9` total, `27BA` driving and
+  accessories, `27BB` thermal management, Car Scanner's mapping), differenced per window in `vehicle/EnergySplit.kt`.
+  "Climate" is `27BB`; "Other" is the total minus the two. The car API has nothing for it: no MX+, dashes.
+  Each window is a plain delta from its first reading: a total going down (regen) restarts nothing (2026-11-17,
+  after two builds where that rule put the raw totals in every window on the truck).
+  Trip and Used each hold two figures, this drive over last 15 min.
+- **While driving:** API, OBD and Map are fully usable. Settings shows the
   "Available in Park" panel. System permission dialogs still wait for Park.
 - **API and OBD have no header row.** Their status and buttons are drawn at the foot of the rail
   (`toRail` in `AppShell.kt`, `DashLayout.withoutHeader()`).
@@ -112,12 +129,13 @@ AVD `Automotive_1408p_landscape`. The app runs its demo data there.
   It keeps the id of the newest row the server answered for and sends what is after it; the server ignores
   repeats. Paired once with a code from the dashboard, typed on Settings (Park only). MX+ rows also carry
   every cell group's voltage and every module's temperature (`log_arrays` table), for the upload only: not
-  in the CSV, not on Trends. No position, no VIN, never demo data.
+  in the CSV. No position, no VIN, never demo data.
 
 ## Checked on the truck, and not
 
 - **Confirmed by the owner:** sending a destination to Google Maps works.
-- **Emulator only so far:** `2B44` capacity and deviation, the `2AF3`/`2AF4` battery temperatures, the simplified
+- **Emulator only so far:** the energy totals `27B9` / `27BA` / `27BB` behind Simple's breakdown (never read on the
+  truck: compare with its energy screen; `27B9`'s scale is taken as 0.01 where Car Scanner has 0.1), `2B44` capacity and deviation, the `2AF3`/`2AF4` battery temperatures, the simplified
   icon (meant to fix the generic icon in the truck's sidebar), the car marker on the map, the rail, the reworked API and OBD pages, per-battery voltages and cell
   statistics against real adapter data, the range outline, and the Map tab staying usable while moving.
 - **Not even on the emulator yet:** the Upload block on Settings and a real upload from the app (written on

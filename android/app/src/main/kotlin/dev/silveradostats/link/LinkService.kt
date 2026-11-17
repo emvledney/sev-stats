@@ -24,7 +24,8 @@ import kotlinx.coroutines.launch
  * Bound only, never started, and not exported (the manifest declares android:exported="false"), so
  * only this app's own code can reach it. Polling runs only while a visible screen is attached
  * (LinkConnection attaches on onStart and detaches on onStop) or during the log's hourly visit with the
- * truck on (LogHub.visit, through the same LinkConnection), which keeps one row of what is read. Without a visible screen nothing is
+ * truck on (LogHub.visit, through the same LinkConnection), which keeps one row of what is read, or while
+ * VehicleWatchService holds it with the truck on (owner, 2026-11-13). With none of those nothing is
  * sent; the socket stays open, silent, for at most [LinkEngine.GRACE_MS] in case a screen comes
  * back, then closes and releases the MX+. When the last client
  * unbinds, the service is destroyed and the socket is closed at once.

@@ -376,8 +376,8 @@ class SourceSafetyTest {
    * Single write path to the adapter, app-wide: outside the OBD core nothing writes to an adapter
    * link or stream. The adapter socket (Bluetooth, in bt/) only hands its streams to
    * the core's StreamByteLink constructor, so ElmLink.command (reached only through
-   * ElmTransport / ElmChannel) stays the one writer. The only other writes in the app are the report
-   * upload (an HTTP body to the laptop), the Map tab's web lookups (an HTTP body to Google), the log's
+   * ElmTransport / ElmChannel) stays the one writer. The only other writes in the app are
+   * the Map tab's web lookups (an HTTP body to Google), the log's
    * upload to the owner's own server (an HTTPS body, owner's decision 2026-11-13) and the crash file.
    */
   @Test
@@ -388,8 +388,6 @@ class SourceSafetyTest {
       """\bStreamByteLink\(\s*(\w+)\.(inputStream|getInputStream\(\)),\s*\1\.(outputStream|getOutputStream\(\)),\s*\1\b""",
     )
     val otherWrites = mapOf(
-      // HTTP POST of the diagnostics report to the laptop: not an adapter.
-      "report/ReportSender.kt" to Regex("""\bconn\.outputStream\.use \{ it\.write\(body\) \}"""),
       // Map tab: the JSON body of a place search or road-distance lookup, to Google: not an adapter.
       "map/MapApi.kt" to Regex("""\bconn\.outputStream\.use \{ it\.write\(body\) \}"""),
       // The log's rows, or a pairing code, to the owner's server over HTTPS: not an adapter.
@@ -595,10 +593,12 @@ class SourceSafetyTest {
 
   /**
    * The background service, the owner's choice (2026-11-06): private to the app, started only by the app or
-   * the system, and all it does is keep the session of the truck's API sampling. Not a way to the MX+.
+   * the system. It keeps the session of the truck's API sampling and, the owner's choice of 2026-11-13
+   * (it was "not a way to the MX+" before), holds the MX+ link through the app's one LinkConnection while
+   * the truck is positively on. Nothing else: no engine, Bluetooth or log of its own, no wake lock.
    */
   @Test
-  fun theBackgroundServiceOnlyReadsTheSession() {
+  fun theBackgroundServiceReadsTheSessionAndHoldsTheLink() {
     val doc = parse(File(srcDir(), "main/AndroidManifest.xml"))
     val service = elements(doc, "service").single { it.attr("name") == ".vehicle.VehicleWatchService" }
     assertEquals("false", service.attr("exported"))
@@ -615,7 +615,11 @@ class SourceSafetyTest {
     // Attached to the session, the one thing it uses of the app's data.
     assertTrue(text.contains("s.attach(token)"))
     assertTrue(text.contains("s.setWatching(true)"))
-    val notIn = Regex("""LinkEngine|LinkService|LinkConnection|\bengine\b|\bbt\b|Bluetooth|BtController|\bobd\b|LogHub|\bvisit\b|WakeLock|PowerManager|setProperty""")
+    // The hold: one connection, decided by the fail-safe rule alone.
+    assertEquals(1, Regex("""\bLinkConnection\(""").findAll(text).count())
+    assertTrue(text.contains("LogPolicy.holdAllowed(v.ignition, a.demo, a.mxAddress != null, a.mxOff) }\n        .distinctUntilChanged().collect { held.setHeld(it) }"))
+    assertTrue(text.contains("link?.close()"))
+    val notIn = Regex("""LinkEngine|LinkService|\bengine\b|\bbt\b|Bluetooth|BtController|\bobd\b|LogHub|\bvisit\b|WakeLock|PowerManager|setProperty""")
     assertEquals(emptyList<String>(), notIn.findAll(text.substringAfter("class VehicleWatchService")).map { it.value }.toList())
   }
 

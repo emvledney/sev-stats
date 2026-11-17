@@ -154,7 +154,8 @@ class DashLayoutTest {
         assertTrue("$name: $sp sp across $room", across(sp) <= room + 1)
         assertTrue("$name: mi/kWh at $sp sp across $room", efficiencyAcross(sp) <= room + 1)
         val tiles = l.bodyDp - if (notice) l.noticeDp + l.gapDp else 0
-        val columns = tiles - l.simpleChargeDp(notice) - l.gapDp
+        // Above the last charge and, where it shows, the energy band (2026-11-16).
+        val columns = tiles - l.simpleChargeDp(notice) - l.gapDp - l.simpleEnergyDp(notice).let { if (it > 0) it + l.gapDp else 0 }
         val tile = 2 * l.cardPadVDp + l.tileHeadDp + l.cardGapDp + l.lineDp(sp, DashLayout.VALUE_LINE_FACTOR)
         // Range's line gives way first, and only with the figures already at their smallest. With room to spare
         // for pixel rounding, or a tall window would lose it.
@@ -206,10 +207,43 @@ class DashLayoutTest {
     assertEquals(72, DashLayout.ofSimple(2331f, 735f).simpleChargeSp(false))
   }
 
+  /**
+   * The energy band and the two-figure tiles (the owner, 2026-11-16), on the page as the app lays it out: with no
+   * header row, its buttons being in the rail. The band is there in every window without a notice, and Trip's and
+   * Used's two figures with their words fit their tile.
+   */
+  @Test
+  fun theEnergyBandAndTheSplitTilesFit() {
+    for (w in widths) for (h in heights) {
+      val l = DashLayout.ofSimple(w.toFloat(), h.toFloat()).withoutHeader()
+      val name = l.name()
+      val band = l.simpleEnergyDp(false)
+      assertTrue("$name: no band", band > 0)
+      assertTrue("$name: band $band", 2 * l.cardPadVDp + l.lineDp(l.type.title) + DashLayout.ENERGY_BAR_DP + l.lineDp(l.simpleEnergySp, DashLayout.VALUE_LINE_FACTOR) + l.lineDp(l.type.label) + 2 * l.cardGapDp <= band)
+      for (notice in listOf(false, true)) {
+        // Whatever shows, the page still fits: the band gives way before anything else does.
+        val energy = l.simpleEnergyDp(notice).let { if (it > 0) it + l.gapDp else 0 }
+        assertTrue("$name notice=$notice", l.requiredSimple(notice) + energy <= l.heightDp)
+        val sp = l.simpleSplitSp(notice)
+        assertTrue("$name: split $sp", sp in DashLayout.LIVE_VALUE_MIN_SP..l.simpleFigureSp(notice))
+        if (sp > DashLayout.LIVE_VALUE_MIN_SP) {
+          val tile = (l.bodyDp - (if (notice) l.noticeDp + l.gapDp else 0) - l.simpleChargeDp(notice) - l.gapDp - energy - l.gapDp) / 2
+          assertTrue("$name: split $sp tall", 2 * l.cardPadVDp + l.tileHeadDp + 2 * l.cardGapDp + 2 * l.lineDp(sp, DashLayout.VALUE_LINE_FACTOR) <= tile)
+          // "123.4 kWh" and "last 15 min" in one row.
+          assertTrue("$name: split $sp wide", 5 * sp * 0.54f + 3 * 0.68f * l.simpleUnitSp(sp) + 11 * 0.5f * l.type.label + 16 <= l.simpleColumnDp - 2 * l.cardPadHDp + 1)
+        }
+      }
+    }
+    // The emulator's page beside the rail, and the truck's: the two figures stay well above the smallest.
+    assertTrue(DashLayout.ofSimple(1160f, 610f).withoutHeader().simpleSplitSp(false) >= 36)
+    assertTrue(DashLayout.ofSimple(2331f, 735f).withoutHeader().simpleSplitSp(false) >= 36)
+  }
+
   /** Four columns alike, the page's width shared evenly: the owner had the battery ring taken out for cells like the others (2026-11-07). */
   @Test
   fun theColumnsAreFourAlike() {
-    val l = DashLayout.ofSimple(1470f, 700f)
+    // As the app lays the page out: no header row, and the energy band under the columns (2026-11-16).
+    val l = DashLayout.ofSimple(1470f, 700f).withoutHeader()
     assertEquals(4, DashLayout.SIMPLE_COLUMNS)
     assertEquals((1470f - 2 * l.pagePadHDp - 3 * l.gapDp).toDouble(), (4 * l.simpleColumnDp).toDouble(), 0.5)
     // Well above the old tile figure: they fill the tile.
@@ -290,21 +324,6 @@ class DashLayoutTest {
     }
     val tight = DashLayout.of(1000f, 420f, true, 1.3f)
     assertTrue("too wide across as it was", tight.liveValueSp < tight.type.value)
-  }
-
-  @Test
-  fun trendsFitsEveryWindowItIsOfferedIn() {
-    forEachWindow { l ->
-      if (!l.trendsTab) return@forEachWindow
-      val leftCol = l.widthDp - 2 * l.pagePadHDp - l.gapDp - l.trendPidsDp
-      assertTrue("${l.name()}: tiles leave no chart", l.trendBodyDp - l.trendTileDp - l.gapDp >= l.chartMinDp)
-      val tileLines = 2 * l.cardPadVDp + maxOf(l.lineDp(l.type.body), l.badgeDp) + l.lineDp(l.trendValueSp, DashLayout.VALUE_LINE_FACTOR) + 2 * l.lineDp(l.type.label) + 3 * l.cardGapDp
-      assertTrue("${l.name()}: a tile's change line must fit: $tileLines > ${l.trendTileDp}", tileLines <= l.trendTileDp)
-      assertTrue("${l.name()}: left column $leftCol", leftCol >= DashLayout.TRENDS_MIN_WIDTH_DP / 2)
-      assertTrue("${l.name()}: a PID row of ${l.trendRowDp} must keep both its lines", l.trendRowDp >= l.trendRowLinesDp)
-      assertTrue("${l.name()}: seven rows", l.cardPadVDp * 2 + l.lineDp(l.type.title) + l.trendChipDp + 2 * l.cardGapDp + DashLayout.TREND_MAX_ROWS * l.trendRowDp <= l.trendBodyDp)
-      assertTrue("${l.name()}: L and R stay in their row", l.trendAxisButtonDp < l.trendRowDp)
-    }
   }
 
   /**

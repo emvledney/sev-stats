@@ -113,14 +113,16 @@ class PlainEfficiencyTest {
     changedAt.zipWithNext { a, b -> assertTrue("$a then $b", b - a >= SessionTracker.RANGE_EVERY_MS) }
   }
 
+  /** Net regen is a negative figure, by the owner's choice (2026-11-17): it was a dash before. */
   @Test
-  fun netRegenIsNoFigureUntilThereIsEnergyToDivideAgain() {
+  fun netRegenIsANegativeFigure() {
     val d = Truck()
     d.run(30.0, mps, kw(2.3))
     assertNotNull(d.s().plainEfficiency.driveMPerWh)
     d.run(120.0, mps, -40.0)
     assertTrue(d.s().usedWh < 0)
-    assertEquals(PlainEfficiency(), d.s().plainEfficiency)
+    assertTrue(d.s().plainEfficiency.driveMPerWh!! < 0)
+    assertTrue(d.s().plainEfficiency.recentMPerWh!! < 0)
     d.run(300.0, mps, 40.0)
     assertTrue(d.s().usedWh > 0)
     assertNotNull(d.s().plainEfficiency.driveMPerWh)
@@ -128,13 +130,14 @@ class PlainEfficiencyTest {
   }
 
   @Test
-  fun aLongDescentLeavesTheDriveFigureAndBlanksTheRecentOne() {
+  fun aLongDescentLeavesTheDriveFigureAndTurnsTheRecentOneNegative() {
     val d = Truck()
     d.run(1800.0, mps, kw(2.3))
     d.run(windowS + 15.0, mps, -5.0)
     val p = d.s().plainEfficiency
-    assertNotNull(p.driveMPerWh)
-    assertNull(p.recentMPerWh)
+    assertTrue(p.driveMPerWh!! > 0)
+    // The owner, 2026-11-17: a negative figure, not a dash.
+    assertTrue(p.recentMPerWh!! < 0)
   }
 
   @Test
@@ -172,10 +175,12 @@ class PlainEfficiencyTest {
   fun withNothingToDivideThereIsNoFigure() {
     assertNull("no distance yet", SessionTracker.plainFrom(0.0, 100.0))
     assertNull("no energy used yet", SessionTracker.plainFrom(1_000.0, 0.0))
-    assertNull("regen put it all back", SessionTracker.plainFrom(1_000.0, -50.0))
+    // More put back than used: negative, not a dash (the owner, 2026-11-17).
+    assertEquals(-20.0, SessionTracker.plainFrom(1_000.0, -50.0)!!, 0.0)
     val e = SessionTracker.MAX_PLAIN_M_PER_WH
     assertNotNull("20 mi/kWh", SessionTracker.plainFrom(e * 1_000.0, 1_000.0))
     assertNull("above it: a moment on a descent, not a figure to read", SessionTracker.plainFrom(e * 1_001.0, 1_000.0))
+    assertNull("and beyond it the other way", SessionTracker.plainFrom(e * 1_001.0, -1_000.0))
   }
 
   /** The simulated drive stops often, with regen: a figure throughout, once it has been moving a minute. */

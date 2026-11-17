@@ -4,8 +4,6 @@ import dev.silveradostats.link.LinkStatus
 import dev.silveradostats.link.LiveState
 import dev.silveradostats.link.LiveValue
 import dev.silveradostats.obd.TestSupport
-import dev.silveradostats.ui.live.DistUnit
-import dev.silveradostats.ui.live.TempUnit
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -234,6 +232,18 @@ class LogModelTest {
     assertTrue("a clock that went backwards must not stop the log", visit(4, last = at + 60_000))
   }
 
+  /** Owner, 2026-11-13: the MX+ link is held behind another app, by the same fail-safe as a visit. */
+  @Test
+  fun theBackgroundHoldNeedsThePositiveIgnitionOn() {
+    fun hold(ignition: Int?, demo: Boolean = false, chosen: Boolean = true, off: Boolean = false) = LogPolicy.holdAllowed(ignition, demo, chosen, off)
+    assertTrue(hold(4))
+    assertTrue(hold(5))
+    for (state in listOf(null, 0, 1, 2, 3)) assertFalse("ignition $state", hold(state))
+    assertFalse(hold(4, demo = true))
+    assertFalse(hold(4, chosen = false))
+    assertFalse("the user disconnected the MX+", hold(4, off = true))
+  }
+
   @Test
   fun rowCadence() {
     assertTrue(LogPolicy.mxRowDue(null, at))
@@ -263,15 +273,6 @@ class LogModelTest {
     assertEquals("3.6729", cells[names.indexOf("cell_min_v")])
     assertEquals("42", cells[names.indexOf("soc_pct")])
     assertEquals("", cells[names.indexOf("capacity_kwh")])
-  }
-
-  @Test
-  fun modelsNeverOverlapWithDemoStorage() {
-    // Demo rows exist only in memory, for the Trends tab; they look like any other row to the chart.
-    val rows = DemoLog.rows(at)
-    assertTrue(rows.isNotEmpty())
-    val c = TrendsModel.chart(rows, TrendRange.MONTH, TrendMeasure.SOC, TrendMeasure.MODULE_TEMPS, TempUnit.F, DistUnit.MI, at)
-    assertTrue(c.left.hasData && c.right.hasData)
   }
 
   private companion object {

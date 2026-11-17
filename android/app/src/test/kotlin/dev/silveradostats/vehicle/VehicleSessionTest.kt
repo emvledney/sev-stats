@@ -134,7 +134,6 @@ class VehicleSessionTest {
     assertEquals(0, src.reads)
     // The drive starts when the demo leaves Park, a few seconds into its head start.
     assertTrue("head start ${st.activeMs}", st.activeMs >= VehicleSession.DEMO_HEAD_START_MS - DemoDrive.PARK_MS)
-    assertEquals(EffStatus.OK, st.efficiency.status)
     assertTrue(st.distanceM > 10_000)
 
     // Reset: a demo starts from the beginning of its drive (warming up again).
@@ -144,7 +143,6 @@ class VehicleSessionTest {
     runCurrent()
     val r = s.state.value
     assertTrue(r.activeMs < 5_000)
-    assertEquals(EffStatus.WARMING_UP, r.efficiency.status)
     assertTrue(r.feed.sampling)
 
     // Demo off: a new session from the car.
@@ -546,7 +544,7 @@ class VehicleSessionTest {
       rel += 500
     }
     val st = t.snapshot()
-    val miPerKwh = EffUnits.miPerKwh(st.efficiency.mPerWh!!)
+    val miPerKwh = EffUnits.miPerKwh(st.distanceM / st.usedWh)
     assertTrue("efficiency $miPerKwh", miPerKwh in 2.0..2.7)
     assertTrue("regen samples $regen", regen > 100)
     assertTrue(maxSpeed in 25.0..31.0)

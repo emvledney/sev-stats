@@ -80,7 +80,6 @@ fun DiagnosticsScreen(
   onOpenAppSettings: () -> Unit,
 ) {
   val s by vm.state.collectAsStateWithLifecycle()
-  ComposeInsetsProbe(vm)
 
   Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
     LazyColumn(
@@ -94,23 +93,8 @@ fun DiagnosticsScreen(
       item(key = "permissions") { PermissionsSection(s, onRequestPermissions, onOpenAppSettings) }
       item(key = "mxlink") { MxLinkSection(liveVm, onRequestPermissions) }
       item(key = "upload") { UploadSection(vm) }
-      item(key = "report") { ReportSection(s, vm, liveVm) }
     }
   }
-}
-
-/** Measures the insets as Compose sees them, for the report. */
-@Composable
-private fun ComposeInsetsProbe(vm: DiagnosticsViewModel) {
-  val d = LocalDensity.current
-  val dir = LocalLayoutDirection.current
-  fun fmt(w: WindowInsets) = "left ${w.getLeft(d, dir)}, top ${w.getTop(d)}, right ${w.getRight(d, dir)}, bottom ${w.getBottom(d)}"
-  val kvs = listOf(
-    KV("Compose safeDrawing (px)", fmt(WindowInsets.safeDrawing)),
-    KV("Compose systemBars (px)", fmt(WindowInsets.systemBars)),
-    KV("Compose displayCutout (px)", fmt(WindowInsets.displayCutout)),
-  )
-  LaunchedEffect(kvs) { vm.setComposeDisplay(kvs) }
 }
 
 // --- Building blocks ---------------------------------------------------------------------------
@@ -198,14 +182,14 @@ private fun Header() {
 private fun CrashSection(text: String, onClear: () -> Unit) {
   Section(
     "Last crash",
-    "The app crashed on an earlier run. The full text is in the report until you clear it.",
+    "The app crashed on an earlier run. It stays here until you clear it.",
     action = "Clear" to onClear,
   ) {
     val lines = text.lines()
     val shown = lines.take(CRASH_LINES_SHOWN).joinToString("\n")
     val more = lines.size - CRASH_LINES_SHOWN
     Text(
-      if (more > 0) "$shown\n… $more more lines in the report" else shown,
+      if (more > 0) "$shown\n… $more more lines" else shown,
       style = MaterialTheme.typography.bodySmall,
       fontFamily = FontFamily.Monospace,
       color = StatusError,
@@ -279,26 +263,5 @@ private fun UploadSection(vm: DiagnosticsViewModel) {
       }
     }
     u.status?.let { Text(it, color = if (u.failed) StatusError else StatusOk) }
-  }
-}
-
-@Composable
-private fun ReportSection(s: DiagState, vm: DiagnosticsViewModel, liveVm: LiveViewModel) {
-  Section("Report", "JSON of everything on this screen, POSTed to the laptop running ./probe receive.") {
-    Row(horizontalArrangement = Arrangement.spacedBy(16.dp), verticalAlignment = Alignment.CenterVertically) {
-      OutlinedTextField(
-        value = s.reportUrl,
-        onValueChange = vm::setReportUrl,
-        label = { Text("Laptop URL") },
-        singleLine = true,
-        textStyle = MaterialTheme.typography.bodyLarge,
-        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
-        modifier = Modifier.weight(1f),
-      )
-      BigButton(if (s.reportSending) "Sending…" else "Send to laptop", enabled = !s.reportSending, onClick = { vm.sendReport(liveVm.reportData()) })
-    }
-    s.reportStatus?.let {
-      Text(it, color = if (it.startsWith("Sent")) StatusOk else if (it.startsWith("Failed")) StatusError else TextDim)
-    }
   }
 }

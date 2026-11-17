@@ -24,8 +24,8 @@ class ProfileTest {
   @Test
   fun assetProfileLoads() {
     assertEquals("silverado-ev", prof.name)
-    assertEquals(68, prof.didFields.size) // + soc_pack_2 (2B43 byte 1), 2026-11-13
-    assertEquals(50, prof.reads().size)
+    assertEquals(71, prof.didFields.size) // + the three energy totals (27B9, 27BA, 27BB), 2026-11-16
+    assertEquals(52, prof.reads().size) // + 27BA and 27BB, 2026-11-16 (27B9 was read already)
     val soc = prof.didFields.single { it.name == "soc" }
     assertEquals(0x27C6, soc.did)
     assertEquals("confirmed", soc.status)

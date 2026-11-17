@@ -60,7 +60,6 @@ import dev.silveradostats.ui.map.MapRangeSummary
 import dev.silveradostats.ui.map.MapScreen
 import dev.silveradostats.ui.simple.SimpleModel
 import dev.silveradostats.ui.simple.SimpleScreen
-import dev.silveradostats.ui.trends.TrendsScreen
 import dev.silveradostats.ui.theme.CardEdge
 import dev.silveradostats.ui.theme.CardShape
 import dev.silveradostats.ui.theme.TextDim
@@ -80,13 +79,14 @@ import androidx.compose.ui.geometry.Size
 typealias Chrome = @Composable (summary: @Composable RowScope.() -> Unit, controls: @Composable RowScope.() -> Unit) -> Unit
 
 /**
- * Top-level layout: a rail of five buttons down the left edge (API | OBD | Trends | Map | Diagnostics, the
+ * Top-level layout: a rail of four buttons down the left edge (API | OBD | Map | Diagnostics, the
  * last one remembered) and the selected screen beside it, sized from the room this composition actually
  * got after insets and the rail, never from a known panel. Which tabs use the OBD link: UiSettings.wantsObd.
  *
- * The rail always shows all five, parked or driving, by the owner's choice (2026-11-11). While the truck
- * is out of Park (`layout.restricted`) Diagnostics and Trends can be selected but show only
- * [AvailableInParkPanel]; none of their tables, charts, pairing, fields or buttons compose.
+ * The rail always shows all four, parked or driving, by the owner's choice (2026-11-11). While the truck
+ * is out of Park (`layout.restricted`) Diagnostics can be selected but shows only
+ * [AvailableInParkPanel]; none of its tables, pairing, fields or buttons compose.
+ * Trends went on 2026-11-15 (owner): the log is reviewed on the stats server.
  * Simple is the one page that does not change with the gear ([DashLayout.ofSimple]).
  */
 @Composable
@@ -142,6 +142,7 @@ fun AppShell(
           val session by liveVm.shownSession.collectAsStateWithLifecycle()
           val live by liveVm.shownLive.collectAsStateWithLifecycle()
           val lastCharge by liveVm.lastCharge.collectAsStateWithLifecycle()
+          val energy by liveVm.energySplit.collectAsStateWithLifecycle()
           // No gear in this one: shifting moves nothing on the page.
           // Its buttons (MX+, Reset) go to the foot of the rail, so the page has no header row.
           val simpleLayout = remember(maxWidth, maxHeight, fontScale) { DashLayout.ofSimple(maxWidth.value, maxHeight.value, fontScale).withoutHeader() }
@@ -149,6 +150,7 @@ fun AppShell(
             session = session,
             mxCapacityKwh = SimpleModel.mxCapacityKwh(live),
             lastCharge = lastCharge,
+            energy = energy,
             settings = settings,
             layout = simpleLayout,
             driving = restricted,
@@ -178,12 +180,6 @@ fun AppShell(
             onMxAction = liveVm::onMxAction,
             onOpenDiagnostics = { liveVm.selectTab(AppTab.DIAGNOSTICS) },
           )
-        }
-        AppTab.TRENDS -> if (layout.restricted) {
-          AvailableInParkPanel(layout, stateKnown, liveVm.drivingInputs, "Trends")
-        } else {
-          val live by liveVm.shownLive.collectAsStateWithLifecycle()
-          TrendsScreen(settings, live.status, layout, chrome)
         }
         AppTab.MAP -> {
           val session by liveVm.shownSession.collectAsStateWithLifecycle()

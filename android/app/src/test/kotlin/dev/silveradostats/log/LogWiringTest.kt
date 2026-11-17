@@ -19,12 +19,12 @@ class LogWiringTest {
   fun theOnlyWayTheLogConnectsToTheMxIsTheGatedVisit() {
     val hub = src("log/LogHub.kt")
     assertEquals("one connection for the log", 1, Regex("""\bLinkConnection\(""").findAll(hub).count())
-    val visit = hub.substring(hub.indexOf("suspend fun visit("), hub.indexOf("/** What Trends draws"))
+    val visit = hub.substring(hub.indexOf("suspend fun visit("), hub.indexOf("/** Writes the whole log to [uri] as CSV"))
     assertTrue(visit.indexOf("LogPolicy.visitAllowed(") in 0 until visit.indexOf("LinkConnection("))
     assertTrue("a visit always lets go", visit.contains("link.close()"))
     assertEquals(setOf("LogScheduler.kt"), callers(Regex("""\bhub\.visit\(""")))
     // It goes through the app's link service: no socket, transport or poller of its own.
-    for (name in listOf("log/LogHub.kt", "log/LogScheduler.kt", "log/LogModel.kt", "log/TrendsModel.kt")) {
+    for (name in listOf("log/LogHub.kt", "log/LogScheduler.kt", "log/LogModel.kt")) {
       assertFalse(name, Regex("""\b(BluetoothSocket|ElmTransport|ElmLink|Poller|LinkEngine|UdsClient)\b""").containsMatchIn(src(name)))
     }
   }
@@ -49,26 +49,13 @@ class LogWiringTest {
     assertFalse(onScreen.contains("visit("))
   }
 
+  /** Trends went on 2026-11-15 (owner): the log is reviewed on the stats server, the app only writes and uploads it. */
   @Test
-  fun trendsIsParkedOnlyAndNeedsNoObd() {
-    val shell = src("ui/AppShell.kt")
-    val branch = shell.substring(shell.indexOf("AppTab.TRENDS -> if (layout.restricted) {"), shell.indexOf("AppTab.DIAGNOSTICS -> Column"))
-    assertTrue(branch.indexOf("AvailableInParkPanel(") in 0 until branch.indexOf("} else {"))
-    assertTrue(branch.indexOf("} else {") < branch.indexOf("TrendsScreen("))
-    // Always offered in the rail (the owner's choice, 2026-11-11): restricted, selecting Trends leads only to the panel above.
-    assertTrue(shell.contains("AppTab.entries.filter { it != AppTab.DIAGNOSTICS }.forEach { t -> NavButton("))
-    assertEquals(setOf("AppShell.kt"), callers(Regex("""(?<!fun )\bTrendsScreen\(""")))
-    assertTrue(src("link/AppSettings.kt").contains("TRENDS(\"Trends\", false)"))
-    assertFalse("one page", Regex("""\bverticalScroll\b|\bLazyColumn\b|\bhorizontalScroll\b""").containsMatchIn(src("ui/trends/TrendsScreen.kt")))
-  }
-
-  @Test
-  fun aPageIsWorkedOutOffTheMainThreadFromOneLoad() {
-    val screen = src("ui/trends/TrendsScreen.kt")
-    val load = screen.substring(screen.indexOf("val page by produceState"), screen.indexOf("val saver ="))
-    assertTrue(load.contains("withContext(Dispatchers.IO)"))
-    assertTrue(load.contains("TrendsModel.page(hub.trendData("))
-    assertFalse("the only place rows are read", Regex("""\.trendData\(""").findAll(screen.replace(load, "")).any())
+  fun thereIsNoTrendsTab() {
+    assertFalse(src("link/AppSettings.kt").contains("TRENDS"))
+    assertEquals(emptySet<String>(), callers(Regex("""\bTrends(Screen|Model)\b|\bDemoLog\b""")))
+    // The rail offers every tab but Settings, whose gear is at its foot.
+    assertTrue(src("ui/AppShell.kt").contains("AppTab.entries.filter { it != AppTab.DIAGNOSTICS }.forEach { t -> NavButton("))
   }
 
   /**
@@ -91,9 +78,8 @@ class LogWiringTest {
     assertTrue(client.contains("""if (u.protocol != "https") return"""))
     assertTrue(client.contains("conn.instanceFollowRedirects = false"))
     assertTrue(src("log/UploadModel.kt").contains("""if (!b.startsWith("https://")"""))
-    // The token stays in the upload's own preferences: the report and the CSV export never read them.
+    // The token stays in the upload's own preferences: nothing else reads them (the report went on 2026-11-17).
     assertEquals(setOf("Uploader.kt"), callers(Regex("""getSharedPreferences\("upload\"""")))
-    assertFalse(src("report/Report.kt").contains("Uploader"))
     // It runs from the hourly job after its rows are in, and while a screen is up; pairing only from Settings.
     val job = src("log/LogScheduler.kt")
     assertTrue(job.indexOf("hub.visit(hub.logCar(LogTrigger.JOB))") in 0 until job.indexOf("Uploader.get(this@LogJobService).run()"))
@@ -104,9 +90,6 @@ class LogWiringTest {
   @Test
   fun demoDataStaysOutOfTheStore() {
     val hub = src("log/LogHub.kt")
-    assertEquals("demo rows only for the chart", 1, Regex("""\bDemoLog\.rows\(""").findAll(hub).count())
-    val export = hub.substring(hub.indexOf("suspend fun export("), hub.indexOf("private suspend fun save("))
-    assertFalse(export.contains("DemoLog"))
     assertTrue(hub.contains("if (s.demo || s.status != LinkStatus.CONNECTED) return"))
   }
 }

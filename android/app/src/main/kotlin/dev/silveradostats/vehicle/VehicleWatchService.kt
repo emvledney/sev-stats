@@ -13,10 +13,13 @@ import dev.silveradostats.BuildConfig
 import dev.silveradostats.R
 import dev.silveradostats.diag.CrashLog
 import dev.silveradostats.link.AppSettings
+import dev.silveradostats.link.LinkConnection
+import dev.silveradostats.log.LogPolicy
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
@@ -26,8 +29,10 @@ import kotlinx.coroutines.launch
  * choice (2026-11-06): a drive with Maps in front is measured whole, and a charge is seen as soon as the
  * head unit is up. It has to be a foreground service, or Android freezes the process within minutes.
  *
- * Read-only, and the truck's API only: all it does is attach to the session (VehicleSession.setWatching).
- * It never touches the OBD link, so nothing goes out to the MX+ because of it. It holds no wake lock, so it
+ * Read-only. It attaches to the session (VehicleSession.setWatching) and, by the owner's choice
+ * (2026-11-13), holds the OBD link through the app's one LinkConnection, so the MX+ stays connected and
+ * polled behind another app: only with an MX+ chosen, not disconnected, and the truck positively on
+ * (LogPolicy.holdAllowed), so it can never keep a parked truck awake. It holds no wake lock, so it
  * runs while the head unit is up and not at all while it sleeps. It has no screen, and without the
  * notification permission, which the app does not ask for, Android 13 and later show no notification for it.
  * Not with demo data: a simulated drive has nothing to measure.
@@ -36,6 +41,7 @@ class VehicleWatchService : Service() {
   private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
   private val token = Any()
   private var session: VehicleSession? = null
+  private var link: LinkConnection? = null
 
   override fun onCreate() {
     super.onCreate()
@@ -52,6 +58,13 @@ class VehicleWatchService : Service() {
     session = s
     s.attach(token)
     s.setWatching(true)
+    // Owner, 2026-11-13: the MX+ stays connected behind another app, only while the truck says it is on.
+    val held = LinkConnection(this, scope)
+    link = held
+    scope.launch {
+      combine(AppSettings.get(this@VehicleWatchService).state, s.state) { a, v -> LogPolicy.holdAllowed(v.ignition, a.demo, a.mxAddress != null, a.mxOff) }
+        .distinctUntilChanged().collect { held.setHeld(it) }
+    }
     scope.launch {
       AppSettings.get(this@VehicleWatchService).state.map { it.demo }.distinctUntilChanged().collect { demo -> if (demo) stopSelf() }
     }
@@ -63,6 +76,7 @@ class VehicleWatchService : Service() {
 
   override fun onDestroy() {
     scope.cancel()
+    link?.close()
     session?.let {
       it.setWatching(false)
       it.detach(token)

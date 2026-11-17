@@ -24,8 +24,9 @@ import java.io.Closeable
  *
  * Binds for its whole lifetime (a ViewModel's) so the engine keeps its
  * history while the app is in the background. Two attachments, independent of each other:
- *  - the OBD engine: only while [setVisible] is true AND the screen wants OBD ([setObdWanted]), so the
- *    MX+ is polled only while a screen that uses its data is on (UiSettings.wantsObd);
+ *  - the OBD engine: while [setVisible] is true AND the screen wants OBD ([setObdWanted]), so a screen
+ *    polls the MX+ only while it uses its data (UiSettings.wantsObd); or while held ([setHeld]), which
+ *    is VehicleWatchService keeping the link up behind another app with the truck on (owner, 2026-11-13);
  *  - the built-in vehicle session (LinkService.vehicle): for the whole binding, visible or not.
  *    VehicleWatchService keeps it sampling behind another app; without that one Android freezes an app
  *    with no visible screen after 10 s to about 6 min on API 34, and with no visible screen and the
@@ -36,6 +37,7 @@ class LinkConnection(context: Context, scope: CoroutineScope, obdWanted: Boolean
   private val app = context.applicationContext
   private val token = Any()
   private var visible = false
+  private var held = false
   private var obd = obdWanted
   private var engineAttached = false
   private var closed = false
@@ -89,10 +91,19 @@ class LinkConnection(context: Context, scope: CoroutineScope, obdWanted: Boolean
     syncEngine()
   }
 
-  /** Attaches to the OBD engine exactly while visible and wanted; never re-sends an attach. */
+  /**
+   * The background service's hold (owner, 2026-11-13): the OBD engine stays attached with no screen up,
+   * so the MX+ stays connected behind another app. Not a visible screen to the built-in session.
+   */
+  fun setHeld(h: Boolean) {
+    held = h
+    syncEngine()
+  }
+
+  /** Attaches to the OBD engine exactly while visible or held, and wanted; never re-sends an attach. */
   private fun syncEngine() {
     val s = _service.value ?: return
-    val want = visible && obd && !closed
+    val want = (visible || held) && obd && !closed
     if (want == engineAttached) return
     engineAttached = want
     if (want) s.engine.attach(token) else s.engine.detach(token)

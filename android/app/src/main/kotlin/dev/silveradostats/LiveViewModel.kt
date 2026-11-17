@@ -12,10 +12,10 @@ import dev.silveradostats.link.LiveState
 import dev.silveradostats.link.MxAction
 import dev.silveradostats.link.UiSettings
 import dev.silveradostats.log.LogHub
-import dev.silveradostats.report.MxReport
 import dev.silveradostats.vehicle.DemoDrive
 import dev.silveradostats.vehicle.DrivingInputs
 import dev.silveradostats.vehicle.DrivingMonitor
+import dev.silveradostats.vehicle.EnergySplit
 import dev.silveradostats.vehicle.LastCharge
 import dev.silveradostats.vehicle.SessionState
 import dev.silveradostats.vehicle.heldWhile
@@ -34,7 +34,7 @@ import kotlinx.coroutines.launch
  *
  * [restricted] is the one driving state of the main screen. Simple's header works the same in every
  * gear, by the owner's choice: its tabs, Reset session and the MX+ button. Beyond that,
- * while it is true Live hides its controls and Trends and Diagnostics are one text panel, and every
+ * while it is true Live hides its controls and Diagnostics is one text panel, and every
  * other action here is refused as well ([parkedOnly]), so a stale tap cannot start anything from
  * behind the driving state.
  */
@@ -70,6 +70,9 @@ class LiveViewModel(app: Application) : AndroidViewModel(app) {
   val lastCharge: StateFlow<LastCharge?> =
     combine(LogHub.get(app).lastCharge, store.state, shownSession) { c, s, session -> if (s.demo) DemoDrive.lastCharge(session.distanceM) else c }
       .stateIn(viewModelScope, SharingStarted.Eagerly, if (store.state.value.demo) DemoDrive.LAST_CHARGE else LogHub.get(app).lastCharge.value)
+
+  /** Where the energy went, for the Simple tab: null with no MX+ link. */
+  val energySplit: StateFlow<EnergySplit?> = LogHub.get(app).energySplit
 
   /** What the MX+ button offers now, from the same figures the screens draw. */
   val mxAction: StateFlow<MxAction> =
@@ -169,8 +172,6 @@ class LiveViewModel(app: Application) : AndroidViewModel(app) {
   fun testLink() = parkedOnly {
     conn.service.value?.bt?.testLink()
   }
-
-  fun reportData(): MxReport = MxReport(settings.value, bt.value, live.value, session.value)
 
   override fun onCleared() {
     driving.close()

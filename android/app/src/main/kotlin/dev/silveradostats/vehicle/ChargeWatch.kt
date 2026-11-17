@@ -253,8 +253,8 @@ class ChargeWatch(start: ChargeWatchState = ChargeWatchState()) {
 /** The level it reached minus [levelWh], never below zero: the demo's figure, and all a charge from before the running total has. */
 fun LastCharge.usedSinceWh(levelWh: Double?): Double? = levelWh?.let { (toWh - it).coerceAtLeast(0.0) }
 
-/** What the Simple tab's last line reads: the running total where there is one. Never below zero. */
-fun LastCharge.usedNowWh(levelWh: Double?): Double? = usedWh?.coerceAtLeast(0.0) ?: usedSinceWh(levelWh)
+/** What the Simple tab's last line reads: the running total where there is one, below zero too when regen has put back more than was used (the owner, 2026-11-17). */
+fun LastCharge.usedNowWh(levelWh: Double?): Double? = usedWh ?: usedSinceWh(levelWh)
 
 /**
  * How far the level stands from what the charge and the energy used say it should be, the owner's figure

@@ -47,7 +47,13 @@ class UltiumSim(private val clock: () -> Double = Monotonic::seconds) {
         0x27AF -> return u16(s.soc / 100 * 205.4 * 100)
         0x27AE -> return u16(20520.0)
         0x2B44 -> return u16(59340.0) + byteArrayOf(22)
-        0x27B9 -> return bytesFromHex("001566")
+        0x27B9, 0x27BA, 0x27BB -> {
+          // kWh x 100 since the last full charge: driving, thermal, and a little of neither in the total
+          val driving = 3520 + (s.t * 0.4).toLong()
+          val thermal = 450 + (s.t * 0.05).toLong()
+          val total = driving + thermal + 147 + (s.t * 0.012).toLong()
+          return u24(when (did) { 0x27B9 -> total; 0x27BA -> driving; else -> thermal })
+        }
         0x2984 -> return bytesFromHex("2041")
         0x270D -> return bytesFromHex("0fa0")
         0x28AF -> return bytesFromHex("2710")

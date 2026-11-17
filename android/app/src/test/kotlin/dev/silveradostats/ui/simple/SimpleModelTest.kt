@@ -7,7 +7,9 @@ import dev.silveradostats.vehicle.CarPerm
 import dev.silveradostats.vehicle.DemoDrive
 import dev.silveradostats.vehicle.DemoSource
 import dev.silveradostats.vehicle.EffUnits
+import dev.silveradostats.vehicle.EnergyParts
 import dev.silveradostats.vehicle.EnergySource
+import dev.silveradostats.vehicle.EnergySplit
 import dev.silveradostats.vehicle.Feed
 import dev.silveradostats.vehicle.FeedKind
 import dev.silveradostats.vehicle.LastCharge
@@ -53,6 +55,38 @@ class SimpleModelTest {
     // Miles and kWh for this drive and nothing else.
     assertEquals(Stat("Trip", "9.8", "mi", emptyList()), v.trip)
     assertEquals(Stat("Used", "4.21", "kWh", emptyList()), v.energyUsed)
+  }
+
+  /** Trip and Used each hold two figures, this drive's over the last 15 minutes' (the owner, 2026-11-16). */
+  @Test
+  fun tripAndUsedAlsoShowTheLastFifteenMinutes() {
+    val v = build(state().copy(recentDistanceM = 5.9 * mile, recentUsedWh = 3_100.0))
+    assertEquals(Stat("last 15 min", "5.9", "mi", emptyList()), v.tripRecent)
+    assertEquals(Stat("last 15 min", "3.10", "kWh", emptyList()), v.energyUsedRecent)
+    // Nothing read yet: a dash, not a zero.
+    assertEquals(Stat("last 15 min", "—", "kWh", emptyList(), hasValue = false), build(state()).energyUsedRecent)
+    assertFalse(build(state()).tripRecent.hasValue)
+  }
+
+  /** The energy band (the owner, 2026-11-16): driving, climate and the rest for three windows, from the MX+ only. */
+  @Test
+  fun theEnergyBandSplitsEachWindow() {
+    val split = EnergySplit(drive = EnergyParts(6_910.0, 820.0, 230.0), recent = null, charge = EnergyParts(35_900.0, 4_600.0, 1_500.0))
+    val (drive, recent, charge) = SimpleModel.build(state(), DistUnit.MI, energy = split).energy
+    assertEquals("This drive", drive.title)
+    assertEquals("7.96 kWh", drive.total)
+    assertEquals(listOf("Driving" to "6.91", "Climate" to "0.82", "Other" to "0.23"), drive.parts.map { it.label to it.value })
+    assertEquals(1f, drive.parts.sumOf { it.share.toDouble() }.toFloat(), 0.001f)
+    assertEquals(6_910f / 7_960f, drive.parts[0].share, 0.001f)
+    // Linked, but this window has nothing to go by yet.
+    assertEquals(EnergyWindow("Last 15 min", "no reading", listOf("Driving", "Climate", "Other").map { EnergyPart(it, "—", 0f) }, hasValue = false), recent)
+    assertEquals("Since charge" to "42.00 kWh", charge.title to charge.total)
+    // No MX+: the car's API has no such figures, and nothing is made up for them.
+    build(state()).energy.forEach { w ->
+      assertEquals("needs the MX+", w.total)
+      assertFalse(w.hasValue)
+      assertTrue(w.parts.all { it.value == "—" && it.share == 0f })
+    }
   }
 
   @Test
@@ -149,7 +183,7 @@ class SimpleModelTest {
 
   @Test
   fun theUsedTileHasNoBadgeWhateverItIsMeasuredFrom() {
-    val mx = build(state().copy(energySource = EnergySource.MX_PACK, energyOutWh = 5_020.0, energyInWh = 810.0, levelUsedWh = 4_680.0))
+    val mx = build(state().copy(energySource = EnergySource.MX_PACK, levelUsedWh = 4_680.0))
     assertNull(mx.energyUsed.marker)
     assertEquals("205.1", build(state().copy(usedWh = 205_080.0)).energyUsed.value)
     assertFalse(build(SessionState()).energyUsed.hasValue)
@@ -199,7 +233,8 @@ class SimpleModelTest {
     val c = build(state().copy(levelWh = 144_400.0), lastCharge = LastCharge(186_400.0, 90.88, 39_500.0)).charge
     assertEquals(Stat("used since", "39.5", "kWh", emptyList()), c.used)
     assertEquals("known before the level is", "39.5", build(state().copy(levelWh = null), lastCharge = LastCharge(186_400.0, 90.88, 39_500.0)).charge.used.value)
-    assertEquals("regen just after a charge is not less than none", "0.0", build(state(), lastCharge = LastCharge(186_400.0, 90.88, -200.0)).charge.used.value)
+    // Counted as it is, below zero too (the owner, 2026-11-17): it read 0.0 before.
+    assertEquals("regen just after a charge", "−0.2", build(state(), lastCharge = LastCharge(186_400.0, 90.88, -200.0)).charge.used.value)
   }
 
   /** 88.2 mi on 39.4 kWh. Miles that are not known, or nothing yet used: a dash, not a figure with half its facts. */
@@ -212,7 +247,8 @@ class SimpleModelTest {
     assertEquals("a charge from before the miles were counted", "—", since(LastCharge(186_400.0, 90.88, 39_400.0)).value)
     assertFalse(since(LastCharge(186_400.0, 90.88, 39_400.0)).hasValue)
     assertEquals("nothing used yet", "—", since(LastCharge(186_400.0, 90.88, 0.0, drivenM = 0.0)).value)
-    assertEquals("regen just after a charge", "—", since(LastCharge(186_400.0, 90.88, -200.0, drivenM = 800.0)).value)
+    // Half a mile with 0.2 kWh put back: a negative figure, not a dash (the owner, 2026-11-17).
+    assertEquals("regen just after a charge", "−2.49", since(LastCharge(186_400.0, 90.88, -200.0, drivenM = 800.0)).value)
   }
 
   @Test

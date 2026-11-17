@@ -70,8 +70,12 @@ class UltiumSim:
                 return _u16(20520.0)
             if did == 0x2B44:
                 return _u16(59340.0) + bytes([22])
-            if did == 0x27B9:
-                return bytes.fromhex("001566")
+            if did in (0x27B9, 0x27BA, 0x27BB):
+                # kWh x 100 since the last full charge: driving, thermal, and a little of neither in the total
+                driving = 3520 + int(s["t"] * 0.4)
+                thermal = 450 + int(s["t"] * 0.05)
+                total = driving + thermal + 147 + int(s["t"] * 0.012)
+                return {0x27B9: total, 0x27BA: driving, 0x27BB: thermal}[did].to_bytes(3, "big")
             if did == 0x2984:
                 return bytes.fromhex("2041")
             if did == 0x270D:

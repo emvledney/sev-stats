@@ -172,12 +172,18 @@ enum class LogCol(val key: String) {
   RAW_270D("becm_270d_raw"),
   RAW_28AF("becm_28af_raw"),
   RAW_2770("becm_2770_raw"),
+
+  // The BECM's energy totals since its last full charge (27B9, 27BA, 27BB), as read: what the Simple tab's
+  // breakdown is taken from (2026-11-16). Car Scanner's mapping, not yet matched on this truck.
+  ENERGY_USED_TOTAL_KWH("energy_used_total_kwh"),
+  ENERGY_USED_DRIVING_KWH("energy_used_driving_kwh"),
+  ENERGY_USED_CLIMATE_KWH("energy_used_climate_kwh"),
 }
 
 /**
  * [atMs]: wall clock. [tzMinutes]: the local offset then, so a row keeps the time of day it was taken.
  * [arrays]: what was read position by position with the row (LogRows.ARRAY_CELL_V, ARRAY_MODULE_T), for
- * the upload (owner, 2026-11-13); null = that position gave no reading. Not in the CSV, not drawn by Trends.
+ * the upload (owner, 2026-11-13); null = that position gave no reading. Not in the CSV.
  */
 data class LogRow(
   val atMs: Long,
@@ -266,6 +272,9 @@ object LogRows {
     "aux_12v_dmcm" to LogCol.AUX_12V_DU_V,
     "charge_state_code" to LogCol.CHARGE_STATE_CODE,
     "evse_pilot_current" to LogCol.EVSE_PILOT_A,
+    "energy_used_total" to LogCol.ENERGY_USED_TOTAL_KWH,
+    "energy_used_driving" to LogCol.ENERGY_USED_DRIVING_KWH,
+    "energy_used_climate" to LogCol.ENERGY_USED_CLIMATE_KWH,
   )
 
   /** Profile fields read as miles, logged as km like the built-in range. */
@@ -427,10 +436,16 @@ object LogPolicy {
    * last visit must be old enough. Unknown ignition = no visit.
    */
   fun visitAllowed(ignition: Int?, demo: Boolean, adapterChosen: Boolean, mxOff: Boolean, lastMxRowMs: Long?, nowMs: Long): Boolean {
-    if (demo || !adapterChosen || mxOff) return false
-    if (ignition != IGNITION_ON && ignition != IGNITION_START) return false
+    if (!holdAllowed(ignition, demo, adapterChosen, mxOff)) return false
     return lastMxRowMs == null || nowMs - lastMxRowMs >= JOB_PERIOD_MS / 2 || nowMs < lastMxRowMs
   }
+
+  /**
+   * Whether the background service may keep the MX+ link up with no screen (owner, 2026-11-13). The same
+   * fail-safe as a visit: only with the truck positively on, so it can never keep a parked truck awake.
+   */
+  fun holdAllowed(ignition: Int?, demo: Boolean, adapterChosen: Boolean, mxOff: Boolean): Boolean =
+    !demo && adapterChosen && !mxOff && (ignition == IGNITION_ON || ignition == IGNITION_START)
 }
 
 /** The export format: one header, one line per row, oldest first. Times are UTC plus the local offset. */
@@ -463,3 +478,6 @@ object LogCsv {
   /** At most four decimals (0.1 mV), no trailing zeros, never an exponent. */
   private fun number(x: Double): String = java.math.BigDecimal(x).setScale(4, java.math.RoundingMode.HALF_UP).stripTrailingZeros().toPlainString()
 }
+
+/** The newest value a column has, whichever row it is in. */
+data class LatestValue(val v: Double, val atMs: Long)

@@ -20,13 +20,5 @@ class AppTabTest {
     assertEquals(false, simple(null))
     assertEquals(false, simple("00:04:3E:00:00:09", off = true))
     assertEquals(false, simple("00:04:3E:00:00:09", demo = true))
-    // Trends keeps a chosen MX+ logging, in Park only: while driving it is a text panel.
-    fun trends(address: String?, restricted: Boolean = false, off: Boolean = false, demo: Boolean = false) =
-      UiSettings(demo, address, null, AppTab.TRENDS, mxOff = off).wantsObd(restricted)
-    assertEquals(true, trends("00:04:3E:00:00:09"))
-    assertEquals(false, trends("00:04:3E:00:00:09", restricted = true))
-    assertEquals(false, trends(null))
-    assertEquals(false, trends("00:04:3E:00:00:09", off = true))
-    assertEquals(false, trends("00:04:3E:00:00:09", demo = true))
   }
 }

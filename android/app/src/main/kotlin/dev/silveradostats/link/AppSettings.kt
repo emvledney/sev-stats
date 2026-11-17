@@ -17,7 +17,6 @@ import kotlinx.coroutines.flow.update
 enum class AppTab(val label: String, val needsObd: Boolean) {
   SIMPLE("Simple", false),
   LIVE("Expert", true),
-  TRENDS("Trends", false),
   MAP("Map", false),
   DIAGNOSTICS("Diagnostics", true),
   ;
@@ -44,12 +43,11 @@ data class UiSettings(
 ) {
   /**
    * Whether the OBD link is wanted: on the tabs that show it, and on Simple too with a chosen MX+ that is
-   * not disconnected, because its pack power is what the session's energy is best measured from. The same
-   * on Trends in Park, so that the MX+ keeps logging while its log is being read.
+   * not disconnected, because its pack power is what the session's energy is best measured from.
    */
   fun wantsObd(restricted: Boolean): Boolean {
     val mxUsable = mxAddress != null && !mxOff && !demo
-    return tab.wantsObd(restricted) || (tab == AppTab.SIMPLE && mxUsable) || (tab == AppTab.TRENDS && !restricted && mxUsable)
+    return tab.wantsObd(restricted) || (tab == AppTab.SIMPLE && mxUsable)
   }
 }
 

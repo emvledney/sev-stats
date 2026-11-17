@@ -29,7 +29,7 @@ object AppPermissions {
     Def(Manifest.permission.BLUETOOTH_CONNECT, true, "pair with and connect to the OBDLink MX+ only"),
     Def(Manifest.permission.ACCESS_FINE_LOCATION, true, "the truck's position on the Map tab"),
     Def(Manifest.permission.ACCESS_COARSE_LOCATION, true, "asked together with the precise one, as Android requires"),
-    Def(Manifest.permission.INTERNET, false, "chargers, place search and road distances (Map); Send to laptop report"),
+    Def(Manifest.permission.INTERNET, false, "chargers, place search and road distances (Map); the log's upload"),
     Def(Manifest.permission.ACCESS_NETWORK_STATE, false, "network diagnostics"),
     Def(Manifest.permission.ACCESS_WIFI_STATE, false, "the Wi-Fi enabled row under Network"),
   )

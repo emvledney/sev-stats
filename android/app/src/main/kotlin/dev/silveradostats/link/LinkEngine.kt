@@ -75,7 +75,8 @@ object LinkMessages {
   const val ASLEEP_NO_VOLTAGE = "Truck asleep: single checks at 1, 5 and 30 minutes (this adapter can't report its voltage)."
   const val POLLING_STOPPED = "Polling stopped: the truck stayed asleep. Tap Connect once the truck is on."
   const val POLLING_DEMO = "Simulated truck: these values are not from your battery."
-  const val POLLING = "Reading the truck through the MX+ (read-only, one request at a time)."
+  /** Nothing to say while it works: the chip says "MX+ connected" (owner, 2026-11-15). */
+  const val POLLING = ""
 
   /** Message for a lost link or a timeout that an automatic full reconnect will follow. */
   fun recovering(e: Throwable): String {
@@ -112,7 +113,7 @@ object LinkMessages {
  *
  * Rules:
  *  - polling runs only while at least one client is attached ([attach] / [detach]; the app attaches
- *    while a screen is visible). When the last one detaches, the poller stops before its next
+ *    while a screen is visible, and the background service while the truck is on). When the last one detaches, the poller stops before its next
  *    request. The session is then parked: nothing at all is sent (not even adapter-local commands),
  *    and if no screen comes back within [graceMs] the link (the Bluetooth socket) is closed,
  *    releasing the MX+. A screen that comes back in time resumes the same session and poller (no

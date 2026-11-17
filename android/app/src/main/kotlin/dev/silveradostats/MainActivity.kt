@@ -17,7 +17,6 @@ import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import dev.silveradostats.diag.AppPermissions
 import dev.silveradostats.diag.CrashLog
-import dev.silveradostats.diag.SystemInfo
 import dev.silveradostats.link.AppSettings
 import dev.silveradostats.log.LogHub
 import dev.silveradostats.upload.Uploader
@@ -91,7 +90,7 @@ class MainActivity : ComponentActivity() {
     }
     val logs = LogHub.get(this)
     logs.onAppOpened()
-    // Send to laptop refuses under the restriction, seen from any tab.
+    // The upload's buttons refuse under the restriction, seen from any tab.
     vm.followRestriction(liveVm.restricted)
     // Live energy values: 1 s refresh only while the screen is visible.
     lifecycleScope.launch {
@@ -114,7 +113,7 @@ class MainActivity : ComponentActivity() {
 
   override fun onStart() {
     super.onStart()
-    // OBD polling runs only while a screen of the app is visible (no background polling).
+    // This screen's own OBD polling; behind another app VehicleWatchService holds the link (truck on only).
     liveVm.setVisible(true)
   }
 
@@ -134,9 +133,6 @@ class MainActivity : ComponentActivity() {
     vm.refreshStatic()
     // Also notices a "Nearby devices" grant made in Settings while the app was away.
     liveVm.onPermissionsChanged()
-    vm.setDisplay(SystemInfo.display(this))
-    // Measure again after the first layout pass, when insets are final.
-    window.decorView.post { vm.setDisplay(SystemInfo.display(this)) }
   }
 
   /** [carOnly]: just car energy and speed (the Simple tab), without the Bluetooth ones. */

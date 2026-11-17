@@ -1,0 +1,73 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Simple tab: energy breakdown options</title>
+<style>
+body{background:#1a1c20;color:#F5F7FA;font-family:Roboto,"Segoe UI",sans-serif;margin:0;padding:28px;width:1408px}
+.cap{font-size:26px;font-weight:600;margin:0}
+.sub{font-size:18px;color:#8B94A3;margin:2px 0 0}
+.scr{background:#060708;border-radius:14px;padding:10px;display:flex;gap:22px;margin:10px 0 34px;height:610px}
+.rail{width:222px;display:flex;flex-direction:column;gap:10px}
+.rb{font-size:28px;font-weight:700;color:#8B94A3;border:1px solid #1D2127;border-radius:8px;padding:24px 0;text-align:center;background:#0C0E11}
+.rb.on{color:#F5F7FA;background:#0A2018;border-color:#1F7A5C}
+.main{flex:1;display:flex;flex-direction:column;gap:10px;min-width:0}
+.row{display:flex;gap:10px;flex:1;min-height:0}
+.t{flex:1;min-width:0;background:#0C0E11;border:1px solid #1D2127;border-radius:8px;padding:12px 14px;display:flex;flex-direction:column;overflow:hidden}
+.l{font-size:18px;color:#8B94A3;white-space:nowrap}
+.v{font-weight:700;white-space:nowrap;flex:1;display:flex;align-items:center}
+.v span{font-size:19px;color:#8B94A3;font-weight:400;margin-left:8px;align-self:flex-end;margin-bottom:.5em}
+.v b{align-self:center}
+.c .v{flex:none}.c{justify-content:center}.c .l{font-size:14px}
+.bar{display:flex;height:10px;border-radius:5px;overflow:hidden;gap:2px;flex:none}
+.bar i{display:block}
+.d{background:#00E5A0}.h{background:#4DA3FF}.o{background:#8B94A3}.n{background:#1D2127}
+.k{display:flex;gap:8px;margin-top:6px}
+.k div{flex:1;min-width:0}
+.k b{display:block;white-space:nowrap}
+.k small{font-size:14px;color:#8B94A3;display:flex;align-items:center;gap:5px;white-space:nowrap}
+.k small i{width:8px;height:8px;border-radius:50%;display:inline-block}
+.band{display:flex;gap:10px;flex:none}
+.side{width:250px;flex:none;display:flex;flex-direction:column;gap:10px}
+.tb{width:100%;border-collapse:collapse;margin-top:6px}
+.tb td{font-size:17px;padding:3px 0;white-space:nowrap}
+.tb td+td{text-align:right;font-weight:700}
+.tb td+td+td{color:#8B94A3;font-weight:400;width:48px}
+.tb i{width:8px;height:8px;border-radius:50%;display:inline-block;margin-right:7px}
+.mk{font-size:12px;color:#00E5A0;border:1px solid #1F7A5C;border-radius:4px;padding:0 5px;margin-left:8px}
+</style>
+<div id="out"></div>
+<script>
+// kWh: driving, climate, other. One made-up drive, the same in every option.
+const W={drive:['This drive',6.91,0.82,0.23],recent:['Last 15 min',2.71,0.31,0.08],charge:['Since charge',35.9,4.6,1.5]};
+const N=['Driving','Climate','Other'],C=['d','h','o'];
+const sum=w=>w[1]+w[2]+w[3], pct=(w,i)=>Math.round(w[i]/sum(w)*100);
+const f=x=>x>=10?x.toFixed(1):x.toFixed(2);
+const bar=w=>w?`<div class="bar">${C.map((c,i)=>`<i class="${c}" style="flex:${w[i+1]}"></i>`).join('')}</div>`:`<div class="bar"><i class="n" style="flex:1"></i></div>`;
+// Three figures under a bar: percent (A) or kWh (B).
+const key=(w,mode,sz)=>`<div class="k">${C.map((c,i)=>`<div><b style="font-size:${sz}px;${w?'':'color:#8B94A3'}">${!w?'—':mode==='pct'?pct(w,i+1)+'<span style="font-size:.6em;color:#8B94A3"> %</span>':f(w[i+1])}</b><small><i class="${c}"></i>${N[i]}</small></div>`).join('')}</div>`;
+const tile=(l,v,u,sz,extra='',mk='')=>`<div class="t"><div class="l">${l}${mk?`<span class="mk">${mk}</span>`:''}</div><div class="v" style="font-size:${sz}px"><b>${v}</b><span>${u}</span></div>${extra}</div>`;
+const ctile=(v,u,l,sz,extra='')=>`<div class="t c"><div class="v" style="font-size:${sz}px"><b>${v}</b><span>${u}</span></div><div class="l">${l}</div>${extra}</div>`;
+const rail=`<div class="rail"><div class="rb on">SIMPLE</div><div class="rb">EXPERT</div><div class="rb">MAP</div></div>`;
+// One tile, two windows: this drive over the last 15 minutes.
+const split=(l,u,a,b)=>`<div class="t"><div class="l">${l}</div>${[[a,'this drive'],[b,'last 15 min']].map(r=>`<div style="flex:1;display:flex;align-items:center"><div style="flex:1;display:flex;align-items:baseline;gap:8px;white-space:nowrap"><b style="font-size:42px">${r[0]}</b><span style="font-size:19px;color:#8B94A3">${u}</span><span style="margin-left:auto;font-size:16px;color:#8B94A3">${r[1]}</span></div></div>`).join('')}</div>`;
+const tiles=(sz,x={})=>x.split?`<div class="row">${tile('Remaining','144.5','kWh',sz)}${tile('Capacity','205.1','kWh',sz,'','MX+')}${split('Trip','mi','17.6','5.9')}${tile('This drive','2.22','mi/kWh',sz)}</div>
+<div class="row">${tile('State of charge','70.4','%',sz)}${tile('Range','315','mi',sz,'<div class="l" style="font-size:15px">Truck says 274 mi</div>')}${split('Used','kWh','7.96','3.10')}${tile('Last 15 min','2.18','mi/kWh',sz)}</div>`:`<div class="row">${tile('Remaining','144.5','kWh',sz)}${tile('Capacity','205.1','kWh',sz,'','MX+')}${tile('Trip','17.6','mi',sz)}${tile('This drive','2.22','mi/kWh',sz)}</div>
+<div class="row">${tile('State of charge','70.4','%',sz)}${tile('Range','315','mi',sz,'<div class="l" style="font-size:15px">Truck says 274 mi</div>')}${tile('Used','7.96','kWh',sz,x.used||'')}${tile('Last 15 min','2.18','mi/kWh',sz,x.recent||'')}</div>`;
+const charge=(h,x='')=>`<div class="row" style="flex:none;height:${h}px"><div class="t c" style="flex-direction:row;align-items:center;justify-content:flex-start;gap:26px"><div><div class="v" style="font-size:32px"><b>186.4</b><span style="font-size:13px">kWh</span></div><div class="l">last charged to</div></div><div><div class="v" style="font-size:32px"><b>90.9</b><span style="font-size:13px">%</span></div><div class="l">of capacity</div></div></div>${ctile('42.0','kWh','used since',46,x)}${ctile('2.24','mi/kWh','since',46)}${ctile('0.0','kWh','drift',46)}</div>`;
+const sect=(w,live=true)=>`<div class="t" style="padding:10px 14px"><div class="l" style="display:flex;justify-content:space-between"><span>${w[0]}</span><span>${live?f(sum(w))+' kWh':'needs the MX+'}</span></div><div style="margin-top:8px">${bar(live&&w)}</div>${key(live&&w,'kwh',26)}</div>`;
+const side=w=>`<div class="t"><div class="l">${w[0]}</div><div class="v" style="font-size:34px;flex:none;margin:4px 0 8px"><b>${f(sum(w))}</b><span style="font-size:15px">kWh</span></div>${bar(w)}<table class="tb">${C.map((c,i)=>`<tr><td><i class="${c}"></i>${N[i]}</td><td>${f(w[i+1])}</td><td>${pct(w,i+1)}%</td></tr>`).join('')}</table></div>`;
+const inTile=w=>`<div style="flex:none">${bar(w)}${key(w,'pct',22)}</div>`;
+
+const opts=[
+ ['Chosen 2026-11-16 · B, with Trip and Used split','The band from B. Trip and Used each show this drive over the last 15 minutes.',
+  `<div class="main">${tiles(56,{split:1})}<div class="band">${sect(W.drive)}${sect(W.recent)}${sect(W.charge)}</div>${charge(120)}</div>`],
+ ['A · Inside the tiles that already show each window','Nothing moves and no figure shrinks. Used, Last 15 min and "used since" each gain a bar with the three shares in %.',
+  `<div class="main">${tiles(72,{used:inTile(W.drive),recent:inTile(W.recent)})}${charge(140,`<div style="margin-top:6px">${bar(W.charge)}<div class="l" style="margin-top:4px">${pct(W.charge,1)}% driving · ${pct(W.charge,2)}% climate · ${pct(W.charge,3)}% other</div></div>`)}</div>`],
+ ['B · A band of its own','One row for the three windows, in kWh, between the tiles and the last charge. The eight big figures go from 72 to 56.',
+  `<div class="main">${tiles(56)}<div class="band">${sect(W.drive)}${sect(W.recent)}${sect(W.charge)}</div>${charge(120)}</div>`],
+ ['C · A column on the right','Room for kWh and % in every window. The page becomes five columns, so every tile is a fifth narrower (figures 72 to 58).',
+  `<div class="main">${tiles(58)}${charge(140)}</div><div class="side" style="margin-left:-12px">${side(W.drive)}${side(W.recent)}${side(W.charge)}</div>`],
+ ['B without the MX+','The car API has no climate or accessory energy for a third-party app, so with the adapter off the band is empty.',
+  `<div class="main">${tiles(56)}<div class="band">${sect(W.drive,false)}${sect(W.recent,false)}${sect(W.charge,false)}</div>${charge(120)}</div>`],
+];
+document.getElementById('out').innerHTML=opts.map(o=>`<p class="cap">${o[0]}</p><p class="sub">${o[1]}</p><div class="scr">${rail}${o[2]}</div>`).join('');
+</script>

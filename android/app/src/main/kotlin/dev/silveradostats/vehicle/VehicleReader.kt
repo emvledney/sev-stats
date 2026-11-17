@@ -21,7 +21,7 @@ import java.util.concurrent.ConcurrentHashMap
 
 enum class RowStatus { AVAILABLE, UNAVAILABLE, ERROR }
 
-/** One (property, area) reading. Everything is plain data so it can go straight into the report. */
+/** One (property, area) reading. Plain data. */
 data class PropertyRow(
   val id: Int,
   val idHex: String,
@@ -45,14 +45,6 @@ data class PropertyRow(
   val permissions: String,
   val permissionGranted: Boolean?,
   val note: String,
-)
-
-data class VhalSnapshot(
-  val takenAtMs: Long,
-  val listedCount: Int,
-  val listError: String?,
-  val rows: List<PropertyRow>,
-  val readMs: Long,
 )
 
 data class UxInfo(
@@ -243,105 +235,17 @@ class VehicleReader(context: Context, private val onReady: () -> Unit) {
     return info
   }
 
-  /**
-   * Car API / platform info. Methods newer than the device are caught (NoSuchMethodError).
-   * The version getters are deprecated in newer car libs but are the only source on Android 13/14.
-   */
-  @Suppress("DEPRECATION")
-  fun carApiInfo(): List<KV> {
-    val out = mutableListOf<KV>()
-    out += KV("FEATURE_AUTOMOTIVE", isAutomotive.toString())
-    if (!isAutomotive) return out
-    out += KV(
-      "Car API version (runtime)",
-      guard {
-        val v = Car.getCarVersion()
-        "${v.majorVersion}.${v.minorVersion}"
-      },
-    )
-    out += KV(
-      "Car API major (isApiVersionAtLeast)",
-      guard {
-        // Works on Android 12L too, where getCarVersion() does not exist yet.
-        (29..40).lastOrNull { Car.isApiVersionAtLeast(it) }?.toString() ?: "< 29"
-      },
-    )
-    out += KV(
-      "Car platform version (runtime)",
-      guard {
-        val v = Car.getPlatformVersion()
-        "${v.majorVersion}.${v.minorVersion}"
-      },
-    )
-    out += KV(
-      "Car connection type",
-      guard {
-        when (val t = car?.carConnectionType) {
-          null -> "not connected"
-          Car.CONNECTION_TYPE_EMBEDDED -> "$t (EMBEDDED)"
-          else -> t.toString()
-        }
-      },
-    )
-    return out
-  }
-
-  private inline fun guard(block: () -> String): String = try {
-    block()
-  } catch (e: LinkageError) {
-    "n/a (${e.javaClass.simpleName})"
-  } catch (e: Exception) {
-    "n/a (${e.javaClass.simpleName}: ${e.message})"
-  }
-
-  /**
-   * Reads every property the platform lists for this app plus every known property,
-   * for every area. Blocking binder calls: call from a background thread.
-   */
-  fun readAll(): VhalSnapshot {
-    val t0 = SystemClock.elapsedRealtime()
-    permCache = emptyMap()
-    val cpm = propertyManager
-      ?: return VhalSnapshot(System.currentTimeMillis(), 0, "Car service not connected: ${_connection.value.message}", emptyList(), 0)
-    var listError: String? = null
-    val listed: List<CarPropertyConfig<*>> = try {
-      cpm.propertyList.filterNotNull()
-    } catch (e: Exception) {
-      listError = "getPropertyList failed: ${e.javaClass.simpleName}: ${e.message}"
-      emptyList()
-    }
-    val configs = HashMap<Int, CarPropertyConfig<*>>()
-    listed.forEach { configs[it.propertyId] = it }
-    val listedIds = configs.keys.toSet()
-    val ids = (listedIds + KnownProperties.all.map { it.id })
-      .filterNot { it in KnownProperties.EXCLUDED_IDS }
-      .sorted()
-    val rows = ArrayList<PropertyRow>()
-    for (id in ids) {
-      var configError: String? = null
-      val cfg = configs[id] ?: try {
-        cpm.getCarPropertyConfig(id)
-      } catch (e: Exception) {
-        configError = "${e.javaClass.simpleName}: ${e.message}"
-        null
-      }
-      if (cfg != null) configs[id] = cfg
-      val areas = cfg?.areaIds?.toList()?.takeIf { it.isNotEmpty() } ?: listOf(0)
-      for (area in areas) {
-        rows += readOne(cpm, id, area, cfg, id in listedIds, configError)
-      }
-    }
-    configCache = configs
-    return VhalSnapshot(System.currentTimeMillis(), listedIds.size, listError, rows, SystemClock.elapsedRealtime() - t0)
-  }
-
   /** One-second refresh of the live energy set (global area). Blocking: call from a background thread. */
   fun readLive(): List<PropertyRow> {
     val cpm = propertyManager ?: return emptyList()
-    val cache = configCache
     permCache = emptyMap()
     return KnownProperties.live.map { kp ->
-      val cfg = cache[kp.id]
+      // A property's config is asked for once and kept: it names the area to read.
+      val cfg = configCache[kp.id] ?: try {
+        cpm.getCarPropertyConfig(kp.id)?.also { configCache = configCache + (kp.id to it) }
+      } catch (e: Exception) {
+        null
+      }
       if (cfg != null) {
         val area = cfg.areaIds?.firstOrNull() ?: 0
         readOne(cpm, kp.id, area, cfg, listed = true, configError = null)
@@ -350,8 +254,7 @@ class VehicleReader(context: Context, private val onReady: () -> Unit) {
         if (base.permissionGranted == false) {
           base.copy(status = RowStatus.ERROR, detail = "$NO_PERMISSION (${base.permissions})")
         } else {
-          // No cached config: either not supported, or the permission was granted after the last
-          // full read (for example in Settings). Read anyway; the result says which it is.
+          // No config: not supported, or not readable yet. Read anyway; the result says which it is.
           readOne(cpm, kp.id, 0, null, listed = false, configError = null)
         }
       }

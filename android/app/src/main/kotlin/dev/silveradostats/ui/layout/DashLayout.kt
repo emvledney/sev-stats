@@ -80,7 +80,6 @@ data class DashLayout(
   /** Connect / Disconnect MX+, the one control that stays while driving: as tall as the other driving targets then. */
   val mxButtonDp: Int get() = if (restricted || drivingTargets) MIN_DRIVING_TARGET_DP else controlDp
   val diagnosticsTab: Boolean get() = !restricted
-  val trendsTab: Boolean get() = !restricted && widthDp >= TRENDS_MIN_WIDTH_DP
 
   /** The 192-cell heatmap and the module temperature strip. */
   val heatmap: Boolean get() = !restricted
@@ -145,8 +144,40 @@ data class DashLayout(
   /** The height the tiles share, under any notice. */
   private fun simpleTilesDp(notice: Boolean): Int = bodyDp - if (notice) noticeBudgetDp else 0
 
-  /** The height the columns have above the last charge. */
-  private fun simpleColumnsDp(notice: Boolean): Int = simpleTilesDp(notice) - simpleChargeDp(notice) - gapDp
+  /** The height the columns have above the energy band and the last charge. */
+  private fun simpleColumnsDp(notice: Boolean): Int =
+    simpleTilesDp(notice) - simpleChargeDp(notice) - gapDp - simpleEnergyDp(notice).let { if (it > 0) it + gapDp else 0 }
+
+  // The energy band, by the owner's choice (2026-11-16, mockup B): one row of three panels between the columns and
+  // the last charge, one for each window. A head, a bar, and the three parts' figures over their names.
+
+  /** A part's figure in the energy band. */
+  val simpleEnergySp: Int get() = type.cardTitle + 4
+
+  private val energyBandDp: Int
+    get() = 2 * cardPadVDp + lineDp(type.title) + cardGapDp + ENERGY_BAR_DP + cardGapDp + lineDp(simpleEnergySp, VALUE_LINE_FACTOR) + lineDp(type.label) + TILE_ROUNDING_DP
+
+  /** The energy band's height. 0: no room for it, and it is the first row to give way (a notice on a short window). */
+  fun simpleEnergyDp(notice: Boolean): Int {
+    val columns = simpleTilesDp(notice) - simpleChargeDp(notice) - gapDp - energyBandDp - gapDp
+    return if (columns >= 2 * tileDp(0, LIVE_VALUE_MIN_SP) + gapDp) energyBandDp else 0
+  }
+
+  /**
+   * Trip and Used hold two figures, this drive's over the last 15 minutes' (the owner, 2026-11-16): as large as
+   * half the tile allows, with the unit and "last 15 min" beside it. Never larger than the other tiles' one figure.
+   */
+  fun simpleSplitSp(notice: Boolean): Int {
+    val tile = (simpleColumnsDp(notice) - gapDp) / 2
+    val rows = tile - 2 * cardPadVDp - tileHeadDp - 2 * cardGapDp - TILE_ROUNDING_DP
+    var sp = min(simpleFigureSp(notice), (rows / 2 / (VALUE_LINE_FACTOR * fontScale)).toInt())
+    while (sp > LIVE_VALUE_MIN_SP && splitRowDp(sp) > simpleColumnDp - 2 * cardPadHDp) sp -= 1
+    return max(LIVE_VALUE_MIN_SP, sp)
+  }
+
+  /** "123.4 kWh" and "last 15 min" in one row, at their widest. */
+  private fun splitRowDp(sp: Int): Float =
+    (5 * FIGURE_EM * sp + 3 * CHARGE_UNIT_CHAR_EM * simpleUnitSp(sp) + SPLIT_LABEL_CHARS * SUMMARY_EM * type.label) * fontScale + 2 * LIVE_FIGURE_GAP_DP + CHARGE_ROUNDING_DP
 
   /** The largest figure of [ems] that fits a column and [heightDp], with its unit beside it. */
   private fun figureFitSp(ems: Float, heightDp: Int): Int {
@@ -245,36 +276,6 @@ data class DashLayout(
 
   private fun page(content: Int, notice: Boolean): Int =
     heightDp - bodyDp + content + if (notice) noticeBudgetDp else 0
-
-  // --- Trends: tiles and a chart on the left, the PID list on the right ------------------------------
-
-  /** Trends' height under the header: its cards reach the header. */
-  val trendBodyDp: Int get() = heightDp - headerDp - pagePadVDp
-
-  /** The PID list's width: its rows and seven group chips need the minimum, in units of text. */
-  val trendPidsDp: Int get() = max((widthDp * TREND_PIDS_SHARE).toInt(), ceil(TREND_PIDS_MIN_DP * fontScale).toInt())
-
-  /** A capacity tile's figure: smaller than Live's, where four figures share the row with a chart. */
-  val trendValueSp: Int get() = max(LIVE_VALUE_MIN_SP, type.value * 2 / 3)
-
-  /** Title, figure, source and change, a gap between each: the change is the line a tile is there for. */
-  val trendTileDp: Int
-    get() = 2 * cardPadVDp + max(lineDp(type.body), badgeDp) + lineDp(trendValueSp, VALUE_LINE_FACTOR) + 2 * lineDp(type.label) + 3 * cardGapDp + TILE_ROUNDING_DP
-
-  val trendChipDp: Int get() = max(TREND_CHIP_MIN_DP, lineDp(type.body) + 8)
-
-  /** Both lines of a PID's name and source, with the room a marker adds. */
-  val trendRowLinesDp: Int get() = lineDp(type.body) + lineDp(type.axis) + 2
-
-  /** The height a PID row gets: seven must fit, whichever group is chosen, so no group ever scrolls. */
-  val trendRowDp: Int
-    get() {
-      val room = trendBodyDp - 2 * cardPadVDp - lineDp(type.title) - trendChipDp - 2 * cardGapDp
-      return minOf(room / TREND_MAX_ROWS, trendRowLinesDp + TREND_ROW_SPARE_DP)
-    }
-
-  /** The widest the L and R buttons get, and as tall as their row allows. */
-  val trendAxisButtonDp: Int get() = minOf(trendRowDp - 4, TREND_BUTTON_MAX_DP)
 
   /** What the header row needs: the tabs, the buttons, and the least of a status for the tabs that draw one. */
   /** For a screen whose status and controls are drawn in the navigation rail: no header row, so the page gets its height. */
@@ -379,6 +380,10 @@ data class DashLayout(
     /** Simple's columns, all alike: the owner had the battery ring taken out for cells like the others (2026-11-07). */
     const val SIMPLE_COLUMNS = 4
 
+    /** The bar of an energy window. */
+    const val ENERGY_BAR_DP = 8
+    private const val SPLIT_LABEL_CHARS = 11 // last 15 min
+
     /** The rules between the last charge's columns. */
     const val SIMPLE_RULE_DP = 1
     private const val SIMPLE_UNIT_SHARE = 0.27f
@@ -456,15 +461,7 @@ data class DashLayout(
       )
     }
 
-    /** Trends' tiles, chart, PID list and controls need this much window; narrower, the tab is not offered. */
-    const val TRENDS_MIN_WIDTH_DP = 1100
-    const val TREND_MAX_ROWS = 7
-    private const val TREND_PIDS_SHARE = 0.36f
-    private const val TREND_PIDS_MIN_DP = 420
-    private const val TREND_ROW_SPARE_DP = 20
-    private const val TREND_CHIP_MIN_DP = 36
-    private const val TREND_BUTTON_MAX_DP = 48
-    private const val STATUS_CHARS = 15 // The least Live's link state and Trends' row count get.
+    private const val STATUS_CHARS = 15 // The least Live's link state gets.
     private const val RESET_CHARS = 13 // Reset session
     private const val RESET_SHORT_CHARS = 5 // Reset
     private const val MX_CHARS = 14 // Disconnect MX+

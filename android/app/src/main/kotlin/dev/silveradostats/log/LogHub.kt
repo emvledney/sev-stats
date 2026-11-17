@@ -17,6 +17,10 @@ import dev.silveradostats.vehicle.ChargeReading
 import dev.silveradostats.vehicle.ChargeState
 import dev.silveradostats.vehicle.ChargeWatch
 import dev.silveradostats.vehicle.ChargeWatchState
+import dev.silveradostats.vehicle.EnergyChargeBase
+import dev.silveradostats.vehicle.EnergyCounters
+import dev.silveradostats.vehicle.EnergySplit
+import dev.silveradostats.vehicle.EnergySplitTracker
 import dev.silveradostats.vehicle.FeedKind
 import dev.silveradostats.vehicle.KnownProperties
 import dev.silveradostats.vehicle.LastCharge
@@ -40,7 +44,7 @@ import kotlinx.coroutines.withTimeoutOrNull
 import java.util.TimeZone
 
 /**
- * The process's one battery log: writes rows and hands them to the Trends tab and the export.
+ * The process's one battery log: writes rows and hands them to the upload and the export.
  *
  *  - built-in data: [logCar], from the hourly job and every few minutes while a screen is up
  *    ([whileOnScreen]). A short read of the car service, then the connection is released;
@@ -62,7 +66,7 @@ class LogHub private constructor(private val app: Context) {
 
   private val _revision = MutableStateFlow(0L)
 
-  /** Goes up with every row written: Trends reloads on it. */
+  /** Goes up with every row written. */
   val revision: StateFlow<Long> = _revision.asStateFlow()
 
   /** Main thread. Newest MX+ row written or being written. */
@@ -90,6 +94,19 @@ class LogHub private constructor(private val app: Context) {
 
   /** The last charge the readings show, kept between runs of the app; null until one has been seen. */
   val lastCharge: StateFlow<LastCharge?> = _lastCharge.asStateFlow()
+
+  // Where the energy went (vehicle/EnergySplit.kt). Main thread.
+  private var energyTracker: EnergySplitTracker? = null
+  private var energyDemo = false
+  private var energyReadAtMs: Long? = null
+  private var energyShown = EnergySplit()
+
+  /** The drive the session is in: its start, as the session counts time. */
+  private var driveId = 0L
+  private val _energySplit = MutableStateFlow<EnergySplit?>(null)
+
+  /** Driving, climate and the rest for the Simple tab's three windows; null with no MX+ (or demo) link to read them from. */
+  val energySplit: StateFlow<EnergySplit?> = _energySplit.asStateFlow()
 
   init {
     chargeClock = loadChargeClock()
@@ -120,6 +137,7 @@ class LogHub private constructor(private val app: Context) {
 
   /** Main thread: every SessionState the session publishes. Only the truck's own readings, never a demo's. */
   fun onSession(s: SessionState) {
+    driveId = s.startedAtMs
     if (s.feed.kind == FeedKind.VEHICLE && s.hasData) noteCharge(ChargeReading.fromSession(s))
   }
 
@@ -185,7 +203,6 @@ class LogHub private constructor(private val app: Context) {
       val now = System.currentTimeMillis()
       when {
         LogPolicy.carRowDue(last, now) -> logCar(LogTrigger.APP_OPEN)
-        // Trends says why a property has no value, which only a read in this process can tell.
         carProblems == null || LogPolicy.carScreenRowDue(last, now) -> logCar(LogTrigger.CAR_SCREEN)
       }
       delay(LogPolicy.CAR_SCREEN_CHECK_MS)
@@ -242,6 +259,7 @@ class LogHub private constructor(private val app: Context) {
 
   /** Main thread: every LiveState the engine publishes. Sends nothing; only logs what was read anyway. */
   fun onLive(s: LiveState) {
+    noteEnergy(s)
     if (s.demo || s.status != LinkStatus.CONNECTED) return
     val now = System.currentTimeMillis()
     if (!LogRows.wallClockValid(now)) return
@@ -266,6 +284,50 @@ class LogHub private constructor(private val app: Context) {
   }
 
   /**
+   * The truck's energy totals, from what the link read anyway. The demo's too, for its screens: those start a
+   * tracker of their own and are never saved, and no demo figure reaches the log.
+   */
+  private fun noteEnergy(s: LiveState) {
+    if (s.status != LinkStatus.CONNECTED && s.status != LinkStatus.DEMO) {
+      _energySplit.value = null
+      return
+    }
+    val tracker = energyTracker?.takeIf { energyDemo == s.demo } ?: EnergySplitTracker(if (s.demo) null else loadEnergyBase()).also {
+      energyTracker = it
+      energyDemo = s.demo
+      energyReadAtMs = null
+      energyShown = EnergySplit()
+    }
+    val read = listOf(EnergyCounters.TOTAL, EnergyCounters.DRIVING, EnergyCounters.CLIMATE).map { s.values[it] }
+    val at = read.mapNotNull { it?.atMs }.maxOrNull()
+    val counters = EnergyCounters.ofKwh((read[0]?.v as? Number)?.toDouble(), (read[1]?.v as? Number)?.toDouble(), (read[2]?.v as? Number)?.toDouble())
+    if (counters != null && at != null && at != energyReadAtMs) {
+      energyReadAtMs = at
+      val base = tracker.chargeBase
+      energyShown = tracker.add(at, counters, driveId, if (s.demo) null else _lastCharge.value)
+      if (!s.demo && tracker.chargeBase != base) saveEnergyBase(tracker.chargeBase)
+    }
+    // The totals stopped answering: what they said some minutes ago is not where the energy went.
+    val stale = at == null || MonoClock.ms() - at > ENERGY_STALE_MS
+    _energySplit.value = if (stale) EnergySplit() else energyShown
+  }
+
+  private fun saveEnergyBase(b: EnergyChargeBase?) {
+    chargePrefs.edit {
+      fun put(key: String, v: Double?) = if (v == null) remove(key) else putString(key, v.toString())
+      put(KEY_ENERGY_TO, b?.toWh)
+      put(KEY_ENERGY_TOTAL, b?.counters?.totalWh)
+      put(KEY_ENERGY_DRIVING, b?.counters?.drivingWh)
+      put(KEY_ENERGY_CLIMATE, b?.counters?.climateWh)
+    }
+  }
+
+  private fun loadEnergyBase(): EnergyChargeBase? {
+    fun get(key: String) = chargePrefs.getString(key, null)?.toDoubleOrNull()
+    return EnergyChargeBase(get(KEY_ENERGY_TO) ?: return null, EnergyCounters(get(KEY_ENERGY_TOTAL) ?: return null, get(KEY_ENERGY_DRIVING) ?: return null, get(KEY_ENERGY_CLIMATE) ?: return null))
+  }
+
+  /**
    * Main thread. The hourly visit: connects through the app's one link service, waits for [onLive]'s
    * row and lets go. No visit unless [ignition] positively says the truck is on.
    */
@@ -283,18 +345,6 @@ class LogHub private constructor(private val app: Context) {
       link.close()
       visiting = false
     }
-  }
-
-  /** What Trends draws of one source. Blocking: call off the main thread. */
-  fun trendData(range: TrendRange, demo: Boolean, source: LogSource, pick: ChartPick): TrendData {
-    val now = System.currentTimeMillis()
-    val from = range.ms?.let { now - it } ?: 0L
-    if (demo) {
-      val rows = DemoLog.rows(now).filter { it.source == source }
-      return TrendData(source, pick, rows.filter { it.atMs >= from }, rows.size.toLong(), rows.lastOrNull()?.atMs, now, demo = true, TrendsModel.latest(rows), DemoLog.PROBLEMS)
-    }
-    val rows = store.rows(from, source, TrendsModel.chartColumns(source, pick))
-    return TrendData(source, pick, rows, store.count(source), store.lastAt(source), now, demo = false, store.latest(source, TrendsModel.loggedColumns(source)), carProblems.orEmpty())
   }
 
   /** Writes the whole log to [uri] as CSV. The stored log only, never demo data. Says how it went. */
@@ -325,6 +375,11 @@ class LogHub private constructor(private val app: Context) {
     private const val KEY_CHARGE_USED = "used_wh"
     private const val KEY_CHARGE_DRIVEN = "driven_m"
     private const val KEY_CHARGE_ON = "on"
+    private const val KEY_ENERGY_TO = "energy_to_wh"
+    private const val KEY_ENERGY_TOTAL = "energy_total_wh"
+    private const val KEY_ENERGY_DRIVING = "energy_driving_wh"
+    private const val KEY_ENERGY_CLIMATE = "energy_climate_wh"
+    private const val ENERGY_STALE_MS = 2 * 60_000L
     private const val KEY_CLOCK_ELAPSED = "clock_elapsed"
     private const val KEY_CLOCK_UPTIME = "clock_uptime"
     private const val KEY_CLOCK_WALL = "clock_wall"

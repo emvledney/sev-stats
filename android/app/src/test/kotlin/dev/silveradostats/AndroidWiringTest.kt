@@ -49,14 +49,19 @@ class AndroidWiringTest {
 
   /**
    * LinkConnection attaches the OBD engine only while a screen is visible AND wants OBD, and the
-   * ViewModel decides that from the remembered tab before the first onStart. Simple and Trends want it
+   * ViewModel decides that from the remembered tab before the first onStart. Simple wants it
    * only with an MX+ chosen and not disconnected (UiSettings.wantsObd). The built-in session is attached
    * for the whole binding instead (so it keeps sampling with another app in front).
+   * Owner, 2026-11-13: the background service may hold the engine too, so the MX+ stays connected behind
+   * another app; only that service holds, and only by LogPolicy.holdAllowed (truck positively on).
    */
   @Test
   fun theObdEngineAttachesOnlyWhenWanted() {
     val conn = src("link/LinkConnection.kt")
-    assertTrue(Regex("""val want = visible && obd && !closed""").containsMatchIn(conn))
+    assertTrue(conn.contains("val want = (visible || held) && obd && !closed"))
+    val main0 = listOf(File("src/main/kotlin"), File("app/src/main/kotlin")).first { it.isDirectory }
+    val holders = main0.walkTopDown().filter { it.isFile && it.extension == "kt" && it.readText().contains(".setHeld(") }.map { it.name }.toList()
+    assertEquals(listOf("VehicleWatchService.kt"), holders)
     assertEquals(1, Regex("""\.engine\.attach\(""").findAll(conn).count())
     assertTrue(Regex("""if \(want\) s\.engine\.attach\(token\) else s\.engine\.detach\(token\)""").containsMatchIn(conn))
     assertTrue(Regex("""s\.vehicle\.attach\(token\)""").containsMatchIn(conn))
@@ -146,8 +151,8 @@ class AndroidWiringTest {
 
   /**
    * Simple is one page whatever the gear and its controls work in every gear, by the owner's choice
-   * (2026-11-06). Everything else the lockdown covers stays locked: the pages behind the Trends and
-   * Diagnostics tabs (diagnosticsAndPairingAreReachableOnlyInPark), system dialogs, Live's controls.
+   * (2026-11-06). Everything else the lockdown covers stays locked: the page behind the
+   * Diagnostics tab (diagnosticsAndPairingAreReachableOnlyInPark), system dialogs, Live's controls.
    */
   @Test
   fun simpleDoesNotChangeWithTheGearAndItsControlsWorkInDrive() {
@@ -170,8 +175,6 @@ class AndroidWiringTest {
     assertTrue(Regex("""confirmReset = false\s*onReset\(\)""").containsMatchIn(simple))
     // Live's are still behind the driving state.
     assertTrue(Regex("""if \(layout\.controls\) \{\s*if \(dash\.status\.canRetry && settings\.demo\)""").containsMatchIn(src("ui/live/LiveScreen.kt")))
-    // And the pages behind the two tabs are the panel out of Park.
-    assertTrue(Regex("""AppTab\.TRENDS -> if \(layout\.restricted\) \{""").containsMatchIn(shell))
   }
 
   /** Started from a visible screen and at boot, where Android allows it; demo data has nothing to measure. */
@@ -208,7 +211,7 @@ class AndroidWiringTest {
     assertEquals(TempUnit.F, Units.TEMP)
     assertEquals(DistUnit.MI, Units.DIST)
     val choice = Regex("""Segmented\((Temp|Dist)Unit|set(Temp|Dist)Unit|tempUnit|distUnit|temp_unit|distance_unit""")
-    for (f in listOf("ui/AppShell.kt", "ui/simple/SimpleScreen.kt", "ui/live/LiveScreen.kt", "ui/trends/TrendsScreen.kt", "LiveViewModel.kt", "link/AppSettings.kt")) {
+    for (f in listOf("ui/AppShell.kt", "ui/simple/SimpleScreen.kt", "ui/live/LiveScreen.kt", "LiveViewModel.kt", "link/AppSettings.kt")) {
       assertFalse(f, choice.containsMatchIn(src(f)))
     }
   }
@@ -271,7 +274,7 @@ class AndroidWiringTest {
     }
     val vm = src("LiveViewModel.kt")
     assertTrue(vm.contains("s?.bt?.setRestricted(r)"))
-    // Send to laptop refuses by reading what followRestriction stores: emptied, it would never refuse.
+    // The upload's buttons refuse by reading what followRestriction stores: emptied, it would never refuse.
     val diag = src("DiagnosticsViewModel.kt")
     assertTrue(funBody(diag, "followRestriction").contains("restriction = state"))
     assertTrue(src("MainActivity.kt").contains("vm.followRestriction(liveVm.restricted)"))
@@ -290,8 +293,8 @@ class AndroidWiringTest {
   @Test
   fun diagnosticsStartersRefuseWhileRestricted() {
     val diag = src("DiagnosticsViewModel.kt")
-    // Pairing and the upload's buttons joined the Settings page on 2026-11-13 (owner): parked-only like the report.
-    for (start in listOf("sendReport", "pairUpload", "uploadNow", "unpairUpload")) {
+    // Pairing and the upload's buttons joined the Settings page on 2026-11-13 (owner): parked-only. The report and its button went on 2026-11-17 (owner).
+    for (start in listOf("pairUpload", "uploadNow", "unpairUpload")) {
       assertTrue("$start refuses", Regex("""fun $start\([^)]*\) \{\s*if \(restricted\) return""").containsMatchIn(diag))
     }
     assertTrue(diag.contains("private val restricted: Boolean get() = restriction.value"))
@@ -374,7 +377,7 @@ class AndroidWiringTest {
     for ((name, text) in dashboards()) {
       assertEquals("$name: raw gesture", 0, Regex("""\bdetectTapGestures\b|\bpointerInput\b""").findAll(text).count())
     }
-    // Only Trends takes it, and that tab is not offered while driving.
+    // Nothing takes it since Trends went (owner, 2026-11-15).
     assertEquals(0, Regex("""\.inspectTap\(""").findAll(src("ui/simple/SimpleScreen.kt")).count())
     assertEquals(0, Regex("""\.inspectTap\(""").findAll(live).count())
   }

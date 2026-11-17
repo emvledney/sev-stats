@@ -138,6 +138,48 @@ period = 60
 status = "confirmed"
 source = "S3; S7"
 
+# The BECM's own energy counters since its last full charge: what the Simple tab's breakdown is taken from
+# (the owner's request, 2026-11-16). Never read on this truck yet: compare all three with the truck's energy screen.
+
+[[did]]
+module = "becm"
+id = 0x27B9
+name = "energy_used_total"
+label = "Energy used since full charge, total"
+unit = "kWh"
+type = "u24"
+scale = 0.01
+period = 10
+status = "unverified"
+source = "S10, S8"
+note = "Car Scanner's Charge Cycle Energy Usage - Total. S10 scales it by 0.1, unlike 27BA and 27BB (0.01): taken as 0.01 here, which makes S8's 001566 54.78 kWh and not 547.8. Wrong if it reads below 27BA + 27BB on the truck"
+
+[[did]]
+module = "becm"
+id = 0x27BA
+name = "energy_used_driving"
+label = "Energy used since full charge, driving and accessories"
+unit = "kWh"
+type = "u24"
+scale = 0.01
+period = 10
+status = "unverified"
+source = "S10"
+note = "Car Scanner's Charge Cycle Energy Usage - Driving and Accessories"
+
+[[did]]
+module = "becm"
+id = 0x27BB
+name = "energy_used_climate"
+label = "Energy used since full charge, thermal management"
+unit = "kWh"
+type = "u24"
+scale = 0.01
+period = 10
+status = "unverified"
+source = "S10, S3"
+note = "Car Scanner's Charge Cycle Energy Usage - Thermal Management: the cabin's climate and probably the battery's conditioning with it. The Simple tab calls it Climate"
+
 [[did]]
 module = "becm"
 id = 0x2AF5

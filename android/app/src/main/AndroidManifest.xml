@@ -26,7 +26,7 @@
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
 
-    <!-- Send to laptop report upload, network diagnostics; Map tab web lookups. -->
+    <!-- Map tab web lookups; the log's upload to the owner's server. -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
@@ -86,8 +86,8 @@
             android:value="${MAPS_API_KEY}" />
 
         <!--
-          OBD link (MX+ or demo simulator). Bound only by this app's own screens, never started,
-          not exported: no other app can reach it, and it runs only while a screen is bound.
+          OBD link (MX+ or demo simulator). Bound only by this app's own code, never started,
+          not exported: no other app can reach it, and it runs only while bound.
         -->
         <service
             android:name=".link.LinkService"
@@ -105,8 +105,9 @@
 
         <!--
           Keeps the session of the truck's built-in data running with no screen up, the owner's choice
-          (vehicle/VehicleWatchService.kt). Read-only, the truck's API only: it never touches the OBD link
-          or the LinkService above, and holds no wake lock. Started by this app only, never exported.
+          (vehicle/VehicleWatchService.kt). Read-only. Since 2026-11-13, the owner's choice, it also holds
+          the LinkService above while the truck reports it is on, so the MX+ stays connected behind another
+          app. It holds no wake lock. Started by this app only, never exported.
           Special use: none of Android's other types is what it does.
         -->
         <service

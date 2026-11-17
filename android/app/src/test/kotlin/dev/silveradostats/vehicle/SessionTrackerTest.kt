@@ -84,7 +84,8 @@ class SessionTrackerTest {
 
   private fun mi(m: Double) = m / EffUnits.METERS_PER_MILE
 
-  private fun eff(s: SessionState): Double = EffUnits.miPerKwh(s.efficiency.mPerWh!!)
+  /** The drive's distance over its energy, as the Simple tab divides them (the warm-up figure went with the report, 2026-11-17). */
+  private fun eff(s: SessionState): Double = EffUnits.miPerKwh(s.distanceM / s.usedWh)
 
   @Test
   fun steadyDrive() {
@@ -93,43 +94,17 @@ class SessionTrackerTest {
     d.run(600.0, 25.0, kw)
     val s = d.state()
     assertEquals(15_000.0, s.distanceM, 15.0) // 25 m/s x 600 s (the first interval starts at the first sample)
-    assertEquals(EffStatus.OK, s.efficiency.status)
     assertEquals(2.3, eff(s), 0.01)
     assertEquals(kw * 1000 * 599.5 / 3600, s.usedWh, 3.0)
     assertEquals(600_000L - 500, s.activeMs)
-    assertEquals(25.0, s.avgSpeedMps!!, 0.05)
     assertEquals(0, s.gaps)
     // Range: remaining Wh x the last 15 minutes' m/Wh, here the whole drive.
     assertEquals(s.levelWh!! * s.distanceM / s.usedWh, s.rangeEstimate!!.m, s.rangeEstimate!!.m * 0.01)
     // Energy from the charge-rate property once it has agreed with the level.
     assertEquals(EnergySource.CHARGE_RATE, s.energySource)
-    assertTrue(s.chargeRateSeenNonZero)
     // Context values.
     assertEquals(12.0, s.outsideC!!, 0.0)
     assertEquals(s.levelWh!! / 205_080.0 * 100, s.socPct!!, 1e-9)
-  }
-
-  @Test
-  fun warmUpNeedsBothDistanceAndEnergy() {
-    val d = Drive()
-    d.run(32.0, 25.0, kwFor(25.0, 2.3)) // 0.5 mi
-    var s = d.state()
-    assertEquals(EffStatus.WARMING_UP, s.efficiency.status)
-    assertNull(s.efficiency.mPerWh)
-    assertEquals(0.5, s.efficiency.progress, 0.03)
-    d.run(36.0, 25.0, kwFor(25.0, 2.3)) // past 1 mi, ~0.46 kWh
-    s = d.state()
-    assertEquals(EffStatus.OK, s.efficiency.status)
-    assertEquals(1.0, s.efficiency.progress, 0.0)
-
-    // 1.5 mi on very little energy (0.25 kWh, a long downhill): still warming up, on energy.
-    val e = Drive()
-    e.run(100.0, 25.0, kwFor(25.0, 6.0))
-    s = e.state()
-    assertTrue(mi(s.distanceM) > 1.5)
-    assertTrue(s.efficiency.basisWh < 300)
-    assertEquals(EffStatus.WARMING_UP, s.efficiency.status)
-    assertEquals(s.efficiency.basisWh / 300.0, s.efficiency.progress, 1e-9)
   }
 
   @Test
@@ -246,39 +221,6 @@ class SessionTrackerTest {
   }
 
   @Test
-  fun quantisedLevelHoldsEfficiencySteady() {
-    // (step, hold): value steps of 0.5 kWh; 0.1 kWh steps that also update only every 17 s;
-    // 10 Wh steps; a fine value held for 17 s (time-quantised, like the charge rate on GM).
-    for ((quant, hold) in listOf(500.0 to 0L, 100.0 to 17_000L, 10.0 to 0L, 1.0 to 17_000L)) {
-      val d = Drive()
-      d.rate = null // the level alone: no power signal to go by
-      d.quantWh = quant
-      d.holdMs = hold
-      val kw = kwFor(27.0, 2.3)
-      val figures = mutableListOf<Pair<Int, Double>>()
-      for (sec in 1..1800) {
-        d.run(1.0, 27.0, kw)
-        d.state().efficiency.mPerWh?.let { figures += sec to EffUnits.miPerKwh(it) }
-      }
-      val tag = "step $quant Wh, hold $hold ms"
-      assertTrue("$tag: ${figures.size} figures", figures.size > 1000)
-      // Never wild, from the first figure on; exact-edge steps and fine values are close at once.
-      val early = if (hold == 0L || quant <= 1.0) 0.12 else 0.35
-      figures.forEach { (_, f) -> assertEquals(tag, 2.3, f, early) }
-      // Settled: no sawtooth between steps.
-      val settled = figures.filter { it.first > 600 }.map { it.second }
-      settled.forEach { assertEquals(tag, 2.3, it, 0.06) }
-      val jumps = settled.zipWithNext { a, b -> abs(b - a) }
-      assertTrue("$tag: max jump ${jumps.max()}", jumps.max() < 0.06)
-      assertEquals(tag, 2.3, figures.last().second, 0.03)
-      val s = d.state()
-      assertTrue(tag, s.levelStepWh!! >= quant - 1e-6)
-      // A coarse step lengthens the warm-up (3 steps of energy).
-      if (quant == 500.0) assertTrue(tag, figures.first().first * kw / 3.6 >= 1500.0)
-    }
-  }
-
-  @Test
   fun resetStartsAFreshSession() {
     val d = Drive()
     d.run(300.0, 25.0, kwFor(25.0, 2.3))
@@ -290,7 +232,6 @@ class SessionTrackerTest {
     assertEquals(0.0, s.distanceM, 0.0)
     assertEquals(0.0, s.usedWh, 0.0)
     assertEquals(0L, s.activeMs)
-    assertEquals(EffStatus.WARMING_UP, s.efficiency.status)
     assertEquals(0, s.gaps)
     // And it works again afterwards.
     d.t = d.now
@@ -317,7 +258,6 @@ class SessionTrackerTest {
     val t = SessionTracker { now }
     var s = t.snapshot()
     assertFalse(s.hasData)
-    assertNull(s.avgSpeedMps)
     assertNull(s.socPct)
     assertNull(s.rangeEstimate)
     // Level only, no speed: energy is counted, distance stays 0, still warming up.
@@ -328,14 +268,12 @@ class SessionTrackerTest {
     s = t.snapshot()
     assertEquals(0.0, s.distanceM, 0.0)
     assertEquals(1190.0, s.usedWh, 1e-6)
-    assertEquals(EffStatus.WARMING_UP, s.efficiency.status)
-    assertEquals(0.0, s.efficiency.progress, 0.0)
     assertNull(s.socPct) // capacity 0 ignored
     // Zero level: no range figure, no NaN.
     t.add(VehicleSample(now + 1000, levelWh = 0.0, speedMps = 0.0))
     s = t.snapshot()
     assertNull(s.rangeEstimate)
-    listOf(s.distanceM, s.usedWh, s.efficiency.progress).forEach { assertTrue(it.isFinite()) }
+    listOf(s.distanceM, s.usedWh).forEach { assertTrue(it.isFinite()) }
   }
 
   @Test
@@ -357,6 +295,5 @@ class SessionTrackerTest {
     assertEquals(ChargeState.CHARGING, ChargeState.fromAosp(1))
     assertEquals(ChargeState.UNKNOWN, ChargeState.fromAosp(99))
     assertNull(ChargeState.fromAosp(null))
-    assertNotNull(Efficiency.NONE)
   }
 }
