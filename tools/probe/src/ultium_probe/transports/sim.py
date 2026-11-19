@@ -71,10 +71,10 @@ class UltiumSim:
             if did == 0x2B44:
                 return _u16(59340.0) + bytes([22])
             if did in (0x27B9, 0x27BA, 0x27BB):
-                # kWh x 100 since the last full charge: driving, thermal, and a little of neither in the total
+                # Since the last full charge: driving and thermal in kWh x 100, the total (a little of neither in it) in kWh x 10
                 driving = 3520 + int(s["t"] * 0.4)
                 thermal = 450 + int(s["t"] * 0.05)
-                total = driving + thermal + 147 + int(s["t"] * 0.012)
+                total = (driving + thermal + 147 + int(s["t"] * 0.012)) // 10
                 return {0x27B9: total, 0x27BA: driving, 0x27BB: thermal}[did].to_bytes(3, "big")
             if did == 0x2984:
                 return bytes.fromhex("2041")
@@ -87,7 +87,8 @@ class UltiumSim:
             if did == 0x27C7:
                 return int(s["soc"] / 100 * 440 * 103).to_bytes(3, "big")
             if did == 0x27C0:
-                return int(42 * 16.09344).to_bytes(3, "big")
+                # km x 10, about 15 m/s
+                return (int(42 * 16.09344) + int(s["t"] * 0.15)).to_bytes(3, "big")
             if did in (0x2AF5, 0x2AF6):
                 # 2AF6 summarises groups 1-96 (modules 1-12), 2AF5 groups 97-192 (modules 13-24)
                 first = 0 if did == 0x2AF6 else GROUPS // 2

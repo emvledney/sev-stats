@@ -73,9 +73,11 @@ class AndroidWiringTest {
     assertTrue(Regex("""combine\(store\.state, restricted\) \{ s, r -> s\.wantsObd\(r\) \}\.distinctUntilChanged\(\)\.collect \{ conn\.setObdWanted\(it\) \}""").containsMatchIn(vm))
     assertEquals(1, Regex("""conn\.setObdWanted\(""").findAll(vm).count())
     val settings = src("link/AppSettings.kt")
-    // Owner, 2026-11-11: the rail reads "Simple" and "Expert" (it read "API" and "OBD" in 0.19.0).
-    assertTrue(settings.contains("SIMPLE(\"Simple\", false)"))
-    assertTrue(settings.contains("LIVE(\"Expert\", true)"))
+    // Owner, 2026-11-18: the rail reads "Map", "OBD" and "Cells", Map first; the API tab went to a card on the map.
+    assertTrue(settings.contains("MAP(\"Map\", false)"))
+    assertFalse(settings.contains("SIMPLE("))
+    assertTrue(settings.contains("LIVE(\"OBD\", true)"))
+    assertTrue(settings.contains("CELLS(\"Cells\", true)"))
     assertTrue(settings.contains("DIAGNOSTICS(\"Diagnostics\", true)"))
     // Nothing else in the app attaches the engine.
     val main = listOf(File("src/main/kotlin"), File("app/src/main/kotlin")).first { it.isDirectory }
@@ -86,7 +88,7 @@ class AndroidWiringTest {
   // --- One page, and driving --------------------------------------------------------------------
 
   private fun dashboards(): List<Pair<String, String>> =
-    listOf("ui/simple/SimpleScreen.kt", "ui/live/LiveScreen.kt", "ui/AppShell.kt").map { it to src(it) }
+    listOf("ui/simple/BatteryCard.kt", "ui/live/LiveScreen.kt", "ui/AppShell.kt").map { it to src(it) }
 
   /** A function's text, from `fun name(` to its matching closing brace (or the end of its expression). */
   private fun funBody(text: String, name: String): String {
@@ -150,29 +152,22 @@ class AndroidWiringTest {
   }
 
   /**
-   * Simple is one page whatever the gear and its controls work in every gear, by the owner's choice
-   * (2026-11-06). Everything else the lockdown covers stays locked: the page behind the
-   * Diagnostics tab (diagnosticsAndPairingAreReachableOnlyInPark), system dialogs, Live's controls.
+   * The car API's battery card on the map (the owner, 2026-11-18, when the API tab went): the same in every gear but for
+   * a notice's text and button, which wait for Park. The MX+ button the API tab had is at the foot of the rail on Map,
+   * at the driving size in every gear. No Reset: no page shows the session's figures to start again.
    */
   @Test
-  fun simpleDoesNotChangeWithTheGearAndItsControlsWorkInDrive() {
-    val simple = src("ui/simple/SimpleScreen.kt")
+  fun theBatteryCardIsTheSameInEveryGear() {
+    val card = src("ui/simple/BatteryCard.kt")
     val shell = src("ui/AppShell.kt")
-    assertEquals("the page takes nothing from the layout's gear", emptyList<String>(), Regex("""layout\.(restricted|controls)""").findAll(simple).map { it.value }.toList())
-    assertTrue(shell.contains("layout = simpleLayout,"))
-    assertTrue(shell.contains("driving = restricted,"))
-    // Its buttons are drawn at the foot of the rail, and the page has no header row.
-    assertTrue(shell.contains("chrome = toRail,"))
-    // Nothing on the page depends on the gear but a notice's button.
-    assertEquals(listOf("driving"), Regex("""\bif \((driving)\)""").findAll(simple).map { it.groupValues[1] }.toList())
-    assertFalse(simple.contains("!driving"))
-    // The view model does not refuse them either.
-    val vm = src("LiveViewModel.kt")
-    assertFalse("Reset works in Drive", Regex("""fun resetSession\([^)]*\) = parkedOnly""").containsMatchIn(vm))
-    // A reset still asks first, in every gear.
-    assertTrue(simple.contains("if (confirmReset) {"))
-    assertTrue(simple.contains("onClick = { confirmReset = true }"))
-    assertTrue(Regex("""confirmReset = false\s*onReset\(\)""").containsMatchIn(simple))
+    assertEquals(listOf("layout.restricted"), Regex("""layout\.(restricted|controls)""").findAll(card).map { it.value }.toList())
+    val body = funBody(card, "BatteryCard")
+    assertTrue(body.contains("if (!layout.restricted) {"))
+    assertEquals("its one button waits for Park", 1, Regex("""\bButton\(""").findAll(body).count())
+    assertTrue(body.indexOf("Button(") > body.indexOf("if (!layout.restricted) {"))
+    assertTrue(shell.contains("toRail({}, { MxButton(settings, mxAction, mxLayout, liveVm::onMxAction, Modifier.fillMaxWidth()) })"))
+    assertTrue(src("ui/map/MapScreen.kt").contains("BatteryCard("))
+    assertFalse(src("LiveViewModel.kt").contains("fun resetSession"))
     // Live's are still behind the driving state.
     assertTrue(Regex("""if \(layout\.controls\) \{\s*if \(dash\.status\.canRetry && settings\.demo\)""").containsMatchIn(src("ui/live/LiveScreen.kt")))
   }
@@ -199,10 +194,8 @@ class AndroidWiringTest {
   fun theHeaderIsOnlyTheTabsAndTheButtons() {
     val header = funBody(src("ui/AppShell.kt"), "ShellHeader")
     for (word in listOf("Silverado Stats", "Read-only", "Demo", "demo")) assertFalse(word, header.contains(word))
-    val simple = src("ui/simple/SimpleScreen.kt")
-    assertTrue(Regex("""chrome\(\s*\{\},\s*\{\s*MxButton\(""").containsMatchIn(simple))
-    // Nothing between the header and the page but a notice about the data feed.
-    assertTrue(Regex("""\n\s*\)\n\s*if \(layout\.tooSmall\(view\.notice != null\)\)""").containsMatchIn(simple))
+    // Map's rail has the MX+ button and no words of its own.
+    assertTrue(src("ui/AppShell.kt").contains("toRail({}, { MxButton("))
   }
 
   /** °F and miles, the owner's choice (2026-11-06): nothing on screen or saved can change them. */
@@ -211,7 +204,7 @@ class AndroidWiringTest {
     assertEquals(TempUnit.F, Units.TEMP)
     assertEquals(DistUnit.MI, Units.DIST)
     val choice = Regex("""Segmented\((Temp|Dist)Unit|set(Temp|Dist)Unit|tempUnit|distUnit|temp_unit|distance_unit""")
-    for (f in listOf("ui/AppShell.kt", "ui/simple/SimpleScreen.kt", "ui/live/LiveScreen.kt", "LiveViewModel.kt", "link/AppSettings.kt")) {
+    for (f in listOf("ui/AppShell.kt", "ui/simple/BatteryCard.kt", "ui/live/LiveScreen.kt", "LiveViewModel.kt", "link/AppSettings.kt")) {
       assertFalse(f, choice.containsMatchIn(src(f)))
     }
   }
@@ -228,11 +221,8 @@ class AndroidWiringTest {
     assertTrue(funBody(hub, "logCar"), funBody(hub, "logCar").contains("noteCharge(ChargeReading.fromCar("))
     assertTrue(hub.contains("store.rows(0L, LogSource.CAR, LogRows.CHARGE_COLS)"))
     assertTrue(funBody(hub, "publishCharge").contains("ChargeWatch.saveDue(chargeSaved, now)"))
-    val vm = src("LiveViewModel.kt")
-    assertTrue(vm.contains("if (s.demo) DemoDrive.lastCharge(session.distanceM) else c"))
-    assertTrue(src("ui/AppShell.kt").contains("liveVm.lastCharge.collectAsStateWithLifecycle()"))
-    // A reset of the session leaves it alone.
-    assertFalse(funBody(vm, "resetSession").contains("lastCharge"))
+    // No page shows it since 2026-11-18 (owner: the API page is three figures); it is still kept and logged.
+    assertFalse(src("ui/AppShell.kt").contains("lastCharge"))
   }
 
   /** While restricted the Diagnostics tab is one text panel, and nothing else can reach its parts. */
@@ -327,22 +317,21 @@ class AndroidWiringTest {
     val launcher = Regex("""RequestMultiplePermissions\(\)\) \{ result ->(.*?)\n    \}""", RegexOption.DOT_MATCHES_ALL).find(a)?.groupValues?.get(1) ?: error("no launcher")
     assertTrue(launcher.contains("askNextDialog()"))
     assertEquals("one Settings screen", 1, Regex("""startActivity\(""").findAll(a).count())
-    val simple = src("ui/simple/SimpleScreen.kt")
-    assertEquals("one dialog on the dashboards", 1, Regex("""\bAlertDialog\(""").findAll(simple).count())
+    val simple = src("ui/simple/BatteryCard.kt")
+    // The Reset's question went with it (owner, 2026-11-18): no dialog on the dashboards.
+    assertEquals("no dialog on the dashboards", 0,Regex("""\bAlertDialog\(""").findAll(simple).count())
     assertEquals(0, Regex("""\bAlertDialog\(""").findAll(src("ui/live/LiveScreen.kt")).count())
   }
 
   /** On Live every control but the tabs and the MX+ button is behind `layout.controls`. Simple: simpleDoesNotChangeWithTheGearAndItsControlsWorkInDrive. */
   @Test
   fun controlsAreParkedOnly() {
-    val simple = src("ui/simple/SimpleScreen.kt")
+    val simple = src("ui/simple/BatteryCard.kt")
     val live = src("ui/live/LiveScreen.kt")
     // Live's Retry.
     assertTrue(Regex("""if \(layout\.controls\) \{\s*if \(dash\.status\.canRetry && settings\.demo\)""").containsMatchIn(live))
-    // Allow access and Open Diagnostics: the notice's driving branch has no button.
-    val notice = funBody(simple, "NoticeCard")
-    val drivingBranch = notice.substring(notice.indexOf("if (driving) {"), notice.indexOf("} else {"))
-    assertEquals(0, Regex("""Button""").findAll(drivingBranch).count())
+    // Allow access: only in Park (theBatteryCardIsTheSameInEveryGear).
+    assertTrue(funBody(simple, "BatteryCard").contains("if (!layout.restricted) {"))
     // The MX+ button stays, as tall as the policy says: 76 dp or more while driving (DashLayoutTest).
     assertTrue(funBody(live, "MxButton").contains("layout.mxButtonDp"))
     // And it works while driving, Connect included, doing what the label it drew said.
@@ -357,7 +346,7 @@ class AndroidWiringTest {
   /**
    * The OBD page is the same in every gear (the owner's choice, 2026-11-11): the shell gives it the parked
    * layout always, so the heatmap and its tap-to-inspect are there while driving too. One card function draws
-   * it, and the heatmap still has exactly one tap gesture.
+   * it, on the Cells page since 2026-11-18 (owner), and the heatmap still has exactly one tap gesture.
    */
   @Test
   fun theObdPageIsTheSameInEveryGear() {
@@ -367,7 +356,7 @@ class AndroidWiringTest {
     assertTrue(src("ui/layout/DashLayout.kt").contains("fun ofLive(widthDp: Float, heightDp: Float, fontScale: Float = 1f): DashLayout = of(widthDp, heightDp, false, fontScale).withoutHeader()"))
     assertTrue("no driving variant of the page", !live.contains("LiveDriving"))
     assertEquals("one caller", 1, Regex("""(?<!fun )\bHeatmapCard\(""").findAll(live).count())
-    assertTrue(funBody(live, "LiveParked").contains("HeatmapCard("))
+    assertTrue(funBody(live, "CellsCard").contains("HeatmapCard("))
     assertEquals("the cell tap", 1, Regex("""\.clickable\(""").findAll(live).count())
     assertTrue(funBody(live, "Heatmap").contains(".clickable("))
     // The one tap gesture of the dashboards, adding nothing at all when disabled.
@@ -378,7 +367,7 @@ class AndroidWiringTest {
       assertEquals("$name: raw gesture", 0, Regex("""\bdetectTapGestures\b|\bpointerInput\b""").findAll(text).count())
     }
     // Nothing takes it since Trends went (owner, 2026-11-15).
-    assertEquals(0, Regex("""\.inspectTap\(""").findAll(src("ui/simple/SimpleScreen.kt")).count())
+    assertEquals(0, Regex("""\.inspectTap\(""").findAll(src("ui/simple/BatteryCard.kt")).count())
     assertEquals(0, Regex("""\.inspectTap\(""").findAll(live).count())
   }
 
@@ -408,13 +397,18 @@ class AndroidWiringTest {
     assertTrue(Regex("""_ux\.value = info""").containsMatchIn(funBody(reader, "refreshUx")))
   }
 
-  /** Each drive starts fresh: nothing of an earlier one is kept, Live shows the same range, and Simple gets the MX+'s capacity. */
+  /**
+   * Each drive starts fresh: nothing of an earlier one is kept, and Live shows the same range. The API page shows the
+   * car's API only and the OBD page the MX+'s windows (the owner, 2026-11-18): Simple gets no MX+ capacity or energy.
+   */
   @Test
-  fun liveShowsTheOwnRangeAndSimpleTheMxCapacity() {
+  fun liveShowsTheOwnRangeAndTheCardTheApiOnly() {
     assertFalse(src("vehicle/CarVehicleSource.kt").contains("lastEfficiency"))
     val shell = src("ui/AppShell.kt")
     assertTrue(shell.contains("ownRangeM = session.rangeEstimate?.m"))
-    assertTrue(shell.contains("mxCapacityKwh = SimpleModel.mxCapacityKwh(live)"))
+    assertFalse(shell.contains("mxCapacityKwh"))
+    assertTrue(shell.contains("cells = tab == AppTab.CELLS,"))
+    assertFalse(src("ui/simple/BatteryCard.kt").contains("EnergySplit"))
   }
 
   /** The screens draw the held flows, so values change at most once a second while driving. */

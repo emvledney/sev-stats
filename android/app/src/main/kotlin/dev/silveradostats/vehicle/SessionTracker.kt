@@ -104,6 +104,9 @@ object EffUnits {
 
 /** What the session's energy figure is measured from at the moment. */
 enum class EnergySource {
+  /** The truck's own count of the energy used, read through the MX+ (the owner, 2026-11-17): no drift, nothing to integrate. */
+  MX_COUNTER,
+
   /** Pack voltage x pack current from the MX+. */
   MX_PACK,
 
@@ -366,6 +369,14 @@ class SessionTracker(
   private var packStepWh = 0.0
   private var packCheck = SignalCheck()
 
+  // The truck's own energy count, from the MX+.
+  private var counterWh: Double? = null
+  private var counterAtMs: Long? = null
+  /** Counted since the last energy step. */
+  private var counterStepWh = 0.0
+  /** What the level said since the count's last reading, taken out for the count to cover: given back if no reading follows. */
+  private var levelSinceCounterWh = 0.0
+
   /** Starts a new session now: everything is cleared. */
   fun reset() {
     startedAtMs = clock()
@@ -418,6 +429,10 @@ class SessionTracker(
     packAtMs = null
     packStepWh = 0.0
     packCheck = SignalCheck()
+    counterWh = null
+    counterAtMs = null
+    counterStepWh = 0.0
+    levelSinceCounterWh = 0.0
   }
 
   /**
@@ -563,6 +578,30 @@ class SessionTracker(
   }
 
   /**
+   * One reading of the truck's own energy count from the MX+, Wh ([EnergyCounters.usedWh]). While these arrive the
+   * session's energy is this count's change, not the level's (the owner, 2026-11-17); with none for
+   * [COUNTER_GAP_MS] it is the level and the power signals again. Nothing is counted across such a gap: the
+   * level has that stretch.
+   */
+  fun addCounter(atMs: Long, wh: Double) {
+    if (!wh.isFinite()) return
+    val prevAt = counterAtMs
+    val prev = counterWh
+    if (prevAt != null && prev != null && atMs > prevAt && atMs - prevAt <= COUNTER_GAP_MS) {
+      val step = wh - prev
+      // More than any power could move it: the truck started its count over (it does at a full charge).
+      if (abs(step) <= MAX_RATE_KW * (atMs - prevAt) / 3600.0) {
+        counterStepWh += step
+      } else {
+        measuredOverLevelWh += levelSinceCounterWh
+      }
+      levelSinceCounterWh = 0.0
+    }
+    counterWh = wh
+    counterAtMs = atMs
+  }
+
+  /**
    * [raw], or null while it is a jump no drive or charger can cause. A jump that repeats
    * [LEVEL_CONFIRM] times is real, but it is still not energy used: the measurement restarts there.
    */
@@ -598,6 +637,7 @@ class SessionTracker(
     levelUnchecked = true
     restartEnergy()
     packAtMs = null
+    counterAtMs = null
     observedLevel = null
     stationary = false
     stopMinLevel = null
@@ -607,6 +647,8 @@ class SessionTracker(
   private fun restartEnergy() {
     energyAtMs = null
     packStepWh = 0.0
+    counterStepWh = 0.0
+    levelSinceCounterWh = 0.0
   }
 
   private fun closeSegment() {
@@ -662,7 +704,14 @@ class SessionTracker(
     val levelWh = if (obs != null && abs(lv - obs) >= LEVEL_EPS_WH) obs - lv else 0.0
     val wasOnLevel = energySource == EnergySource.BATTERY_LEVEL
     val levelWasOut = energyAtMs?.let { atMs - it > RATE_FRESH_MS } == true
+    val wasOnCounter = energySource == EnergySource.MX_COUNTER
     val measuredWh = measuredStep(atMs, levelWh)
+    // The truck's count stopped arriving: nothing else has counted what the level said since its last reading.
+    val lapsed = wasOnCounter && energySource != EnergySource.MX_COUNTER
+    if (lapsed) {
+      measuredOverLevelWh += levelSinceCounterWh
+      levelSinceCounterWh = 0.0
+    }
     if (obs == null) {
       observedLevel = lv
       return
@@ -672,10 +721,13 @@ class SessionTracker(
       observedLevel = lv
     }
     when {
-      measuredWh != null && !wasOnLevel -> measuredOverLevelWh += measuredWh - levelWh
+      measuredWh != null && !wasOnLevel -> {
+        measuredOverLevelWh += measuredWh - levelWh
+        if (energySource == EnergySource.MX_COUNTER) levelSinceCounterWh += levelWh
+      }
       // The signal has already counted what this step of the level covers, unless the level was out:
       // then the step is all there is for that stretch.
-      measuredWh == null && !wasOnLevel && !levelWasOut -> measuredOverLevelWh -= levelWh
+      measuredWh == null && !wasOnLevel && !levelWasOut && !lapsed -> measuredOverLevelWh -= levelWh
     }
     val m = stopMinLevel
     if (levelWh != 0.0 && stationary && m != null && lv < m) stopMinLevel = lv
@@ -694,8 +746,15 @@ class SessionTracker(
     if (pack != null && stepMs != null) packCheck.add(pack, levelWh, minWh)
     val rate = rateStepWh(stepMs, atMs)
     if (rate != null) rateCheck.add(rate, levelWh, minWh)
+    val counter = counterStepWh.takeIf { counterAtMs?.let { at -> atMs - at <= COUNTER_GAP_MS } == true }
+    counterStepWh = 0.0
     val wh: Double
     when {
+      // The truck's own count needs no check against the level: it is energy, not a power to integrate.
+      counter != null -> {
+        energySource = EnergySource.MX_COUNTER
+        wh = counter
+      }
       pack != null && packCheck.sign != 0 -> {
         energySource = EnergySource.MX_PACK
         wh = pack * packCheck.sign
@@ -924,6 +983,9 @@ class SessionTracker(
 
     /** MX+ pack readings further apart than this are not integrated: a poll cycle takes a few seconds. */
     const val PACK_GAP_MS = 10_000L
+
+    /** The truck's energy count is read every 10 s: with none for this long the level takes over. */
+    const val COUNTER_GAP_MS = 60_000L
 
     /** A charge-rate reading beyond this (2 MW) is junk, mW. */
     const val MAX_RATE_MW = 2.0e9

@@ -133,51 +133,45 @@ data class DashLayout(
   private val cardHeadDp: Int get() = lineDp(type.cardTitle)
   private val noticeBudgetDp: Int get() = noticeDp + gapDp
 
-  // --- Simple: four columns of two cells alike, the last charge's row under all four ---
+  // --- Simple (API): three figures across, the whole height (the owner, 2026-11-18) ---
 
-  /** The shortest page Simple can be: the figures at their smallest, and no room for Range's line, which is the first to give way. */
-  fun requiredSimple(notice: Boolean): Int = page(2 * tileDp(0, LIVE_VALUE_MIN_SP) + gapDp + gapDp + chargeMinDp, notice)
+  /** The shortest page Simple can be: the figures at their smallest, and no room for a tile's line, which is the first to give way. */
+  fun requiredSimple(notice: Boolean): Int = page(tileDp(0, LIVE_VALUE_MIN_SP), notice)
 
-  /** A column's width: the page's, shared evenly by [SIMPLE_COLUMNS]. */
+  /** A tile's width: the page's, shared evenly by [SIMPLE_COLUMNS]. */
   val simpleColumnDp: Float get() = (widthDp - 2f * pagePadHDp - (SIMPLE_COLUMNS - 1) * gapDp) / SIMPLE_COLUMNS
 
-  /** The height the tiles share, under any notice. */
+  /** The tiles' height, under any notice. */
   private fun simpleTilesDp(notice: Boolean): Int = bodyDp - if (notice) noticeBudgetDp else 0
 
-  /** The height the columns have above the energy band and the last charge. */
-  private fun simpleColumnsDp(notice: Boolean): Int =
-    simpleTilesDp(notice) - simpleChargeDp(notice) - gapDp - simpleEnergyDp(notice).let { if (it > 0) it + gapDp else 0 }
+  // --- The OBD page's window cards (the owner, 2026-11-18): three across under the pack tiles. In each, the mi/kWh
+  // beside the miles, then where the energy went at its foot: the total over a bar, and driving, climate and the rest
+  // side by side, each its figure over its name (the energy band of 2026-11-16, mockup B) ---
 
-  // The energy band, by the owner's choice (2026-11-16, mockup B): one row of three panels between the columns and
-  // the last charge, one for each window. A head, a bar, and the three parts' figures over their names.
-
-  /** A part's figure in the energy band. */
-  val simpleEnergySp: Int get() = type.cardTitle + 4
-
-  private val energyBandDp: Int
-    get() = 2 * cardPadVDp + lineDp(type.title) + cardGapDp + ENERGY_BAR_DP + cardGapDp + lineDp(simpleEnergySp, VALUE_LINE_FACTOR) + lineDp(type.label) + TILE_ROUNDING_DP
-
-  /** The energy band's height. 0: no room for it, and it is the first row to give way (a notice on a short window). */
-  fun simpleEnergyDp(notice: Boolean): Int {
-    val columns = simpleTilesDp(notice) - simpleChargeDp(notice) - gapDp - energyBandDp - gapDp
-    return if (columns >= 2 * tileDp(0, LIVE_VALUE_MIN_SP) + gapDp) energyBandDp else 0
+  /** The parts' figures: as large as a third of the card's width ("-12.3") and half its height allow, never larger than [maxSp]. */
+  fun windowPartSp(windowDp: Float, heightDp: Float, maxSp: Int): Int {
+    val forWidth = ((windowDp - 2 * cardPadHDp - 2 * WINDOW_PART_GAP_DP) / 3 - CHARGE_ROUNDING_DP) / (5 * FIGURE_EM * fontScale)
+    val forHeight = (heightDp / 2 - windowEnergyDp(0)) / (2 * VALUE_LINE_FACTOR * fontScale)
+    return max(type.title, minOf(forWidth.toInt(), forHeight.toInt(), maxSp))
   }
 
-  /**
-   * Trip and Used hold two figures, this drive's over the last 15 minutes' (the owner, 2026-11-16): as large as
-   * half the tile allows, with the unit and "last 15 min" beside it. Never larger than the other tiles' one figure.
-   */
-  fun simpleSplitSp(notice: Boolean): Int {
-    val tile = (simpleColumnsDp(notice) - gapDp) / 2
-    val rows = tile - 2 * cardPadVDp - tileHeadDp - 2 * cardGapDp - TILE_ROUNDING_DP
-    var sp = min(simpleFigureSp(notice), (rows / 2 / (VALUE_LINE_FACTOR * fontScale)).toInt())
-    while (sp > LIVE_VALUE_MIN_SP && splitRowDp(sp) > simpleColumnDp - 2 * cardPadHDp) sp -= 1
+  /** A card's energy: its total and the parts' figures at [partSp], the bar, the names, and the gaps between the card's rows; 0 for all but the figures. */
+  fun windowEnergyDp(partSp: Int): Int =
+    (if (partSp > 0) 2 * lineDp(partSp, VALUE_LINE_FACTOR) else 0) + lineDp(type.title) + ENERGY_BAR_DP + 4 * cardGapDp + TILE_ROUNDING_DP
+
+  /** The mi/kWh and the miles, side by side: as large as half the card's width and the height the energy leaves allow, never larger than [maxSp]. */
+  fun windowFigureSp(windowDp: Float, heightDp: Int, partSp: Int, maxSp: Int): Int {
+    // Less one for the figure's line rounding up.
+    val room = heightDp - 2 * cardPadVDp - tileHeadDp - windowEnergyDp(partSp) - 1
+    var sp = min(maxSp, (room / (VALUE_LINE_FACTOR * fontScale)).toInt())
+    val half = (windowDp - 2 * cardPadHDp - WINDOW_PART_GAP_DP) / 2
+    while (sp > LIVE_VALUE_MIN_SP && splitRowDp(sp) > half) sp -= 1
     return max(LIVE_VALUE_MIN_SP, sp)
   }
 
-  /** "123.4 kWh" and "last 15 min" in one row, at their widest. */
+  /** "12.34 mi/kWh" at its widest. */
   private fun splitRowDp(sp: Int): Float =
-    (5 * FIGURE_EM * sp + 3 * CHARGE_UNIT_CHAR_EM * simpleUnitSp(sp) + SPLIT_LABEL_CHARS * SUMMARY_EM * type.label) * fontScale + 2 * LIVE_FIGURE_GAP_DP + CHARGE_ROUNDING_DP
+    (5 * FIGURE_EM * sp + 6 * CHARGE_UNIT_CHAR_EM * simpleUnitSp(sp)) * fontScale + LIVE_FIGURE_GAP_DP + CHARGE_ROUNDING_DP
 
   /** The largest figure of [ems] that fits a column and [heightDp], with its unit beside it. */
   private fun figureFitSp(ems: Float, heightDp: Int): Int {
@@ -186,80 +180,18 @@ data class DashLayout(
     return max(LIVE_VALUE_MIN_SP, minOf(forWidth, forHeight).toInt())
   }
 
-  /** All eight cells, one size: each has its head and room for one line under the figure, as Range uses. */
-  fun simpleFigureSp(notice: Boolean): Int {
-    val tile = (simpleColumnsDp(notice) - gapDp) / 2
-    // Each part of a tile rounds up: without the spare room a tall window would lose Range's line.
-    return figureFitSp(SIMPLE_FIGURE_EM, tile - 2 * cardPadVDp - tileHeadDp - cardGapDp - simpleLineDp - TILE_ROUNDING_DP)
-  }
+  /** The three tiles, one size: each has its head and room for one line under the figure ("Waiting for the capacity"). */
+  fun simpleFigureSp(notice: Boolean): Int =
+    figureFitSp(SIMPLE_FIGURE_EM, simpleTilesDp(notice) - 2 * cardPadVDp - simpleHeadDp - cardGapDp - simpleLineDp - TILE_ROUNDING_DP)
+
+  /** A Simple tile's name, a size up from the other pages' (the owner, 2026-11-18: three large tiles). */
+  val simpleHeadDp: Int get() = max(tileHeadDp, lineDp(type.cardTitle))
 
   /** Under a cell's figure: the same in every cell, so that a row's figures line up with or without a line there. */
   val simpleLineDp: Int get() = cardGapDp + lineDp(type.body)
 
   /** A figure's unit: in proportion, down to what can still be read. */
   fun simpleUnitSp(figureSp: Int): Int = max(type.label, (figureSp * SIMPLE_UNIT_SHARE).toInt())
-
-  /**
-   * The words under each figure of the last charge's row: as a tile's head, but where the height is short, or where a
-   * column is too narrow for "last charged to" and "of capacity" side by side at that size: the figures would only
-   * shrink for words that do not.
-   */
-  val simpleChargeLabelSp: Int get() = if (tier == SizeTier.COMPACT || !chargeWordsFit(type.title)) type.label else type.title
-
-  private fun chargeWordsFit(sp: Int): Boolean =
-    (CHARGE_REACHED_KWH.labelChars + CHARGE_REACHED_PCT.labelChars) * SUMMARY_EM * sp * fontScale + cardPadHDp <= simpleColumnDp - 2 * cardPadHDp
-
-  private val chargeLabelDp: Int get() = cardGapDp + lineDp(simpleChargeLabelSp)
-
-  private val chargeMinDp: Int get() = 2 * cardPadVDp + lineDp(LIVE_VALUE_MIN_SP, VALUE_LINE_FACTOR) + chargeLabelDp
-
-  /** The last charge's row: a share of the height, so that its figure never takes room from the cells above as the width grows. */
-  fun simpleChargeDp(notice: Boolean): Int = max(chargeMinDp, (simpleTilesDp(notice) * SIMPLE_CHARGE_SHARE).toInt())
-
-  /** What goes beside a figure in the last charge's row. */
-  fun simpleChargeUnitSp(figureSp: Int): Int = max(type.label, (figureSp * CHARGE_UNIT_SHARE).toInt())
-
-  /** A figure of that row at [sp]: the figure and its unit, or the words under them, whichever is wider. A unit stops shrinking long before a figure does. */
-  private fun chargeFigureDp(c: ChargeFigure, sp: Int): Float {
-    val figure = (c.figureChars * FIGURE_EM * sp + c.unitChars * CHARGE_UNIT_CHAR_EM * simpleChargeUnitSp(sp)) * fontScale + LIVE_FIGURE_GAP_DP + CHARGE_ROUNDING_DP
-    val words = c.labelChars * SUMMARY_EM * simpleChargeLabelSp * fontScale
-    return max(figure, words)
-  }
-
-  /** What the charge reached, the kWh then the %, side by side in the row's first part: each as wide as it gets, the kWh with a card's padding after it. */
-  private fun chargeReachedDp(sp: Int): List<Float> = listOf(chargeFigureDp(CHARGE_REACHED_KWH, sp) + cardPadHDp, chargeFigureDp(CHARGE_REACHED_PCT, sp))
-
-  /** Each of the row's four parts holds what it has at [sp], inside the padding of the column above it. */
-  private fun chargeFits(sp: Int): Boolean {
-    val room = simpleColumnDp - 2 * cardPadHDp
-    return chargeReachedDp(sp).sum() <= room && CHARGE_SINCE.all { chargeFigureDp(it, sp) <= room }
-  }
-
-  /**
-   * The last charge's figures: as tall as the row leaves over its words, as long as each of its four parts still
-   * fits under its column (what the charge reached, then the energy used since, the mi/kWh since and the drift).
-   */
-  fun simpleChargeSp(notice: Boolean): Int {
-    var sp = ((simpleChargeDp(notice) - 2 * cardPadVDp - chargeLabelDp) / (VALUE_LINE_FACTOR * fontScale)).toInt()
-    while (sp > LIVE_VALUE_MIN_SP && !chargeFits(sp)) sp -= 1
-    return max(LIVE_VALUE_MIN_SP, sp)
-  }
-
-  /**
-   * The row's three parts that hold one figure each: their own size, as large as their tile holds, by the owner's
-   * choice (2026-11-12). The first part's two figures side by side kept all four small. Never smaller than those.
-   */
-  fun simpleChargeSingleSp(notice: Boolean): Int {
-    val floor = simpleChargeSp(notice)
-    val room = simpleColumnDp - 2 * cardPadHDp
-    var sp = ((simpleChargeDp(notice) - 2 * cardPadVDp - chargeLabelDp) / (VALUE_LINE_FACTOR * fontScale)).toInt()
-    // Bold digits this large run wider than the estimate: a tenth to spare.
-    while (sp > floor && !CHARGE_SINCE.all { chargeFigureDp(it, sp) <= room * CHARGE_SINGLE_FILL }) sp -= 1
-    return max(floor, sp)
-  }
-
-  /** The kWh's and the %'s shares of the first part: what each needs at its widest, so that the % stays put as the figures change. */
-  fun simpleChargeReachedWeights(notice: Boolean): List<Float> = chargeReachedDp(simpleChargeSp(notice))
 
   fun requiredLive(): Int = page(liveTilesDp + if (liveCards) gapDp + liveCardsDp() else 0, notice = false)
 
@@ -363,9 +295,12 @@ data class DashLayout(
     /** The widest value of a small pack tile: "377.1 V" (the coolants have a tile each since 2026-11-13). */
     const val PACK_VALUE_CHARS = 7
 
-    /** The Expert page's tile grid and cell grid share its width 1.6 : 1.8; the cell grid had 2.4 : 1 until 2026-11-13. */
-    const val PACK_SHARE = 1.6f
-    const val HEAT_SHARE = 1.8f
+    /**
+     * Under the OBD page's five tiles, the pack tiles (two columns of three rows) and the window cards share the height
+     * (the owner, 2026-11-18, when the cell grid went to Cells).
+     */
+    const val PACK_SHARE = 1f
+    const val WINDOWS_SHARE = 1.25f
 
     /** One of five columns in a wide pack tile: "3.913". */
     const val PACK_PART_CHARS = 5
@@ -377,21 +312,16 @@ data class DashLayout(
     const val HEAT_ROWS = 8
     const val HEAT_ROW_MIN_DP = 9
 
-    /** Simple's columns, all alike: the owner had the battery ring taken out for cells like the others (2026-11-07). */
-    const val SIMPLE_COLUMNS = 4
+    /** Simple's columns, all alike: capacity, remaining, state of charge (the owner, 2026-11-18). */
+    const val SIMPLE_COLUMNS = 3
 
     /** The bar of an energy window. */
-    const val ENERGY_BAR_DP = 8
-    private const val SPLIT_LABEL_CHARS = 11 // last 15 min
+    const val ENERGY_BAR_DP = 12
 
-    /** The rules between the last charge's columns. */
-    const val SIMPLE_RULE_DP = 1
+    /** A window card's part: its dot; and between the parts, and the figures. */
+    const val WINDOW_DOT_DP = 10
+    const val WINDOW_PART_GAP_DP = 8
     private const val SIMPLE_UNIT_SHARE = 0.27f
-
-    /** The last charge's row against the height of the tiles. */
-    private const val SIMPLE_CHARGE_SHARE = 0.24f
-    private const val CHARGE_UNIT_SHARE = 0.42f
-    const val CHARGE_SINGLE_FILL = 0.9f
 
     /** A unit's characters: "kWh" and "mi/kWh" are wide ones, and an end cut off would say nothing. */
     private const val CHARGE_UNIT_CHAR_EM = 0.68f
@@ -399,19 +329,6 @@ data class DashLayout(
 
     /** A figure's glyphs round up to whole pixels at small sizes: without this, "100.0 %" lost its % on a 1250 dp window. */
     const val CHARGE_ROUNDING_DP = 4
-
-    /** One figure of the last charge's row, at its widest. */
-    private class ChargeFigure(val figureChars: Int, val unitChars: Int, val labelChars: Int)
-
-    private val CHARGE_REACHED_KWH = ChargeFigure(5, 3, 15) // 186.4 kWh, last charged to
-    private val CHARGE_REACHED_PCT = ChargeFigure(5, 1, 11) // 100.0 %, of capacity
-
-    /** The row's other three parts, one figure each. */
-    private val CHARGE_SINCE = listOf(
-      ChargeFigure(5, 3, 10), // 186.4 kWh, used since
-      ChargeFigure(4, 6, 5), // 2.24 mi/kWh, since
-      ChargeFigure(5, 3, 5), // +12.3 kWh, drift
-    )
 
     /** What a short window is sure to keep of the pack and temperature card; a taller one shows them all. */
     const val TEMP_LINES = 5

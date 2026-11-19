@@ -75,6 +75,12 @@ import dev.silveradostats.ui.theme.StatusWarn
 import dev.silveradostats.ui.theme.TempRampHigh
 import dev.silveradostats.ui.theme.TempRampLow
 import dev.silveradostats.ui.theme.TextDim
+import dev.silveradostats.ui.simple.Panel
+import dev.silveradostats.ui.simple.SimpleModel
+import dev.silveradostats.ui.simple.StatFigure
+import dev.silveradostats.ui.simple.StatHead
+import dev.silveradostats.ui.simple.WindowView
+import dev.silveradostats.vehicle.EnergySplit
 import dev.silveradostats.vehicle.Fmt
 import dev.silveradostats.vehicle.KnownProperties
 import dev.silveradostats.vehicle.PropertyRow
@@ -97,7 +103,9 @@ fun vhalFigures(rows: List<PropertyRow>): VhalFigures {
 
 /**
  * The OBD dashboard, on one page in any landscape window: KPI tiles of a fixed height, then the grid of pack
- * and temperature tiles beside the cell-group heatmap with its module strip.
+ * and temperature tiles beside the three windows from the MX+ (the owner, 2026-11-18): this drive, the last 15
+ * minutes and since the charge, each its mi/kWh over its miles and its energy band. With [cells] the page is the
+ * Cells tab instead: the cell-group heatmap with its module strip, the whole page (it was beside the tiles until then).
  *
  * The page is the same in every gear, by the owner's choice (2026-11-11): the shell gives it the parked layout
  * ([DashLayout.ofLive]) whatever the truck is doing, heatmap and its tap-to-inspect included. [driving] only
@@ -109,6 +117,9 @@ fun LiveScreen(
   vhal: VhalFigures,
   /** The session's own range, m (the truck's is in [live] and [vhal]). */
   ownRangeM: Double?,
+  energy: EnergySplit?,
+  /** The Cells tab: the heatmap alone. */
+  cells: Boolean,
   settings: UiSettings,
   layout: DashLayout,
   /** The truck is out of Park: the figures then change together, once a second. */
@@ -153,30 +164,95 @@ fun LiveScreen(
       WindowTooSmall(layout)
       return@Column
     }
+    val windows = remember(energy) { SimpleModel.windows(energy, Units.DIST) }
     Column(
       Modifier.fillMaxWidth().weight(1f).padding(horizontal = layout.pagePadHDp.dp, vertical = layout.pagePadVDp.dp),
       verticalArrangement = Arrangement.spacedBy(layout.gapDp.dp),
     ) {
-      KpiTiles(dash, layout)
-      // Only what has its minimum height: a window too short for the cards shows no empty ones.
-      if (layout.liveCards) {
-        LiveParked(dash, live.status == LinkStatus.NO_ADAPTER, Units.TEMP, layout, onOpenDiagnostics, Modifier.weight(1f))
+      if (cells) {
+        CellsCard(dash, live.status == LinkStatus.NO_ADAPTER, Units.TEMP, layout, onOpenDiagnostics, Modifier.fillMaxWidth().weight(1f))
+      } else {
+        KpiTiles(dash, layout)
+        // Only what has its minimum height: a window too short for the cards shows no empty ones.
+        // The pack tiles in two columns, the first rows on the left and the rest on the right, then the three windows
+        // across the page (the owner, 2026-11-18).
+        if (layout.liveCards) {
+          val half = (dash.packTiles.size + 1) / 2
+          Row(Modifier.fillMaxWidth().weight(DashLayout.PACK_SHARE), horizontalArrangement = Arrangement.spacedBy(layout.gapDp.dp)) {
+            PackTiles(dash.packTiles.take(half), layout, Modifier.weight(1f).fillMaxHeight())
+            PackTiles(dash.packTiles.drop(half), layout, Modifier.weight(1f).fillMaxHeight())
+          }
+          Windows(windows, layout, Modifier.fillMaxWidth().weight(DashLayout.WINDOWS_SHARE))
+        }
       }
     }
   }
 }
 
-/** The cards under the tiles: the grid of pack and temperature tiles, and the cell-group heatmap with its tap-to-inspect. */
+/** The Cells tab: the cell-group heatmap with its tap-to-inspect, or what it takes to get one. */
 @Composable
-private fun LiveParked(dash: Dashboard, noAdapter: Boolean, unit: TempUnit, layout: DashLayout, onOpenDiagnostics: () -> Unit, modifier: Modifier) {
+private fun CellsCard(dash: Dashboard, noAdapter: Boolean, unit: TempUnit, layout: DashLayout, onOpenDiagnostics: () -> Unit, modifier: Modifier) {
   var selectedGroup by rememberSaveable { mutableStateOf<Int?>(null) }
-  // The cell grid is a quarter narrower than it was (2.4 of 3.4 shares), by the owner's request (2026-11-13): the tiles have the rest.
-  Row(modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(layout.gapDp.dp)) {
-    PackTiles(dash.packTiles, layout, Modifier.weight(DashLayout.PACK_SHARE).fillMaxHeight())
-    if (dash.heatmap == null) {
-      NoCellDataCard(noAdapter, dash.obdHint, dash.moduleTemps, unit, layout, onOpenDiagnostics, Modifier.weight(DashLayout.HEAT_SHARE).fillMaxHeight())
-    } else {
-      HeatmapCard(dash.heatmap, dash.moduleTemps, unit, selectedGroup, { selectedGroup = it }, layout, Modifier.weight(DashLayout.HEAT_SHARE).fillMaxHeight())
+  if (dash.heatmap == null) {
+    NoCellDataCard(noAdapter, dash.obdHint, dash.moduleTemps, unit, layout, onOpenDiagnostics, modifier)
+  } else {
+    HeatmapCard(dash.heatmap, dash.moduleTemps, unit, selectedGroup, { selectedGroup = it }, layout, modifier)
+  }
+}
+
+/**
+ * Under the pack tiles: the three windows (the owner, 2026-11-18), a card each: its mi/kWh beside its miles, then where
+ * the energy went at the foot, its total over a bar and driving, climate and the rest side by side.
+ */
+@Composable
+private fun Windows(windows: List<WindowView>, layout: DashLayout, modifier: Modifier) {
+  val gapDp = layout.gapDp
+  BoxWithConstraints(modifier) {
+    val windowDp = (maxWidth.value - 2 * gapDp) / 3
+    val figureMax = layout.obdFigureSp(false)
+    val partSp = layout.windowPartSp(windowDp, maxHeight.value, figureMax * 3 / 4)
+    val sp = layout.windowFigureSp(windowDp, maxHeight.value.toInt(), partSp, figureMax)
+    Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(gapDp.dp)) {
+      windows.forEach { WindowCard(it, sp, partSp, layout, Modifier.weight(1f).fillMaxHeight()) }
+    }
+  }
+}
+
+/** Driving, climate, the rest: the same colour for each in the bar and beside its name, as on the band before. */
+private val WindowColors = listOf(StatusOk, DivergingLow, TextDim)
+
+@Composable
+private fun WindowCard(w: WindowView, sp: Int, partSp: Int, layout: DashLayout, modifier: Modifier) {
+  val e = w.energy
+  val gap = Arrangement.spacedBy(DashLayout.WINDOW_PART_GAP_DP.dp)
+  val ink = if (e.hasValue) MaterialTheme.colorScheme.onSurface else TextDim
+  Panel(modifier, layout) {
+    StatHead(w.efficiency, layout, Modifier.fit(1).fillMaxWidth())
+    Row(Modifier.fill(0, layout.lineDp(sp, DashLayout.VALUE_LINE_FACTOR).dp).fillMaxWidth(), horizontalArrangement = gap, verticalAlignment = Alignment.CenterVertically) {
+      StatFigure(w.efficiency, layout, sp, Modifier.weight(1f))
+      StatFigure(w.miles, layout, sp, Modifier.weight(1f))
+    }
+    Row(Modifier.fit(3).fillMaxWidth(), horizontalArrangement = gap, verticalAlignment = Alignment.Bottom) {
+      if (e.hasValue) {
+        FitText(e.total.removeSuffix(" kWh"), Modifier.alignByBaseline(), sp = partSp, lineFactor = DashLayout.VALUE_LINE_FACTOR, weight = FontWeight.Bold, color = ink)
+        FitText("kWh used", Modifier.alignByBaseline(), sp = layout.simpleUnitSp(partSp), color = TextDim)
+      } else {
+        FitText(e.total, sp = layout.type.title, color = TextDim)
+      }
+    }
+    Row(Modifier.fit(3).fillMaxWidth().height(DashLayout.ENERGY_BAR_DP.dp).clip(CircleShape).background(GridLine), horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+      e.parts.forEachIndexed { i, p -> if (p.share > 0f) Box(Modifier.weight(p.share).fillMaxHeight().background(WindowColors[i])) }
+    }
+    Row(Modifier.fit(2).fillMaxWidth(), horizontalArrangement = gap) {
+      e.parts.forEachIndexed { i, p ->
+        Column(Modifier.weight(1f)) {
+          FitText(p.value, sp = partSp, lineFactor = DashLayout.VALUE_LINE_FACTOR, weight = FontWeight.Bold, color = ink)
+          Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            Dot(WindowColors[i], DashLayout.WINDOW_DOT_DP)
+            FitText(p.label, sp = layout.type.title, color = TextDim)
+          }
+        }
+      }
     }
   }
 }
@@ -546,6 +622,9 @@ private fun Heatmap(heat: HeatmapView, selectedGroup: Int?, onSelect: (Int?) -> 
     val cellDp = (maxWidth.value - layout.heatLabelDp - halfGap) / heat.modules
     // Two-digit module numbers on every column only if they fit one column's width.
     val everyModule = cellDp >= 2 * layout.type.axis * 0.62f * layout.fontScale
+    // Each cell's voltage on it, like the temperature view's figures (owner, 2026-11-19); colour alone when "3.842" does
+    // not fit a cell, never an ellipsis.
+    val figures = rowLabels && cellDp >= 5 * layout.type.axis * 0.62f * layout.fontScale + 2
     Column(Modifier.fillMaxSize()) {
       ColumnsRow("mod", heat.modules, heat.halfAfter, layout, Modifier.height(layout.heatHeadDp.dp)) { m, mod ->
         if (everyModule || m % 2 == 1) {
@@ -564,11 +643,12 @@ private fun Heatmap(heat: HeatmapView, selectedGroup: Int?, onSelect: (Int?) -> 
         ) { m, mod ->
           val c = heat.cell(m, row)
           val selected = c != null && c.group == selectedGroup
+          val bg = heatColor(c?.devMv, heat.scaleMv)
           Box(
             mod
               .padding(1.dp)
               .clip(RoundedCornerShape(3.dp))
-              .background(heatColor(c?.devMv, heat.scaleMv))
+              .background(bg)
               .then(
                 when {
                   selected -> Modifier.border(3.dp, Color.White, RoundedCornerShape(3.dp))
@@ -577,7 +657,17 @@ private fun Heatmap(heat: HeatmapView, selectedGroup: Int?, onSelect: (Int?) -> 
                 },
               )
               .clickable(enabled = c != null) { onSelect(if (selected) null else c?.group) },
-          )
+            contentAlignment = Alignment.Center,
+          ) {
+            if (figures && c?.volts != null) {
+              FitText(
+                Units.num(c.volts, 3),
+                sp = layout.type.axis,
+                color = if (bg.luminance() > 0.4f) Color(0xFF14110A) else Ink,
+                weight = FontWeight.SemiBold,
+              )
+            }
+          }
         }
       }
     }

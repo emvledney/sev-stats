@@ -10,14 +10,14 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 
 /**
- * The main screen's tabs, in order. Only Live and Diagnostics show the OBD link's data (the MX+).
- * Map uses neither the link nor the car API. On screen SIMPLE reads "Simple" (the truck's built-in
- * vehicle API) and LIVE reads "Expert" (the adapter), the owner's names for them (2026-11-11, after "API" / "OBD").
+ * The main screen's tabs, in order. Only Live, Cells and Diagnostics show the OBD link's data (the MX+).
+ * Map is first and the default (the owner, 2026-11-18), with the car API's battery figures in a card over the map:
+ * the API tab went, so a tab saved under a name that is gone opens on Map. LIVE reads "OBD" (the adapter).
  */
 enum class AppTab(val label: String, val needsObd: Boolean) {
-  SIMPLE("Simple", false),
-  LIVE("Expert", true),
   MAP("Map", false),
+  LIVE("OBD", true),
+  CELLS("Cells", true),
   DIAGNOSTICS("Diagnostics", true),
   ;
 
@@ -33,7 +33,7 @@ data class UiSettings(
   val mxAddress: String?,
   val mxName: String?,
   /** The last selected tab (the app reopens on it). */
-  val tab: AppTab = AppTab.SIMPLE,
+  val tab: AppTab = AppTab.MAP,
   /**
    * The user disconnected the MX+: the app leaves it alone until they tap Connect or the app starts again. Not kept
    * across starts since 2026-11-13: the owner wants the app to reconnect to the MX+ on its own whenever it starts.
@@ -42,12 +42,12 @@ data class UiSettings(
   val savedCapacity: SavedCapacity? = null,
 ) {
   /**
-   * Whether the OBD link is wanted: on the tabs that show it, and on Simple too with a chosen MX+ that is
-   * not disconnected, because its pack power is what the session's energy is best measured from.
+   * Whether the OBD link is wanted: on the tabs that show it, and on Map too, the default screen, with a chosen MX+
+   * that is not disconnected (as on the API tab before it): the log and the session's energy count come from it.
    */
   fun wantsObd(restricted: Boolean): Boolean {
     val mxUsable = mxAddress != null && !mxOff && !demo
-    return tab.wantsObd(restricted) || (tab == AppTab.SIMPLE && mxUsable)
+    return tab.wantsObd(restricted) || (tab == AppTab.MAP && mxUsable)
   }
 }
 
@@ -63,7 +63,7 @@ class AppSettings private constructor(context: Context) {
       demo = if (prefs.contains(KEY_DEMO)) prefs.getBoolean(KEY_DEMO, false) else defaultDemo(app),
       mxAddress = prefs.getString(KEY_MX_ADDRESS, null),
       mxName = prefs.getString(KEY_MX_NAME, null),
-      tab = prefs.getString(KEY_TAB, null)?.let { runCatching { AppTab.valueOf(it) }.getOrNull() } ?: AppTab.SIMPLE,
+      tab = prefs.getString(KEY_TAB, null)?.let { runCatching { AppTab.valueOf(it) }.getOrNull() } ?: AppTab.MAP,
       mxOff = false,
       savedCapacity = prefs.getLong(KEY_CAPACITY_AT, 0L).takeIf { it > 0 }?.let { at ->
         SavedCapacity(prefs.getString(KEY_CAPACITY_KWH, null)?.toDoubleOrNull(), prefs.getString(KEY_CAPACITY_AH, null)?.toDoubleOrNull(), at)

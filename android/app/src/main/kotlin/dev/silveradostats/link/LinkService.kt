@@ -7,6 +7,7 @@ import android.os.IBinder
 import dev.silveradostats.bt.BtController
 import dev.silveradostats.log.LogHub
 import dev.silveradostats.obd.Profile
+import dev.silveradostats.vehicle.EnergyCounters
 import dev.silveradostats.vehicle.SessionHub
 import dev.silveradostats.vehicle.VehicleSession
 import kotlinx.coroutines.CoroutineScope
@@ -82,8 +83,9 @@ class LinkService : Service() {
   private data class LinkChoice(val demo: Boolean, val address: String?, val name: String?, val mxOff: Boolean)
 
   private var packReadAtMs = 0L
+  private var energyReadAtMs = 0L
 
-  /** What a real, connected MX+ delivers beyond its own screens: pack power for the session, capacity to keep. */
+  /** What a real, connected MX+ delivers beyond its own screens: pack power and the truck's energy count for the session, capacity to keep. */
   private fun passOn(s: LiveState) {
     if (s.status != LinkStatus.CONNECTED || s.demo) return
     val current = s.values["pack_current"]
@@ -91,6 +93,11 @@ class LinkService : Service() {
     if (current != null && kw != null && current.atMs != packReadAtMs) {
       packReadAtMs = current.atMs
       vehicle.addPackPower(kw)
+    }
+    val energy = EnergyCounters.read(s.values)
+    if (energy != null && energy.first != energyReadAtMs) {
+      energyReadAtMs = energy.first
+      vehicle.addEnergyCount(energy.second.usedWh)
     }
     // Only what the BECM reported, never an estimate: it shows later as what was last read, and when.
     val kwh = (s.derived["capacity_kwh"] as? Number)?.toDouble()

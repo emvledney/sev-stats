@@ -33,7 +33,7 @@ class AppPermissionsTest {
     val groups = AppPermissions.dialogGroups(AppPermissions.RUNTIME_REQUESTABLE)
     assertEquals(AppPermissions.RUNTIME_REQUESTABLE.toSet(), groups.flatten().toSet())
     assertEquals(AppPermissions.RUNTIME_REQUESTABLE.size, groups.flatten().size)
-    assertEquals("car energy, car speed, nearby devices, location", 4, groups.size)
+    assertEquals("car energy, car speed, nearby devices, location, microphone (2026-11-18)", 5, groups.size)
   }
 
   @Test

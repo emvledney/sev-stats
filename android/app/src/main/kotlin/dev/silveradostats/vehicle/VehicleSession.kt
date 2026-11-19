@@ -29,8 +29,8 @@ import kotlin.math.max
  *    end of the process, or no sample for over [restartAfterMs] ("the next time the truck is used",
  *    even if the process was only frozen or asleep) starts a new one, and so does the tracker at
  *    each new drive;
- *  - it never touches the OBD link (LinkEngine): it only takes the pack power LinkService passes on
- *    while the MX+ is connected ([addPackPower]);
+ *  - it never touches the OBD link (LinkEngine): it only takes the pack power and the truck's energy count LinkService
+ *    passes on while the MX+ is connected ([addPackPower], [addEnergyCount]);
  *  - one coroutine samples: speed every [tickMs] (2 Hz), the rest every other tick (1 Hz).
  *
  * [scope] must be confined to one thread (Dispatchers.IO.limitedParallelism(1) in the app): every
@@ -191,6 +191,11 @@ class VehicleSession(
   /** A new pack power reading from the MX+, kW (+ discharge): the session's best energy signal. */
   fun addPackPower(kw: Double) {
     scope.launch { tracker.addPack(clock(), kw) }
+  }
+
+  /** A new reading of the truck's own energy count from the MX+, Wh: what the session's energy goes by while it arrives. */
+  fun addEnergyCount(wh: Double) {
+    scope.launch { tracker.addCounter(clock(), wh) }
   }
 
   private val wanted: Boolean get() = clients.isNotEmpty() || stopTimer != null

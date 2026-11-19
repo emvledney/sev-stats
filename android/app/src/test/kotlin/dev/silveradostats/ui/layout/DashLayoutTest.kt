@@ -140,114 +140,61 @@ class DashLayoutTest {
     }
   }
 
-  /** Simple's figures fill their tiles, and "204.5 kWh" with its head and line still fits every window. */
+  /** Simple's three figures fill their tiles (the owner, 2026-11-18), and "204.5 kWh" with its head and line still fits every window. */
   @Test
   fun theSimpleFiguresFitTheirTiles() {
     forEachSimpleWindow { l ->
       for (notice in listOf(false, true)) {
         val name = "${l.name()} notice=$notice"
+        assertTrue(name, l.requiredSimple(notice) <= l.heightDp)
         val sp = l.simpleFigureSp(notice)
-        fun across(sp: Int) = 5 * sp * 0.54f + 2.1f * l.simpleUnitSp(sp) + 8
-        // "2.31 mi/kWh", in the last column.
-        fun efficiencyAcross(sp: Int) = 4 * sp * 0.54f + 6 * 0.58f * l.simpleUnitSp(sp) + 8
         val room = l.simpleColumnDp - 2 * l.cardPadHDp
-        assertTrue("$name: $sp sp across $room", across(sp) <= room + 1)
-        assertTrue("$name: mi/kWh at $sp sp across $room", efficiencyAcross(sp) <= room + 1)
+        assertTrue("$name: $sp sp across $room", 5 * sp * 0.54f + 2.1f * l.simpleUnitSp(sp) + 8 <= room + 1)
         val tiles = l.bodyDp - if (notice) l.noticeDp + l.gapDp else 0
-        // Above the last charge and, where it shows, the energy band (2026-11-16).
-        val columns = tiles - l.simpleChargeDp(notice) - l.gapDp - l.simpleEnergyDp(notice).let { if (it > 0) it + l.gapDp else 0 }
-        val tile = 2 * l.cardPadVDp + l.tileHeadDp + l.cardGapDp + l.lineDp(sp, DashLayout.VALUE_LINE_FACTOR)
-        // Range's line gives way first, and only with the figures already at their smallest. With room to spare
-        // for pixel rounding, or a tall window would lose it.
-        if (sp > DashLayout.LIVE_VALUE_MIN_SP) assertTrue("$name: $tile tall", 2 * (tile + l.simpleLineDp + 2) + l.gapDp <= columns)
-        assertTrue("$name: $tile tall", 2 * tile + l.gapDp <= columns)
+        val tile = 2 * l.cardPadVDp + l.simpleHeadDp + l.cardGapDp + l.lineDp(sp, DashLayout.VALUE_LINE_FACTOR)
+        // The line under a figure gives way first, and only with the figures already at their smallest.
+        if (sp > DashLayout.LIVE_VALUE_MIN_SP) assertTrue("$name: $tile tall", tile + l.simpleLineDp <= tiles)
       }
     }
-  }
-
-  /** The last charge's four parts, each under its column with its figures, units and words, fit every window. */
-  @Test
-  fun theLastChargeFitsItsRow() {
-    forEachSimpleWindow { l ->
-      for (notice in listOf(false, true)) {
-        val name = "${l.name()} notice=$notice"
-        val sp = l.simpleChargeSp(notice)
-        val unit = l.simpleChargeUnitSp(sp)
-        val words = l.simpleChargeLabelSp
-        assertTrue(name, sp >= DashLayout.LIVE_VALUE_MIN_SP)
-        val tall = 2 * l.cardPadVDp + l.lineDp(sp, DashLayout.VALUE_LINE_FACTOR) + l.cardGapDp + l.lineDp(words)
-        assertTrue("$name: $sp sp, $tall in ${l.simpleChargeDp(notice)}", tall <= l.simpleChargeDp(notice) + 1)
-        // With room for the glyphs' rounding: without it, "100.0 %" lost its % on the emulator at 1250 dp.
-        assertTrue(DashLayout.CHARGE_ROUNDING_DP >= 4)
-        fun figure(chars: Int, unitChars: Int, wordChars: Int) =
-          maxOf(chars * sp * 0.54f + unitChars * unit * 0.68f + 8 + DashLayout.CHARGE_ROUNDING_DP, wordChars * words * 0.5f)
-        val room = l.simpleColumnDp - 2 * l.cardPadHDp
-        // Under the first column, what the charge reached at its widest: "186.4 kWh", a card's padding, "100.0 %".
-        val reached = listOf(figure(5, 3, 15) + l.cardPadHDp, figure(5, 1, 11))
-        assertTrue("$name: ${reached.sum()} in $room", reached.sum() <= room + 1)
-        // Under each of the other three, one figure.
-        listOf(figure(5, 3, 10), figure(4, 6, 5), figure(5, 3, 5)).forEachIndexed { i, w -> assertTrue("$name: part ${i + 2}, $w in $room", w <= room + 1) }
-        // The three single figures have their own size (the owner, 2026-11-12): no smaller, and still inside their tile.
-        val single = l.simpleChargeSingleSp(notice)
-        assertTrue("$name: single $single < $sp", single >= sp)
-        if (single > sp) {
-          val singleUnit = l.simpleChargeUnitSp(single)
-          assertTrue("$name: single $single tall", 2 * l.cardPadVDp + l.lineDp(single, DashLayout.VALUE_LINE_FACTOR) + l.cardGapDp + l.lineDp(words) <= l.simpleChargeDp(notice) + 1)
-          listOf(5 to 3, 4 to 6).forEach { (c, u) -> assertTrue("$name: single $single wide", c * single * 0.54f + u * singleUnit * 0.68f + 8 + DashLayout.CHARGE_ROUNDING_DP <= room * DashLayout.CHARGE_SINGLE_FILL + 1) }
-        }
-        // Each of the first two gets what it needs, so the % never moves with the kWh.
-        val weights = l.simpleChargeReachedWeights(notice)
-        assertEquals(2, weights.size)
-        reached.indices.forEach { i -> assertTrue("$name: figure $i", reached[i] <= weights[i] / weights.sum() * room + 1) }
-      }
-    }
-    assertTrue("the figures stay well above the smallest on the narrow window", DashLayout.ofSimple(1408f, 576f).simpleChargeSp(false) >= 40)
-    assertTrue("and on the wide one", DashLayout.ofSimple(2331f, 735f).simpleChargeSp(false) >= 60)
-    // The truck's window: as large as when the row was five columns under three, before the ring went.
-    assertEquals(72, DashLayout.ofSimple(2331f, 735f).simpleChargeSp(false))
+    // The emulator's page beside the rail, and the truck's: far larger than a tile's figure elsewhere.
+    assertTrue(DashLayout.ofSimple(1160f, 610f).withoutHeader().simpleFigureSp(false) >= 90)
+    assertTrue(DashLayout.ofSimple(2331f, 735f).withoutHeader().simpleFigureSp(false) >= 90)
   }
 
   /**
-   * The energy band and the two-figure tiles (the owner, 2026-11-16), on the page as the app lays it out: with no
-   * header row, its buttons being in the rail. The band is there in every window without a notice, and Trip's and
-   * Used's two figures with their words fit their tile.
+   * The OBD page's window cards (the owner, 2026-11-18), three across under the pack tiles: the mi/kWh beside the miles,
+   * then the energy's total, its bar and the three parts side by side, all in the card, and "-12.3" in a third of it.
    */
   @Test
-  fun theEnergyBandAndTheSplitTilesFit() {
+  fun theObdWindowsFit() {
     for (w in widths) for (h in heights) {
-      val l = DashLayout.ofSimple(w.toFloat(), h.toFloat()).withoutHeader()
+      val l = DashLayout.ofLive(w.toFloat(), h.toFloat())
+      if (!l.liveCards) continue
       val name = l.name()
-      val band = l.simpleEnergyDp(false)
-      assertTrue("$name: no band", band > 0)
-      assertTrue("$name: band $band", 2 * l.cardPadVDp + l.lineDp(l.type.title) + DashLayout.ENERGY_BAR_DP + l.lineDp(l.simpleEnergySp, DashLayout.VALUE_LINE_FACTOR) + l.lineDp(l.type.label) + 2 * l.cardGapDp <= band)
-      for (notice in listOf(false, true)) {
-        // Whatever shows, the page still fits: the band gives way before anything else does.
-        val energy = l.simpleEnergyDp(notice).let { if (it > 0) it + l.gapDp else 0 }
-        assertTrue("$name notice=$notice", l.requiredSimple(notice) + energy <= l.heightDp)
-        val sp = l.simpleSplitSp(notice)
-        assertTrue("$name: split $sp", sp in DashLayout.LIVE_VALUE_MIN_SP..l.simpleFigureSp(notice))
-        if (sp > DashLayout.LIVE_VALUE_MIN_SP) {
-          val tile = (l.bodyDp - (if (notice) l.noticeDp + l.gapDp else 0) - l.simpleChargeDp(notice) - l.gapDp - energy - l.gapDp) / 2
-          assertTrue("$name: split $sp tall", 2 * l.cardPadVDp + l.tileHeadDp + 2 * l.cardGapDp + 2 * l.lineDp(sp, DashLayout.VALUE_LINE_FACTOR) <= tile)
-          // "123.4 kWh" and "last 15 min" in one row.
-          assertTrue("$name: split $sp wide", 5 * sp * 0.54f + 3 * 0.68f * l.simpleUnitSp(sp) + 11 * 0.5f * l.type.label + 16 <= l.simpleColumnDp - 2 * l.cardPadHDp + 1)
-        }
+      val figureMax = l.obdFigureSp(false)
+      val under = l.bodyDp - l.obdTilesDp(figureMax, false) - 2 * l.gapDp
+      val areaDp = (under * DashLayout.WINDOWS_SHARE / (DashLayout.PACK_SHARE + DashLayout.WINDOWS_SHARE)).toInt()
+      val windowDp = (w - 2 * l.pagePadHDp - 2 * l.gapDp) / 3f
+      val part = l.windowPartSp(windowDp, areaDp.toFloat(), figureMax * 3 / 4)
+      val sp = l.windowFigureSp(windowDp, areaDp, part, figureMax)
+      assertTrue("$name: part $part", part >= l.type.title && part <= maxOf(l.type.title, figureMax * 3 / 4))
+      if (part > l.type.title) {
+        assertTrue("$name: part $part wide", 5 * 0.54f * part + 4 <= (windowDp - 2 * l.cardPadHDp - 2 * DashLayout.WINDOW_PART_GAP_DP) / 3 + 1)
+      }
+      if (sp > DashLayout.LIVE_VALUE_MIN_SP) {
+        assertTrue("$name: $sp over $part tall", 2 * l.cardPadVDp + l.tileHeadDp + l.lineDp(sp, DashLayout.VALUE_LINE_FACTOR) + l.windowEnergyDp(part) <= areaDp)
+        // "12.34 mi/kWh" in half the card.
+        assertTrue("$name: $sp wide", 5 * sp * 0.54f + 6 * 0.68f * l.simpleUnitSp(sp) + 12 <= (windowDp - 2 * l.cardPadHDp - DashLayout.WINDOW_PART_GAP_DP) / 2 + 1)
       }
     }
-    // The emulator's page beside the rail, and the truck's: the two figures stay well above the smallest.
-    assertTrue(DashLayout.ofSimple(1160f, 610f).withoutHeader().simpleSplitSp(false) >= 36)
-    assertTrue(DashLayout.ofSimple(2331f, 735f).withoutHeader().simpleSplitSp(false) >= 36)
   }
 
-  /** Four columns alike, the page's width shared evenly: the owner had the battery ring taken out for cells like the others (2026-11-07). */
+  /** The tiles are three alike, the page's width shared evenly (the owner, 2026-11-18). */
   @Test
-  fun theColumnsAreFourAlike() {
-    // As the app lays the page out: no header row, and the energy band under the columns (2026-11-16).
+  fun theColumnsAreThreeAlike() {
     val l = DashLayout.ofSimple(1470f, 700f).withoutHeader()
-    assertEquals(4, DashLayout.SIMPLE_COLUMNS)
-    assertEquals((1470f - 2 * l.pagePadHDp - 3 * l.gapDp).toDouble(), (4 * l.simpleColumnDp).toDouble(), 0.5)
-    // Well above the old tile figure: they fill the tile.
-    assertTrue("${l.simpleFigureSp(false)}", l.simpleFigureSp(false) > 70)
+    assertEquals(3, DashLayout.SIMPLE_COLUMNS)
+    assertEquals((1470f - 2 * l.pagePadHDp - 2 * l.gapDp).toDouble(), (3 * l.simpleColumnDp).toDouble(), 0.5)
   }
 
   @Test

@@ -1,8 +1,12 @@
 package dev.silveradostats.ui.map
 
-import android.app.Activity
+import android.Manifest
 import android.content.Intent
+import android.os.Bundle
+import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
+import android.speech.SpeechRecognizer
+import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -48,11 +52,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -61,6 +63,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import dev.silveradostats.R
+import dev.silveradostats.diag.AppPermissions
 import dev.silveradostats.map.MapController
 import dev.silveradostats.map.MapFilters
 import dev.silveradostats.map.NetworkChoice
@@ -71,12 +74,10 @@ import dev.silveradostats.map.TIER_COLORS
 import dev.silveradostats.map.powerTier
 import dev.silveradostats.ui.layout.DashLayout
 import dev.silveradostats.ui.layout.FitText
-import dev.silveradostats.ui.live.Units
+import dev.silveradostats.ui.simple.BatteryCard
 import dev.silveradostats.ui.simple.SimpleModel
-import dev.silveradostats.ui.theme.StatusOk
 import dev.silveradostats.ui.theme.TextDim
 import dev.silveradostats.vehicle.SessionState
-import kotlin.math.roundToInt
 
 /** Height of everything meant to be tapped on the map: the car guideline's 76 dp. */
 private val TOUCH = 76.dp
@@ -94,14 +95,18 @@ private enum class Picker { POWER, PLUGS, NETWORKS }
  * and filtering chargers on the move is what it is for. Only the location-permission request waits
  * for Park, like every other system dialog.
  *
- * The range in the header and the outline on the map use the session's own estimate (the energy left
- * at the last 15 minutes' efficiency, as on the Simple tab) once it has one, and the truck's until then.
+ * The range outline on the map uses the session's own estimate (the energy left at the last 15 minutes' efficiency)
+ * once it has one, and the truck's until then. The rail shows no range or efficiency (the owner, 2026-11-18).
+ *
+ * Map is the first tab and the app opens on it (the owner, 2026-11-18). The car API's battery figures, the API tab's
+ * until then, are a card in the top right ([BatteryCard]); the map's camera keeps the truck below it.
  */
 @Composable
 fun MapScreen(
   session: SessionState,
   layout: DashLayout,
   onRequestPermissions: () -> Unit,
+  onRequestCarPermissions: () -> Unit,
 ) {
   val context = LocalContext.current
   val controller = remember { MapController(context) }
@@ -125,6 +130,7 @@ fun MapScreen(
 
   val rangeM = session.rangeEstimate?.m ?: session.rangeM
   LaunchedEffect(rangeM) { controller.setRange(rangeM) }
+  val battery = remember(session) { SimpleModel.build(session) }
 
   var query by remember { mutableStateOf("") }
   var keyboard by remember { mutableStateOf(false) }
@@ -137,11 +143,42 @@ fun MapScreen(
     keyboard = false
     controller.search(text) { results = it }
   }
-  val voice = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
-    val spoken = result.data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)?.firstOrNull()
-    if (result.resultCode == Activity.RESULT_OK && spoken != null) {
-      query = spoken
-      runSearch(spoken)
+  // Voice search, recognised in the app: the system's voice screen is refused while driving.
+  var listening by remember { mutableStateOf(false) }
+  val recognizer = remember { if (SpeechRecognizer.isRecognitionAvailable(context)) SpeechRecognizer.createSpeechRecognizer(context) else null }
+  DisposableEffect(recognizer) {
+    recognizer?.setRecognitionListener(object : RecognitionListener {
+      override fun onResults(results: Bundle?) {
+        listening = false
+        results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()?.let { query = it; runSearch(it) }
+      }
+      override fun onError(error: Int) {
+        listening = false
+        if (error != SpeechRecognizer.ERROR_CLIENT) Toast.makeText(context, "Didn't catch that", Toast.LENGTH_SHORT).show()
+      }
+      override fun onReadyForSpeech(params: Bundle?) {}
+      override fun onBeginningOfSpeech() {}
+      override fun onRmsChanged(rmsdB: Float) {}
+      override fun onBufferReceived(buffer: ByteArray?) {}
+      override fun onEndOfSpeech() {}
+      override fun onPartialResults(partialResults: Bundle?) {}
+      override fun onEvent(eventType: Int, params: Bundle?) {}
+    })
+    onDispose { recognizer?.destroy() }
+  }
+  fun listen() {
+    recognizer?.startListening(Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM))
+    listening = true
+  }
+  val askMic = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted -> if (granted) listen() }
+  fun onVoice() {
+    when {
+      recognizer == null -> Toast.makeText(context, "Voice search isn't available", Toast.LENGTH_SHORT).show()
+      listening -> { recognizer.cancel(); listening = false }
+      AppPermissions.isGranted(context, Manifest.permission.RECORD_AUDIO) -> listen()
+      // The system's permission dialog waits for Park, as everywhere else.
+      layout.restricted -> Toast.makeText(context, "Allow the microphone once in Park", Toast.LENGTH_LONG).show()
+      else -> askMic.launch(Manifest.permission.RECORD_AUDIO)
     }
   }
   BackHandler(enabled = keyboard) { keyboard = false }
@@ -153,15 +190,11 @@ fun MapScreen(
       Column(Modifier.align(Alignment.TopStart).padding(EDGE), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         SearchBar(
           query = query,
+          listening = listening,
           sp = title,
           onOpen = { keyboard = true },
           onClear = { query = "" },
-          onVoice = {
-            runCatching {
-              voice.launch(Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM))
-            }
-          },
-          modifier = Modifier.onSizeChanged { controller.setPadding(it.width + 2 * EDGE.roundToPx(context), 0) },
+          onVoice = ::onVoice,
         )
         if (!keyboard) {
           FilterChips(controller.filters, body, onPick = { picker = it }, onToggleWorking = { controller.applyFilters(controller.filters.copy(workingOnly = !controller.filters.workingOnly)) })
@@ -170,6 +203,15 @@ fun MapScreen(
             Button(onClick = onRequestPermissions, modifier = Modifier.height(TOUCH)) { Text("Allow location to show the truck", fontSize = body.sp) }
           }
         }
+      }
+
+      if (!keyboard) {
+        BatteryCard(
+          battery,
+          layout,
+          onRequestCarPermissions,
+          Modifier.align(Alignment.TopEnd).padding(EDGE).width(COLUMN_WIDTH),
+        )
       }
 
       // The GPS button: back to the truck at the standard radius.
@@ -256,40 +298,16 @@ fun MapScreen(
   }
 }
 
-/**
- * The Map tab's range, drawn at the foot of the navigation rail: the session's own estimate (the energy
- * left at the last 15 minutes' efficiency, as on the API tab) once it has one, and the truck's until then.
- */
-@Composable
-fun MapRangeSummary(session: SessionState, bigSp: Int, sp: Int) {
-  val estimate = session.rangeEstimate
-  val rangeM = estimate?.m ?: session.rangeM ?: return
-  Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(6.dp)) {
-    FitText(SimpleModel.distText(rangeM, Units.DIST, 0), Modifier.fillMaxWidth(), sp = bigSp + 6, weight = FontWeight.Bold, align = TextAlign.Center)
-    // The battery, as wide as the rail: filled to the state of charge.
-    session.socPct?.let { soc ->
-      val shape = RoundedCornerShape(8.dp)
-      Box(Modifier.fillMaxWidth().height(20.dp).background(MaterialTheme.colorScheme.surfaceVariant, shape)) {
-        Box(Modifier.fillMaxWidth((soc / 100.0).coerceIn(0.0, 1.0).toFloat()).height(20.dp).background(StatusOk, shape))
-      }
-      FitText("${soc.roundToInt()}% charged", Modifier.fillMaxWidth(), sp = sp, color = TextDim, align = TextAlign.Center)
-    }
-    val basis = estimate?.let { "${SimpleModel.effText(it.mPerWh, Units.DIST)} ${SimpleModel.effUnit(Units.DIST)}, 15 min" } ?: "truck's estimate"
-    FitText(basis, Modifier.fillMaxWidth(), sp = sp, color = TextDim, align = TextAlign.Center)
-  }
-}
-
-private fun androidx.compose.ui.unit.Dp.roundToPx(context: android.content.Context): Int = (value * context.resources.displayMetrics.density).toInt()
 
 @Composable
-private fun SearchBar(query: String, sp: Int, onOpen: () -> Unit, onClear: () -> Unit, onVoice: () -> Unit, modifier: Modifier = Modifier) {
+private fun SearchBar(query: String, listening: Boolean, sp: Int, onOpen: () -> Unit, onClear: () -> Unit, onVoice: () -> Unit, modifier: Modifier = Modifier) {
   Surface(modifier.width(COLUMN_WIDTH).height(TOUCH), shape = RoundedCornerShape(50), color = MaterialTheme.colorScheme.surface, shadowElevation = 4.dp) {
     Row(Modifier.clickable(onClick = onOpen).padding(start = 24.dp, end = 8.dp), verticalAlignment = Alignment.CenterVertically) {
       Icon(painterResource(R.drawable.map_ic_search), null, Modifier.size(28.dp), tint = TextDim)
       Text(
-        query.ifEmpty { "Search places" },
+        if (listening) "Listening…" else query.ifEmpty { "Search places" },
         Modifier.weight(1f).padding(horizontal = 12.dp),
-        color = if (query.isEmpty()) TextDim else MaterialTheme.colorScheme.onSurface,
+        color = if (query.isEmpty() || listening) TextDim else MaterialTheme.colorScheme.onSurface,
         fontSize = sp.sp,
         maxLines = 1,
         overflow = TextOverflow.Ellipsis,
@@ -297,7 +315,7 @@ private fun SearchBar(query: String, sp: Int, onOpen: () -> Unit, onClear: () ->
       if (query.isNotEmpty()) {
         IconButton(onClick = onClear, modifier = Modifier.size(64.dp)) { Icon(painterResource(R.drawable.map_ic_close), "Clear search", tint = TextDim) }
       }
-      IconButton(onClick = onVoice, modifier = Modifier.size(64.dp)) { Icon(painterResource(R.drawable.map_ic_mic), "Voice search", tint = TextDim) }
+      IconButton(onClick = onVoice, modifier = Modifier.size(64.dp)) { Icon(painterResource(R.drawable.map_ic_mic), if (listening) "Stop listening" else "Voice search", tint = if (listening) MaterialTheme.colorScheme.primary else TextDim) }
     }
   }
 }

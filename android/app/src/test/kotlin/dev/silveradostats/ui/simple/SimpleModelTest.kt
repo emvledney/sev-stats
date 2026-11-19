@@ -1,19 +1,13 @@
 package dev.silveradostats.ui.simple
 
-import dev.silveradostats.link.LinkStatus
-import dev.silveradostats.link.LiveState
 import dev.silveradostats.ui.live.DistUnit
 import dev.silveradostats.vehicle.CarPerm
-import dev.silveradostats.vehicle.DemoDrive
 import dev.silveradostats.vehicle.DemoSource
 import dev.silveradostats.vehicle.EffUnits
 import dev.silveradostats.vehicle.EnergyParts
-import dev.silveradostats.vehicle.EnergySource
 import dev.silveradostats.vehicle.EnergySplit
 import dev.silveradostats.vehicle.Feed
 import dev.silveradostats.vehicle.FeedKind
-import dev.silveradostats.vehicle.LastCharge
-import dev.silveradostats.vehicle.PlainEfficiency
 import dev.silveradostats.vehicle.SessionState
 import dev.silveradostats.vehicle.SessionTracker
 import dev.silveradostats.vehicle.Signal
@@ -24,7 +18,7 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
-/** SessionState -> the Simple tab's texts and states. */
+/** SessionState -> the API page's texts and states, and the MX+'s windows -> the OBD page's. */
 class SimpleModelTest {
   private val mile = EffUnits.METERS_PER_MILE
 
@@ -43,58 +37,68 @@ class SimpleModelTest {
     feed = feed,
   )
 
-  private fun build(s: SessionState, d: DistUnit = DistUnit.MI, mxKwh: Double? = null, lastCharge: LastCharge? = null) = SimpleModel.build(s, d, mxKwh, lastCharge)
+  private fun build(s: SessionState) = SimpleModel.build(s)
 
   @Test
   fun theTilesShowTheFigures() {
     val v = build(state())
     assertNull(v.notice)
-    assertEquals(Stat("Capacity", "205.1", "kWh", emptyList(), marker = "API"), v.capacity)
-    // 85.25 kWh x 9.8 mi / 4.21 kWh = 198 mi; the truck's own 189 under it.
-    assertEquals(Stat("Range", "198", "mi", listOf("Truck says 189 mi")), v.range)
-    // Miles and kWh for this drive and nothing else.
-    assertEquals(Stat("Trip", "9.8", "mi", emptyList()), v.trip)
-    assertEquals(Stat("Used", "4.21", "kWh", emptyList()), v.energyUsed)
+    // No tag: the page is the API's alone (the owner, 2026-11-18). Three figures, one decimal each.
+    assertEquals(Stat("Capacity", "205.1", "kWh", emptyList()), v.capacity)
+    assertEquals(Stat("Remaining", "85.3", "kWh", emptyList()), v.remaining)
+    assertEquals(Stat("State of charge", "41.6", "%", emptyList()), v.soc)
   }
 
-  /** Trip and Used each hold two figures, this drive's over the last 15 minutes' (the owner, 2026-11-16). */
+  /**
+   * The OBD page's windows (the owner, 2026-11-18): the truck's own counts. Since the charge as read, 27C0's miles over
+   * 27B9's kWh, as Car Scanner shows them; the other two by difference.
+   */
   @Test
-  fun tripAndUsedAlsoShowTheLastFifteenMinutes() {
-    val v = build(state().copy(recentDistanceM = 5.9 * mile, recentUsedWh = 3_100.0))
-    assertEquals(Stat("last 15 min", "5.9", "mi", emptyList()), v.tripRecent)
-    assertEquals(Stat("last 15 min", "3.10", "kWh", emptyList()), v.energyUsedRecent)
-    // Nothing read yet: a dash, not a zero.
-    assertEquals(Stat("last 15 min", "—", "kWh", emptyList(), hasValue = false), build(state()).energyUsedRecent)
-    assertFalse(build(state()).tripRecent.hasValue)
+  fun theObdWindowsAreTheTrucksOwnCounts() {
+    val split = EnergySplit(
+      drive = EnergyParts(6_910.0, 820.0, 230.0),
+      recent = null,
+      charge = EnergyParts(11_200.0, 3_700.0, 1_000.0),
+      driveM = 9.8 * mile,
+      chargeM = 24.85 * mile,
+    )
+    val (drive, recent, charge) = SimpleModel.windows(split, DistUnit.MI)
+    assertEquals(Stat("This drive", SimpleModel.effText(9.8 * mile / 7_960.0, DistUnit.MI), "mi/kWh", emptyList()), drive.efficiency)
+    assertEquals(Stat("This drive", "9.8", "mi", emptyList()), drive.miles)
+    // 24.85 mi over 15.9 kWh, the two figures Car Scanner showed on the truck.
+    assertEquals(Stat("Since charge", "1.56", "mi/kWh", emptyList()), charge.efficiency)
+    assertEquals(Stat("Since charge", "24.9", "mi", emptyList()), charge.miles)
+    assertEquals("15.9 kWh", charge.energy.total)
+    // Nothing to go by yet: dashes, not zeros.
+    assertFalse(recent.efficiency.hasValue)
+    assertFalse(recent.miles.hasValue)
+    // A window with its kWh but no miles has no mi/kWh either.
+    assertFalse(SimpleModel.windows(split.copy(driveM = null), DistUnit.MI)[0].efficiency.hasValue)
+    // Kilometres where the user has them.
+    assertEquals(Stat("Since charge", "40.0", "km", emptyList()), SimpleModel.windows(split, DistUnit.KM)[2].miles)
   }
 
   /** The energy band (the owner, 2026-11-16): driving, climate and the rest for three windows, from the MX+ only. */
   @Test
   fun theEnergyBandSplitsEachWindow() {
     val split = EnergySplit(drive = EnergyParts(6_910.0, 820.0, 230.0), recent = null, charge = EnergyParts(35_900.0, 4_600.0, 1_500.0))
-    val (drive, recent, charge) = SimpleModel.build(state(), DistUnit.MI, energy = split).energy
+    val (drive, recent, charge) = SimpleModel.windows(split, DistUnit.MI).map { it.energy }
     assertEquals("This drive", drive.title)
-    assertEquals("7.96 kWh", drive.total)
-    assertEquals(listOf("Driving" to "6.91", "Climate" to "0.82", "Other" to "0.23"), drive.parts.map { it.label to it.value })
+    // One decimal (the owner, 2026-11-17): the truck counts in tenths of a kWh.
+    assertEquals("8.0 kWh", drive.total)
+    assertEquals(listOf("Driving" to "6.9", "Climate" to "0.8", "Other" to "0.2"), drive.parts.map { it.label to it.value })
     assertEquals(1f, drive.parts.sumOf { it.share.toDouble() }.toFloat(), 0.001f)
     assertEquals(6_910f / 7_960f, drive.parts[0].share, 0.001f)
     // Linked, but this window has nothing to go by yet.
     assertEquals(EnergyWindow("Last 15 min", "no reading", listOf("Driving", "Climate", "Other").map { EnergyPart(it, "—", 0f) }, hasValue = false), recent)
-    assertEquals("Since charge" to "42.00 kWh", charge.title to charge.total)
+    assertEquals("Since charge" to "42.0 kWh", charge.title to charge.total)
     // No MX+: the car's API has no such figures, and nothing is made up for them.
-    build(state()).energy.forEach { w ->
-      assertEquals("needs the MX+", w.total)
-      assertFalse(w.hasValue)
-      assertTrue(w.parts.all { it.value == "—" && it.share == 0f })
+    SimpleModel.windows(null, DistUnit.MI).forEach { w ->
+      assertEquals("needs the MX+", w.energy.total)
+      assertFalse(w.energy.hasValue)
+      assertTrue(w.energy.parts.all { it.value == "—" && it.share == 0f })
+      assertFalse(w.efficiency.hasValue)
     }
-  }
-
-  @Test
-  fun metricShowsKilometres() {
-    val v = build(state(), DistUnit.KM)
-    assertEquals(Stat("Trip", "15.8", "km", emptyList()), v.trip)
-    assertEquals(Stat("Range", "319", "km", listOf("Truck says 304 km")), v.range)
-    assertEquals("4.21", v.energyUsed.value)
   }
 
   @Test
@@ -109,29 +113,6 @@ class SimpleModelTest {
   }
 
   @Test
-  fun theCapacitySaysWhereItComesFrom() {
-    assertEquals("API", build(state()).capacity.marker)
-    // The MX+'s figure once it has read one, whatever the API says.
-    val mx = build(state(), mxKwh = 208.44).capacity
-    assertEquals(Stat("Capacity", "208.4", "kWh", emptyList(), marker = "MX+"), mx)
-    // Even before the car's API has answered.
-    assertEquals("MX+", build(SessionState(), mxKwh = 208.44).capacity.marker)
-  }
-
-  @Test
-  fun theMxCapacityIsOnlyALiveReading() {
-    val read = mapOf<String, Any>("capacity_kwh" to 208.44)
-    assertEquals(208.44, SimpleModel.mxCapacityKwh(LiveState(status = LinkStatus.CONNECTED, derived = read))!!, 0.0)
-    assertEquals(208.44, SimpleModel.mxCapacityKwh(LiveState(status = LinkStatus.DEMO, derived = read))!!, 0.0)
-    assertNull("connected, not read yet", SimpleModel.mxCapacityKwh(LiveState(status = LinkStatus.CONNECTED)))
-    // An estimate from energy ÷ SoC is not the BECM's reading.
-    assertNull(SimpleModel.mxCapacityKwh(LiveState(status = LinkStatus.CONNECTED, derived = mapOf("bms_energy_at_100_kwh" to 205.0))))
-    for (st in listOf(LinkStatus.TRUCK_ASLEEP, LinkStatus.STOPPED_ERROR, LinkStatus.ADAPTER_UNREACHABLE, LinkStatus.CONNECTING, LinkStatus.NO_ADAPTER)) {
-      assertNull("$st", SimpleModel.mxCapacityKwh(LiveState(status = st, derived = read)))
-    }
-  }
-
-  @Test
   fun theApiCapacitySaysWhyNotWhenThereIsNone() {
     val waiting = build(SessionState(feed = Feed(FeedKind.VEHICLE, sampling = true))).capacity
     assertFalse(waiting.hasValue)
@@ -139,18 +120,6 @@ class SimpleModelTest {
     assertEquals(listOf("Waiting for the capacity"), waiting.lines)
     val absent = build(SessionState(feed = Feed(FeedKind.VEHICLE, sampling = true, missing = setOf(Signal.CAPACITY)))).capacity
     assertEquals(listOf("Capacity not offered by this car"), absent.lines)
-  }
-
-  @Test
-  fun aRangeWithNothingToDivideIsADashBesideTheTrucks() {
-    val r = build(state().copy(rangeEstimate = null)).range
-    assertEquals("—", r.value)
-    assertEquals("mi", r.unit)
-    assertFalse(r.hasValue)
-    assertEquals(listOf("Truck says 189 mi"), r.lines)
-    assertEquals(listOf("Truck range —"), build(state().copy(rangeEstimate = null, rangeM = null)).range.lines)
-    val notOffered = state(feed = Feed(FeedKind.VEHICLE, sampling = true, missing = setOf(Signal.RANGE))).copy(rangeM = null)
-    assertEquals(listOf("Truck range not offered"), build(notOffered).range.lines)
   }
 
   @Test
@@ -166,15 +135,10 @@ class SimpleModelTest {
       ),
     )
     assertEquals(listOf(SimpleModel.NEEDS_ACCESS), blocked.capacity.lines)
-    assertEquals("Truck range —", blocked.range.lines[0])
     val phone = build(SessionState(feed = Feed(FeedKind.NOT_AUTOMOTIVE, "x")))
     assertEquals(NoticeAction.OPEN_DIAGNOSTICS, phone.notice!!.action)
     assertEquals("No car data on this device", phone.notice!!.title)
     assertEquals("Connecting to the car service…", build(SessionState()).notice!!.title)
-    // A property the car does not offer: a dash and a hint, never a made-up value.
-    val noSpeed = build(state().copy(speedMps = null, feed = Feed(FeedKind.VEHICLE, sampling = true, missing = setOf(Signal.SPEED, Signal.RANGE))))
-    assertEquals("—", noSpeed.trip.value)
-    assertFalse(noSpeed.trip.hasValue)
     // Measuring hit an internal error: the screen says so instead of looking live.
     val failed = build(state(feed = Feed(FeedKind.FAILED, "IllegalStateException: details")))
     assertEquals("Measuring stopped", failed.notice!!.title)
@@ -182,122 +146,16 @@ class SimpleModelTest {
   }
 
   @Test
-  fun theUsedTileHasNoBadgeWhateverItIsMeasuredFrom() {
-    val mx = build(state().copy(energySource = EnergySource.MX_PACK, levelUsedWh = 4_680.0))
-    assertNull(mx.energyUsed.marker)
-    assertEquals("205.1", build(state().copy(usedWh = 205_080.0)).energyUsed.value)
-    assertFalse(build(SessionState()).energyUsed.hasValue)
-  }
-
-  @Test
-  fun miPerKwhIsTheDrivesAndTheLastFifteenMinutes() {
-    val plain = PlainEfficiency(driveMPerWh = EffUnits.fromMiPerKwh(2.22), recentMPerWh = EffUnits.fromMiPerKwh(2.31))
-    val v = build(state().copy(plainEfficiency = plain))
-    assertEquals(Stat("This drive", "2.22", "mi/kWh", emptyList()), v.efficiency)
-    assertEquals(Stat("Last 15 min", "2.31", "mi/kWh", emptyList()), v.efficiencyRecent)
-    val km = build(state().copy(plainEfficiency = plain), DistUnit.KM)
-    assertEquals(Stat("This drive", "3.57", "km/kWh", emptyList()), km.efficiency)
-    assertEquals("km/kWh", km.efficiencyRecent.unit)
-    // Nothing to divide yet, or net regen: dashes, not zeros, and it still says what it would be.
-    val none = build(state())
-    assertEquals(Stat("This drive", "—", "mi/kWh", emptyList(), hasValue = false), none.efficiency)
-    assertEquals(Stat("Last 15 min", "—", "mi/kWh", emptyList(), hasValue = false), none.efficiencyRecent)
-  }
-
-  @Test
-  fun theLastChargeSaysWhatItReachedAndWhatHasGoneSince() {
-    val c = build(state().copy(levelWh = 144_400.0), lastCharge = LastCharge(186_400.0, 90.88)).charge
-    assertEquals(Stat("last charged to", "186.4", "kWh", emptyList()), c.to)
-    assertEquals(Stat("of capacity", "90.9", "%", emptyList()), c.toPct)
-    assertEquals(Stat("used since", "42.0", "kWh", emptyList()), c.used)
-    // Just charged: nothing used yet, rather than a wobble below zero.
-    assertEquals("0.0", build(state().copy(levelWh = 186_500.0), lastCharge = LastCharge(186_400.0, 90.88)).charge.used.value)
-  }
-
-  /** Up is +, down is -, in the owner's words: 104, 2 used, and the level at 97 is -5.0. */
-  @Test
-  fun theDriftShowsWhichWayItWent() {
-    fun drift(level: Double?, charge: LastCharge = LastCharge(104_000.0, 50.7, 2_000.0)) = build(state().copy(levelWh = level), lastCharge = charge).charge.drift
-    assertEquals(Stat("drift", "\u22125.0", "kWh", emptyList()), drift(97_000.0))
-    assertEquals(Stat("drift", "+4.0", "kWh", emptyList()), drift(106_000.0))
-    assertEquals("no sign on none", "0.0", drift(102_000.0).value)
-    assertEquals("nor on what rounds to none", "0.0", drift(101_960.0).value)
-    // Nothing to compare yet: a dash, as for the rest of the line.
-    assertEquals(Stat("drift", "\u2014", "kWh", emptyList(), hasValue = false), build(state()).charge.drift)
-    assertFalse(drift(null).hasValue)
-  }
-
-  /** The running total where there is one: with the truck on only, whatever the level has done in between. */
-  @Test
-  fun whatIsUsedIsTheRunningTotalNotTheLevel() {
-    val c = build(state().copy(levelWh = 144_400.0), lastCharge = LastCharge(186_400.0, 90.88, 39_500.0)).charge
-    assertEquals(Stat("used since", "39.5", "kWh", emptyList()), c.used)
-    assertEquals("known before the level is", "39.5", build(state().copy(levelWh = null), lastCharge = LastCharge(186_400.0, 90.88, 39_500.0)).charge.used.value)
-    // Counted as it is, below zero too (the owner, 2026-11-17): it read 0.0 before.
-    assertEquals("regen just after a charge", "−0.2", build(state(), lastCharge = LastCharge(186_400.0, 90.88, -200.0)).charge.used.value)
-  }
-
-  /** 88.2 mi on 39.4 kWh. Miles that are not known, or nothing yet used: a dash, not a figure with half its facts. */
-  @Test
-  fun theEfficiencySinceIsTheMilesOverWhatWasUsed() {
-    fun since(charge: LastCharge, d: DistUnit = DistUnit.MI) = build(state().copy(levelWh = 144_500.0), d, lastCharge = charge).charge.efficiency
-    val driven = 88.2 * EffUnits.METERS_PER_MILE
-    assertEquals(Stat("since", "2.24", "mi/kWh", emptyList()), since(LastCharge(186_400.0, 90.88, 39_400.0, drivenM = driven)))
-    assertEquals(Stat("since", "3.60", "km/kWh", emptyList()), since(LastCharge(186_400.0, 90.88, 39_400.0, drivenM = driven), DistUnit.KM))
-    assertEquals("a charge from before the miles were counted", "—", since(LastCharge(186_400.0, 90.88, 39_400.0)).value)
-    assertFalse(since(LastCharge(186_400.0, 90.88, 39_400.0)).hasValue)
-    assertEquals("nothing used yet", "—", since(LastCharge(186_400.0, 90.88, 0.0, drivenM = 0.0)).value)
-    // Half a mile with 0.2 kWh put back: a negative figure, not a dash (the owner, 2026-11-17).
-    assertEquals("regen just after a charge", "−2.49", since(LastCharge(186_400.0, 90.88, -200.0, drivenM = 800.0)).value)
-  }
-
-  @Test
-  fun aLastChargeNotKnownSaysSo() {
-    val none = build(state()).charge
-    assertEquals("—", none.to.value)
-    assertFalse(none.to.hasValue)
-    assertEquals("—", none.toPct.value)
-    assertEquals(SimpleModel.NO_CHARGE_YET, none.to.title)
-    assertEquals(Stat(SimpleModel.USED_SINCE, "—", "kWh", emptyList(), hasValue = false), none.used)
-    assertEquals(Stat(SimpleModel.SINCE, "—", "mi/kWh", emptyList(), hasValue = false), none.efficiency)
-    // Known, but the level is not yet: the charge stands, what it means now waits.
-    val noLevel = build(state().copy(levelWh = null), lastCharge = LastCharge(186_400.0, null)).charge
-    assertEquals("186.4", noLevel.to.value)
-    assertEquals("—", noLevel.toPct.value)
-    assertEquals(SimpleModel.LAST_CHARGED_TO, noLevel.to.title)
-    assertEquals(Stat(SimpleModel.USED_SINCE, "—", "kWh", emptyList(), hasValue = false), noLevel.used)
-  }
-
-  /** 10 min at 24 mph and 15 kW: 4 mi, the kind of drive a warm-up left without a figure. */
-  @Test
-  fun aShortDriveHasAFigureOfItsOwn() {
-    var at = 0L
-    val tracker = SessionTracker { at }
-    var level = 150_000.0
-    repeat(600) {
-      at += 1_000
-      level -= 15_000.0 / 3600.0
-      tracker.add(VehicleSample(at, speedMps = 10.7, levelWh = level, rangeM = 300_000.0))
-    }
-    val v = SimpleModel.range(tracker.snapshot(), DistUnit.MI)
-    assertEquals("Truck says 186 mi", v.lines[0])
-    assertTrue("tile: $v", v.hasValue)
-    assertEquals(236.0, v.value.toDouble(), 5.0)
-  }
-
-  @Test
   fun nothingOnThePageTalksAboutAWarmUp() {
     val starting = SessionTracker { 0L }
     starting.add(VehicleSample(1_000, speedMps = 10.0, levelWh = 100_000.0))
     val v = build(starting.snapshot().copy(feed = Feed(FeedKind.VEHICLE, sampling = true)))
-    val texts = listOf(v.capacity, v.range, v.trip, v.energyUsed, v.efficiency, v.efficiencyRecent, v.charge.to, v.charge.toPct, v.charge.used, v.charge.efficiency, v.charge.drift).flatMap { it.lines + it.title + it.value + it.unit + it.marker.orEmpty() }
+    val texts = listOf(v.capacity, v.remaining, v.soc).flatMap { it.lines + it.title + it.value + it.unit + it.marker.orEmpty() }
     assertFalse(texts.toString(), texts.any { it.contains("warm", ignoreCase = true) || it.contains("early", ignoreCase = true) })
   }
 
   @Test
   fun formattingHelpers() {
-    assertEquals("4.21", SimpleModel.kwhValue(4_210.0))
-    assertEquals("205.1", SimpleModel.kwhValue(205_080.0))
     assertEquals("2.32", SimpleModel.effText(EffUnits.fromMiPerKwh(2.32), DistUnit.MI))
   }
 
@@ -308,7 +166,7 @@ class SimpleModelTest {
     val t = SessionTracker { now }
     val demo = DemoSource(22 * 60_000L)
     demo.backlog(22 * 60_000L).forEach { now = it.atMs; t.add(it) }
-    val v = build(t.snapshot().copy(feed = DemoSource.FEED.copy(sampling = true)), lastCharge = DemoDrive.lastCharge(t.snapshot().distanceM))
-    assertFalse(listOf(v.capacity, v.range, v.trip, v.energyUsed, v.efficiency, v.efficiencyRecent, v.charge.to, v.charge.toPct, v.charge.used, v.charge.efficiency, v.charge.drift).any { it.value == "—" || !it.hasValue })
+    val v = build(t.snapshot().copy(feed = DemoSource.FEED.copy(sampling = true)))
+    assertFalse(listOf(v.capacity, v.remaining, v.soc).any { it.value == "—" || !it.hasValue })
   }
 }

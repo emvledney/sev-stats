@@ -66,12 +66,7 @@ class LiveViewModel(app: Application) : AndroidViewModel(app) {
   val shownLive: StateFlow<LiveState> =
     conn.live.heldWhile(restricted).stateIn(viewModelScope, SharingStarted.Eagerly, conn.live.value)
 
-  /** The last charge the Simple tab shows: the demo's in demo mode, which is never saved. */
-  val lastCharge: StateFlow<LastCharge?> =
-    combine(LogHub.get(app).lastCharge, store.state, shownSession) { c, s, session -> if (s.demo) DemoDrive.lastCharge(session.distanceM) else c }
-      .stateIn(viewModelScope, SharingStarted.Eagerly, if (store.state.value.demo) DemoDrive.LAST_CHARGE else LogHub.get(app).lastCharge.value)
-
-  /** Where the energy went, for the Simple tab: null with no MX+ link. */
+  /** Where the energy went, for the OBD page: null with no MX+ link. */
   val energySplit: StateFlow<EnergySplit?> = LogHub.get(app).energySplit
 
   /** What the MX+ button offers now, from the same figures the screens draw. */
@@ -110,10 +105,6 @@ class LiveViewModel(app: Application) : AndroidViewModel(app) {
   }
 
   /** "Reset session": distance, energy and charts start again from now. */
-  fun resetSession() {
-    conn.service.value?.vehicle?.reset()
-  }
-
   fun retry() = parkedOnly {
     conn.service.value?.engine?.retry()
   }

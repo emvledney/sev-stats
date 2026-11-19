@@ -48,10 +48,10 @@ class UltiumSim(private val clock: () -> Double = Monotonic::seconds) {
         0x27AE -> return u16(20520.0)
         0x2B44 -> return u16(59340.0) + byteArrayOf(22)
         0x27B9, 0x27BA, 0x27BB -> {
-          // kWh x 100 since the last full charge: driving, thermal, and a little of neither in the total
+          // Since the last full charge: driving and thermal in kWh x 100, the total (a little of neither in it) in kWh x 10
           val driving = 3520 + (s.t * 0.4).toLong()
           val thermal = 450 + (s.t * 0.05).toLong()
-          val total = driving + thermal + 147 + (s.t * 0.012).toLong()
+          val total = (driving + thermal + 147 + (s.t * 0.012).toLong()) / 10
           return u24(when (did) { 0x27B9 -> total; 0x27BA -> driving; else -> thermal })
         }
         0x2984 -> return bytesFromHex("2041")
@@ -59,7 +59,8 @@ class UltiumSim(private val clock: () -> Double = Monotonic::seconds) {
         0x28AF -> return bytesFromHex("2710")
         0x2770 -> return bytesFromHex("16")
         0x27C7 -> return u24((s.soc / 100 * 440 * 103).toLong())
-        0x27C0 -> return u24((42 * 16.09344).toLong())
+        // km x 10, about 15 m/s
+        0x27C0 -> return u24((42 * 16.09344).toLong() + (s.t * 0.15).toLong())
         0x2AF5, 0x2AF6 -> {
           // 2AF6 summarises groups 1-96 (modules 1-12), 2AF5 groups 97-192 (modules 13-24)
           val first = if (did == 0x2AF6) 0 else GROUPS / 2

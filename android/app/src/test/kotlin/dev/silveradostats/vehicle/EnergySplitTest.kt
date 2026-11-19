@@ -1,5 +1,6 @@
 package dev.silveradostats.vehicle
 
+import dev.silveradostats.link.LiveValue
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
@@ -29,9 +30,9 @@ class EnergySplitTest {
   @Test
   fun aDriveCountsFromItsFirstReadingAndANewDriveStartsOver() {
     val t = EnergySplitTracker()
-    assertParts(0.0, 0.0, 0.0, t.add(0, c(50.0, 40.0, 5.0), driveId = 1, charge = null).drive)
-    assertParts(2_000.0, 300.0, 100.0, t.add(5 * min, c(52.4, 42.0, 5.3), 1, null).drive)
-    val next = t.add(6 * min, c(52.5, 42.1, 5.3), driveId = 2, charge = null)
+    assertParts(0.0, 0.0, 0.0, t.add(0, c(50.0, 40.0, 5.0), driveId = 1).drive)
+    assertParts(2_000.0, 300.0, 100.0, t.add(5 * min, c(52.4, 42.0, 5.3), 1).drive)
+    val next = t.add(6 * min, c(52.5, 42.1, 5.3), driveId = 2)
     assertParts(0.0, 0.0, 0.0, next.drive)
     // The last 15 minutes are the whole drive until it is that long.
     assertParts(0.0, 0.0, 0.0, next.recent)
@@ -42,35 +43,70 @@ class EnergySplitTest {
     val t = EnergySplitTracker()
     var s = EnergySplit()
     // A kWh of driving a minute for half an hour, a reading every 10 s.
-    for (i in 0..180) s = t.add(i * 10_000L, c(i / 6.0, i / 6.0, 0.0), 1, null)
+    for (i in 0..180) s = t.add(i * 10_000L, c(i / 6.0, i / 6.0, 0.0), 1)
     assertParts(30_000.0, 0.0, 0.0, s.drive)
     assertParts(15_000.0, 0.0, 0.0, s.recent)
     // No readings for an hour (another app in front): the window does not reach back across it.
-    s = t.add(90 * min, c(60.0, 60.0, 0.0), 1, null)
+    s = t.add(90 * min, c(60.0, 60.0, 0.0), 1)
     assertParts(0.0, 0.0, 0.0, s.recent)
     assertParts(60_000.0, 0.0, 0.0, s.drive)
   }
 
+  /** The mi/kWh of a window divide the metres since its own first reading: the MX+ can come up mid-drive. */
   @Test
-  fun sinceTheChargeCountsFromWhereItEnded() {
+  fun aWindowsMetresStartAtItsFirstReading() {
     val t = EnergySplitTracker()
-    // Charging: nothing counts as used since yet, and what the charge itself took (conditioning) is not the truck's use since.
-    t.add(0, c(80.0, 70.0, 8.0), 1, LastCharge(150_000.0, 75.0, usedWh = 0.0))
-    assertParts(0.0, 0.0, 0.0, t.add(min, c(81.0, 70.0, 9.0), 1, LastCharge(160_000.0, 80.0, usedWh = 0.0)).charge)
-    assertParts(4_000.0, 500.0, 100.0, t.add(30 * min, c(85.6, 74.0, 9.5), 2, LastCharge(160_000.0, 80.0, usedWh = 4_500.0)).charge)
-    // Kept between runs of the app.
-    val again = EnergySplitTracker(t.chargeBase)
-    assertParts(5_000.0, 500.0, 100.0, again.add(0, c(86.6, 75.0, 9.5), 1, LastCharge(160_000.0, 80.0, usedWh = 5_500.0)).charge)
-    // Another charge since, seen without the MX+: from the first reading after it.
-    assertParts(0.0, 0.0, 0.0, again.add(min, c(90.0, 78.0, 10.0), 1, LastCharge(170_000.0, 85.0, usedWh = 1_200.0)).charge)
+    assertEquals(0.0, t.add(0, c(50.0, 40.0, 5.0), 1, distanceM = 16_000.0).driveM!!, 0.01)
+    val s = t.add(5 * min, c(52.4, 42.0, 5.3), 1, distanceM = 24_000.0)
+    assertEquals(8_000.0, s.driveM!!, 0.01)
+    assertEquals(8_000.0, s.recentM!!, 0.01)
+    assertEquals(0.0, t.add(6 * min, c(52.5, 42.1, 5.3), 2, distanceM = 0.0).driveM!!, 0.01)
   }
 
+  /**
+   * The miles are the truck's count too (the owner, 2026-11-18): 27C0 since the charge as read, its change over the
+   * drive and the last 15 minutes. The session's distance only where a window's ends lack it.
+   */
   @Test
-  fun withNoChargeTrackedItIsTheTrucksOwnSinceItsLastFullCharge() {
+  fun theMilesAreTheTrucksDistanceSinceTheCharge() {
+    val mile = EffUnits.METERS_PER_MILE
+    fun v(x: Double) = LiveValue("", "", x, "", "", 10.0, 1_000)
+    val values = mapOf(
+      EnergyCounters.TOTAL to v(15.9),
+      EnergyCounters.DRIVING to v(11.2),
+      EnergyCounters.CLIMATE to v(3.7),
+      EnergyCounters.DISTANCE to v(24.85),
+    )
+    val read = EnergyCounters.read(values)!!.second
+    assertEquals(24.85 * mile, read.distanceM!!, 0.01)
+    assertNull(EnergyCounters.read(values - EnergyCounters.DISTANCE)!!.second.distanceM)
     val t = EnergySplitTracker()
-    assertParts(40_000.0, 5_000.0, 5_000.0, t.add(0, c(50.0, 40.0, 5.0), 1, null).charge)
-    // The demo's last charge has no running total.
-    assertParts(40_000.0, 5_000.0, 5_000.0, t.add(min, c(50.0, 40.0, 5.0), 1, LastCharge(186_400.0, 90.9)).charge)
+    // The session counted from 0, the truck from 24.85 mi: the windows go by the truck's count.
+    t.add(0, read, 1, distanceM = 0.0)
+    val s = t.add(5 * min, c(16.5, 11.7, 3.8).copy(distanceM = 26.85 * mile), 1, distanceM = 1_000.0)
+    assertEquals(2 * mile, s.driveM!!, 0.01)
+    assertEquals(2 * mile, s.recentM!!, 0.01)
+    assertEquals(26.85 * mile, s.chargeM!!, 0.01)
+    // A drive whose first reading had no 27C0: the session's distance for it.
+    val u = EnergySplitTracker()
+    u.add(0, c(15.9, 11.2, 3.7), 1, distanceM = 500.0)
+    assertEquals(1_500.0, u.add(min, read, 1, distanceM = 2_000.0).driveM!!, 0.01)
+  }
+
+  /**
+   * Since the charge is the truck's own totals as read, no delta (the owner, 2026-11-17: a base kept from the
+   * app's last charge still read wrong on the truck after three builds). A new drive changes nothing in it.
+   */
+  @Test
+  fun sinceTheChargeIsTheTrucksTotalsAsRead() {
+    val t = EnergySplitTracker()
+    assertParts(40_000.0, 5_000.0, 5_000.0, t.add(0, c(50.0, 40.0, 5.0), 1).charge)
+    assertParts(42_000.0, 5_300.0, 5_100.0, t.add(5 * min, c(52.4, 42.0, 5.3), 2).charge)
+    // 27B9 below the two parts, as on the truck: nothing left over for "other".
+    assertParts(3_000.0, 200.0, 0.0, EnergySplitTracker().add(0, c(0.60, 3.0, 0.2), 1).charge)
+    // The one figure the session's energy goes by is that window's total.
+    assertEquals(3_200.0, c(0.60, 3.0, 0.2).usedWh, 0.01)
+    assertEquals(50_000.0, c(50.0, 40.0, 5.0).usedWh, 0.01)
   }
 
   /**
@@ -80,15 +116,14 @@ class EnergySplitTest {
   @Test
   fun aFallOf27B9AloneRestartsNothing() {
     val t = EnergySplitTracker()
-    val charge = LastCharge(99_800.0, 48.3, usedWh = 4_500.0)
-    t.add(0, c(0.60, 3.0, 0.2), 1, charge)
-    val s = t.add(min, c(0.31, 3.5, 0.3), 1, charge)
+    t.add(0, c(0.60, 3.0, 0.2), 1)
+    val s = t.add(min, c(0.31, 3.5, 0.3), 1)
     assertParts(500.0, 100.0, 0.0, s.drive)
     assertParts(500.0, 100.0, 0.0, s.recent)
-    assertParts(500.0, 100.0, 0.0, s.charge)
+    assertParts(3_500.0, 300.0, 0.0, s.charge)
     // The next drive starts from its own first reading, not from the truck's totals.
-    assertParts(0.0, 0.0, 0.0, t.add(20 * min, c(0.40, 5.0, 0.4), 2, charge).drive)
-    assertParts(1_500.0, 100.0, 0.0, t.add(30 * min, c(0.40, 6.5, 0.5), 2, charge).drive)
+    assertParts(0.0, 0.0, 0.0, t.add(20 * min, c(0.40, 5.0, 0.4), 2).drive)
+    assertParts(1_500.0, 100.0, 0.0, t.add(30 * min, c(0.40, 6.5, 0.5), 2).drive)
   }
 
   /**
@@ -99,29 +134,17 @@ class EnergySplitTest {
   @Test
   fun regenLoweringATotalRestartsNothing() {
     val t = EnergySplitTracker()
-    val charge = LastCharge(99_800.0, 48.3, usedWh = 4_500.0)
-    t.add(0, c(10.0, 9.0, 1.0), 1, charge)
-    t.add(5 * min, c(12.2, 11.0, 1.2), 1, charge)
+    t.add(0, c(10.0, 9.0, 1.0), 1)
+    t.add(5 * min, c(12.2, 11.0, 1.2), 1)
     // A new drive, then a stop that puts 0.2 kWh back.
-    assertParts(0.0, 0.0, 0.0, t.add(6 * min, c(12.3, 11.1, 1.2), 2, charge).drive)
-    val s = t.add(7 * min, c(12.1, 10.9, 1.2), 2, charge)
+    assertParts(0.0, 0.0, 0.0, t.add(6 * min, c(12.3, 11.1, 1.2), 2).drive)
+    val s = t.add(7 * min, c(12.1, 10.9, 1.2), 2)
     assertParts(-200.0, 0.0, 0.0, s.drive)
     assertParts(-200.0, 0.0, 0.0, s.recent)
     assertEquals(-200.0, s.drive!!.totalWh, 0.01)
-    assertParts(1_900.0, 200.0, 0.0, s.charge)
-    val later = t.add(12 * min, c(13.4, 12.1, 1.3), 2, charge)
+    assertParts(10_900.0, 1_200.0, 0.0, s.charge)
+    val later = t.add(12 * min, c(13.4, 12.1, 1.3), 2)
     assertParts(1_000.0, 100.0, 0.0, later.drive)
-    assertParts(3_100.0, 300.0, 0.0, later.charge)
-  }
-
-  /** The truck starts its totals over at a charge: the new charge and the drive after it take their own first readings. */
-  @Test
-  fun aChargeBringsNewFirstReadings() {
-    val t = EnergySplitTracker()
-    t.add(0, c(50.0, 40.0, 5.0), 1, LastCharge(150_000.0, 75.0, usedWh = 9_000.0))
-    val s = t.add(60 * min, c(0.5, 0.4, 0.1), 2, LastCharge(200_000.0, 100.0, usedWh = 300.0))
-    assertParts(0.0, 0.0, 0.0, s.drive)
-    assertParts(0.0, 0.0, 0.0, s.charge)
-    assertParts(1_000.0, 200.0, 300.0, t.add(70 * min, c(2.0, 1.4, 0.3), 2, LastCharge(200_000.0, 100.0, usedWh = 1_800.0)).charge)
+    assertParts(12_100.0, 1_300.0, 0.0, later.charge)
   }
 }

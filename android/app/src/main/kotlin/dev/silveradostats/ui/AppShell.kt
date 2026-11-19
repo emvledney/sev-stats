@@ -56,10 +56,8 @@ import dev.silveradostats.ui.layout.FitColumn
 import dev.silveradostats.ui.layout.FitText
 import dev.silveradostats.ui.live.LiveScreen
 import dev.silveradostats.ui.live.vhalFigures
-import dev.silveradostats.ui.map.MapRangeSummary
 import dev.silveradostats.ui.map.MapScreen
-import dev.silveradostats.ui.simple.SimpleModel
-import dev.silveradostats.ui.simple.SimpleScreen
+import dev.silveradostats.ui.live.MxButton
 import dev.silveradostats.ui.theme.CardEdge
 import dev.silveradostats.ui.theme.CardShape
 import dev.silveradostats.ui.theme.TextDim
@@ -87,7 +85,7 @@ typealias Chrome = @Composable (summary: @Composable RowScope.() -> Unit, contro
  * is out of Park (`layout.restricted`) Diagnostics can be selected but shows only
  * [AvailableInParkPanel]; none of its tables, pairing, fields or buttons compose.
  * Trends went on 2026-11-15 (owner): the log is reviewed on the stats server.
- * Simple is the one page that does not change with the gear ([DashLayout.ofSimple]).
+ * Map is first and the default (2026-11-18): the API tab went, its battery figures are a card on the map.
  */
 @Composable
 fun AppShell(
@@ -119,11 +117,6 @@ fun AppShell(
       }
       Row(Modifier.fillMaxSize()) {
       NavRailColumn(rail, tab, liveVm::selectTab) {
-        // The Map tab has no header row: its range reads here, under the buttons.
-        if (tab == AppTab.MAP) {
-          val session by liveVm.shownSession.collectAsStateWithLifecycle()
-          MapRangeSummary(session, rail.textSp, rail.footSp)
-        }
         for (part in listOf(railSummary.value, railControls.value)) {
           if (part == null) continue
           FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(DashLayout.TAB_GAP_DP.dp), verticalArrangement = Arrangement.spacedBy(DashLayout.TAB_GAP_DP.dp)) { part() }
@@ -138,38 +131,18 @@ fun AppShell(
         ShellHeader(layout, summary, controls)
       }
       when (tab) {
-        AppTab.SIMPLE -> {
-          val session by liveVm.shownSession.collectAsStateWithLifecycle()
-          val live by liveVm.shownLive.collectAsStateWithLifecycle()
-          val lastCharge by liveVm.lastCharge.collectAsStateWithLifecycle()
-          val energy by liveVm.energySplit.collectAsStateWithLifecycle()
-          // No gear in this one: shifting moves nothing on the page.
-          // Its buttons (MX+, Reset) go to the foot of the rail, so the page has no header row.
-          val simpleLayout = remember(maxWidth, maxHeight, fontScale) { DashLayout.ofSimple(maxWidth.value, maxHeight.value, fontScale).withoutHeader() }
-          SimpleScreen(
-            session = session,
-            mxCapacityKwh = SimpleModel.mxCapacityKwh(live),
-            lastCharge = lastCharge,
-            energy = energy,
-            settings = settings,
-            layout = simpleLayout,
-            driving = restricted,
-            chrome = toRail,
-            onReset = liveVm::resetSession,
-            mxAction = mxAction,
-            onMxAction = liveVm::onMxAction,
-            onRequestPermissions = onRequestCarPermissions,
-            onOpenDiagnostics = { liveVm.selectTab(AppTab.DIAGNOSTICS) },
-          )
-        }
-        AppTab.LIVE -> {
+        // The OBD page and the Cells page are one screen: the same link status and buttons in the rail.
+        AppTab.LIVE, AppTab.CELLS -> {
           val live by liveVm.shownLive.collectAsStateWithLifecycle()
           val diag by diagVm.state.collectAsStateWithLifecycle()
           val session by liveVm.shownSession.collectAsStateWithLifecycle()
+          val energy by liveVm.energySplit.collectAsStateWithLifecycle()
           LiveScreen(
             live = live,
             vhal = vhalFigures(diag.live),
             ownRangeM = session.rangeEstimate?.m,
+            energy = energy,
+            cells = tab == AppTab.CELLS,
             settings = settings,
             // The same page in every gear, its link status and buttons at the foot of the rail.
             layout = remember(maxWidth, maxHeight, fontScale) { DashLayout.ofLive(maxWidth.value, maxHeight.value, fontScale) },
@@ -183,7 +156,10 @@ fun AppShell(
         }
         AppTab.MAP -> {
           val session by liveVm.shownSession.collectAsStateWithLifecycle()
-          MapScreen(session = session, layout = layout, onRequestPermissions = onRequestPermissions)
+          // The MX+ button at the foot of the rail, as the API tab had it: a driving target in every gear.
+          val mxLayout = remember(maxWidth, maxHeight, fontScale) { DashLayout.ofSimple(maxWidth.value, maxHeight.value, fontScale).withoutHeader() }
+          toRail({}, { MxButton(settings, mxAction, mxLayout, liveVm::onMxAction, Modifier.fillMaxWidth()) })
+          MapScreen(session = session, layout = layout, onRequestPermissions = onRequestPermissions, onRequestCarPermissions = onRequestCarPermissions)
         }
         AppTab.DIAGNOSTICS -> Column(Modifier.fillMaxSize()) {
           if (layout.restricted) {

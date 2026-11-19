@@ -138,6 +138,9 @@ class SourceSafetyTest {
     // Map tab: the truck's position on the map.
     "android.permission.ACCESS_FINE_LOCATION",
     "android.permission.ACCESS_COARSE_LOCATION",
+    // Map tab: voice search inside the app, which works while driving where the system's voice screen
+    // does not (owner's request, 2026-11-18). No vehicle access.
+    "android.permission.RECORD_AUDIO",
     "android.permission.INTERNET",
     "android.permission.ACCESS_NETWORK_STATE",
     "android.permission.ACCESS_WIFI_STATE",

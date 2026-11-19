@@ -17,7 +17,6 @@ import dev.silveradostats.vehicle.ChargeReading
 import dev.silveradostats.vehicle.ChargeState
 import dev.silveradostats.vehicle.ChargeWatch
 import dev.silveradostats.vehicle.ChargeWatchState
-import dev.silveradostats.vehicle.EnergyChargeBase
 import dev.silveradostats.vehicle.EnergyCounters
 import dev.silveradostats.vehicle.EnergySplit
 import dev.silveradostats.vehicle.EnergySplitTracker
@@ -103,6 +102,7 @@ class LogHub private constructor(private val app: Context) {
 
   /** The drive the session is in: its start, as the session counts time. */
   private var driveId = 0L
+  private var driveM = 0.0
   private val _energySplit = MutableStateFlow<EnergySplit?>(null)
 
   /** Driving, climate and the rest for the Simple tab's three windows; null with no MX+ (or demo) link to read them from. */
@@ -138,6 +138,7 @@ class LogHub private constructor(private val app: Context) {
   /** Main thread: every SessionState the session publishes. Only the truck's own readings, never a demo's. */
   fun onSession(s: SessionState) {
     driveId = s.startedAtMs
+    driveM = s.distanceM
     if (s.feed.kind == FeedKind.VEHICLE && s.hasData) noteCharge(ChargeReading.fromSession(s))
   }
 
@@ -292,39 +293,21 @@ class LogHub private constructor(private val app: Context) {
       _energySplit.value = null
       return
     }
-    val tracker = energyTracker?.takeIf { energyDemo == s.demo } ?: EnergySplitTracker(if (s.demo) null else loadEnergyBase()).also {
+    val tracker = energyTracker?.takeIf { energyDemo == s.demo } ?: EnergySplitTracker().also {
       energyTracker = it
       energyDemo = s.demo
       energyReadAtMs = null
       energyShown = EnergySplit()
     }
-    val read = listOf(EnergyCounters.TOTAL, EnergyCounters.DRIVING, EnergyCounters.CLIMATE).map { s.values[it] }
-    val at = read.mapNotNull { it?.atMs }.maxOrNull()
-    val counters = EnergyCounters.ofKwh((read[0]?.v as? Number)?.toDouble(), (read[1]?.v as? Number)?.toDouble(), (read[2]?.v as? Number)?.toDouble())
-    if (counters != null && at != null && at != energyReadAtMs) {
+    val read = EnergyCounters.read(s.values)
+    val at = read?.first
+    if (read != null && at != energyReadAtMs) {
       energyReadAtMs = at
-      val base = tracker.chargeBase
-      energyShown = tracker.add(at, counters, driveId, if (s.demo) null else _lastCharge.value)
-      if (!s.demo && tracker.chargeBase != base) saveEnergyBase(tracker.chargeBase)
+      energyShown = tracker.add(read.first, read.second, driveId, driveM)
     }
     // The totals stopped answering: what they said some minutes ago is not where the energy went.
     val stale = at == null || MonoClock.ms() - at > ENERGY_STALE_MS
     _energySplit.value = if (stale) EnergySplit() else energyShown
-  }
-
-  private fun saveEnergyBase(b: EnergyChargeBase?) {
-    chargePrefs.edit {
-      fun put(key: String, v: Double?) = if (v == null) remove(key) else putString(key, v.toString())
-      put(KEY_ENERGY_TO, b?.toWh)
-      put(KEY_ENERGY_TOTAL, b?.counters?.totalWh)
-      put(KEY_ENERGY_DRIVING, b?.counters?.drivingWh)
-      put(KEY_ENERGY_CLIMATE, b?.counters?.climateWh)
-    }
-  }
-
-  private fun loadEnergyBase(): EnergyChargeBase? {
-    fun get(key: String) = chargePrefs.getString(key, null)?.toDoubleOrNull()
-    return EnergyChargeBase(get(KEY_ENERGY_TO) ?: return null, EnergyCounters(get(KEY_ENERGY_TOTAL) ?: return null, get(KEY_ENERGY_DRIVING) ?: return null, get(KEY_ENERGY_CLIMATE) ?: return null))
   }
 
   /**
@@ -375,10 +358,6 @@ class LogHub private constructor(private val app: Context) {
     private const val KEY_CHARGE_USED = "used_wh"
     private const val KEY_CHARGE_DRIVEN = "driven_m"
     private const val KEY_CHARGE_ON = "on"
-    private const val KEY_ENERGY_TO = "energy_to_wh"
-    private const val KEY_ENERGY_TOTAL = "energy_total_wh"
-    private const val KEY_ENERGY_DRIVING = "energy_driving_wh"
-    private const val KEY_ENERGY_CLIMATE = "energy_climate_wh"
     private const val ENERGY_STALE_MS = 2 * 60_000L
     private const val KEY_CLOCK_ELAPSED = "clock_elapsed"
     private const val KEY_CLOCK_UPTIME = "clock_uptime"

@@ -142,10 +142,10 @@
    "scale": 0.06213711922373339,
    "offset": 0.0,
    "count": 1,
-   "period": 60.0,
+   "period": 10.0,
    "status": "confirmed",
    "source": "S3; S7",
-   "note": ""
+   "note": "Car Scanner's Distance Since Last Full Charge (24.85 mi there on the truck, 2026-11-18). The OBD page's miles: since the charge as read, its windows by difference"
   },
   {
    "module": "becm",
@@ -156,13 +156,13 @@
    "type": "u24",
    "start": 0,
    "stride": 0,
-   "scale": 0.01,
+   "scale": 0.1,
    "offset": 0.0,
    "count": 1,
    "period": 10.0,
    "status": "unverified",
    "source": "S10, S8",
-   "note": "Car Scanner's Charge Cycle Energy Usage - Total. S10 scales it by 0.1, unlike 27BA and 27BB (0.01): taken as 0.01 here, which makes S8's 001566 54.78 kWh and not 547.8. Wrong if it reads below 27BA + 27BB on the truck"
+   "note": "Car Scanner's Charge Cycle Energy Usage - Total, scaled by 0.1 as S10 has it, unlike 27BA and 27BB (0.01). At 0.01 it read below 27BA + 27BB on the truck (2026-11-18: 15.9 kWh in Car Scanner beside 11.2 and 3.7)"
   },
   {
    "module": "becm",

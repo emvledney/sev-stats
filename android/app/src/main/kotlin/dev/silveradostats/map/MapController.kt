@@ -71,6 +71,21 @@ val TIER_COLORS = intArrayOf(0xFF1D9E75.toInt(), 0xFFEF9F27.toInt(), 0xFF888780.
 
 fun powerTier(kw: Double): Int = if (kw >= 150) 0 else if (kw >= 50) 1 else 2
 
+/** Dot colours by network, matched on Open Charge Map's operator name (2026-11-19, the owner's picks first). Size still shows power. */
+private val NETWORK_COLORS = listOf(
+  Regex("tesla", RegexOption.IGNORE_CASE) to 0xFFE31937.toInt(), // red
+  Regex("electrify (america|canada)", RegexOption.IGNORE_CASE) to 0xFF1F5FE0.toInt(), // blue
+  Regex("ionna", RegexOption.IGNORE_CASE) to 0xFF8FD3FF.toInt(), // baby blue
+  Regex("rivian", RegexOption.IGNORE_CASE) to 0xFFFFD400.toInt(), // yellow
+  Regex("chargepoint", RegexOption.IGNORE_CASE) to 0xFFFF8A00.toInt(), // orange
+  Regex("evgo", RegexOption.IGNORE_CASE) to 0xFF9B4DEB.toInt(), // purple
+  Regex("blink", RegexOption.IGNORE_CASE) to 0xFF2ECC71.toInt(), // green
+  Regex("shell recharge|greenlots", RegexOption.IGNORE_CASE) to 0xFFFF4FA3.toInt(), // pink
+)
+private const val OTHER_NETWORK_COLOR = 0xFF888780.toInt() // grey: every other network, and unknown
+
+fun networkColor(name: String?): Int = name?.let { n -> NETWORK_COLORS.firstOrNull { it.first.containsMatchIn(n) }?.second } ?: OTHER_NETWORK_COLOR
+
 /** Chargers already fetched, kept for the life of the process so that leaving the tab does not refetch. */
 private object ChargerCache {
   val cells = HashMap<String, List<Charger>>()
@@ -105,7 +120,7 @@ class MapController(private val context: Context) : LocationListener {
   private val markers = HashMap<Int, Marker>()
   private val pending = HashSet<String>()
   @Volatile private var wanted = emptyList<String>()
-  private val dots by lazy { listOf(dot(TIER_COLORS[0], 22), dot(TIER_COLORS[1], 18), dot(TIER_COLORS[2], 14)) }
+  private val dots = HashMap<Pair<Int, Int>, BitmapDescriptor>() // (colour, power tier) -> icon
   private var pin: Marker? = null
 
   /** The truck on the map: a small car, turned the way it is heading. Replaces the map's own blue dot. */
@@ -132,7 +147,12 @@ class MapController(private val context: Context) : LocationListener {
     mapView.onCreate(null)
     mapView.getMapAsync(::onMapReady)
     if (ChargerCache.reference.operators.isEmpty()) {
-      background({ MapApi.reference() }) { ChargerCache.reference = it; loadChargers() }
+      background({ MapApi.reference() }) {
+        ChargerCache.reference = it
+        markers.values.forEach(Marker::remove) // drawn before the network names came: redraw them in their colours
+        markers.clear()
+        loadChargers()
+      }
     }
   }
 
@@ -291,11 +311,6 @@ class MapController(private val context: Context) : LocationListener {
     refreshOutline()
   }
 
-  /** Keeps the map's own buttons and the vehicle clear of the search column and the card. */
-  fun setPadding(leftPx: Int, topPx: Int) {
-    map?.setPadding(leftPx, topPx, 0, 0)
-  }
-
   /** A little rocket car seen from above, nose up: the app's own drawing, in blue so it stands apart from the charger dots. */
   private fun carIcon(): BitmapDescriptor {
     val s = dp(46).toFloat()
@@ -406,7 +421,9 @@ class MapController(private val context: Context) : LocationListener {
     for ((id, c) in byId) {
       if (id in markers) continue
       val t = powerTier(c.maxKw)
-      m.addMarker(MarkerOptions().position(LatLng(c.lat, c.lng)).icon(dots[t]).anchor(0.5f, 0.5f).zIndex(2f - t))
+      val color = networkColor(ref.operators[c.operatorId])
+      val icon = dots.getOrPut(color to t) { dot(color, intArrayOf(22, 18, 14)[t]) }
+      m.addMarker(MarkerOptions().position(LatLng(c.lat, c.lng)).icon(icon).anchor(0.5f, 0.5f).zIndex(2f - t))
         ?.let { it.tag = c; markers[id] = it }
     }
   }
